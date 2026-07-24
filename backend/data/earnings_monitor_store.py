@@ -127,6 +127,22 @@ def init_earnings_monitor_tables() -> bool:
             ON public.earnings_event_reads (user_id, event_id)
         """)
 
+        # Additive migrations — no-op if column already exists
+        _new_cols = [
+            "ALTER TABLE public.earnings_monitor_targets ADD COLUMN IF NOT EXISTS expected_time_local TEXT",
+            "ALTER TABLE public.earnings_monitor_targets ADD COLUMN IF NOT EXISTS expected_at TIMESTAMPTZ",
+            "ALTER TABLE public.earnings_monitor_targets ADD COLUMN IF NOT EXISTS expected_timezone TEXT DEFAULT 'America/New_York'",
+            "ALTER TABLE public.earnings_monitor_targets ADD COLUMN IF NOT EXISTS report_time_status TEXT DEFAULT 'unknown'",
+            "ALTER TABLE public.earnings_monitor_targets ADD COLUMN IF NOT EXISTS report_period TEXT",
+            "ALTER TABLE public.earnings_monitor_targets ADD COLUMN IF NOT EXISTS schedule_source TEXT",
+            "ALTER TABLE public.earnings_monitor_targets ADD COLUMN IF NOT EXISTS schedule_updated_at TIMESTAMPTZ",
+            "ALTER TABLE public.earnings_monitor_targets ADD COLUMN IF NOT EXISTS fmp_check_stage TEXT DEFAULT 'pre_release'",
+            "ALTER TABLE public.earnings_monitor_targets ADD COLUMN IF NOT EXISTS results_first_detected_at TIMESTAMPTZ",
+            "ALTER TABLE public.earnings_monitor_targets ADD COLUMN IF NOT EXISTS monitoring_expires_at TIMESTAMPTZ",
+        ]
+        for _ddl in _new_cols:
+            cur.execute(_ddl)
+
         conn.commit()
         cur.close()
         print("[EarnMonStore] init_earnings_monitor_tables OK")
@@ -182,14 +198,22 @@ def get_universe_symbols() -> list[str]:
 def upsert_target(
     symbol: str,
     expected_date,            # str YYYY-MM-DD or None
-    expected_timing: str | None = None,
-    fiscal_period: str | None  = None,
-    fiscal_year: int | None    = None,
-    status: str                = "scheduled",
-    monitoring_start_at: str | None = None,
-    monitoring_end_at: str | None   = None,
-    next_sec_check_at: str | None   = None,
-    next_fmp_check_at: str | None   = None,
+    expected_timing: str | None      = None,
+    fiscal_period: str | None        = None,
+    fiscal_year: int | None          = None,
+    status: str                      = "scheduled",
+    monitoring_start_at: str | None  = None,
+    monitoring_end_at: str | None    = None,
+    next_sec_check_at: str | None    = None,
+    next_fmp_check_at: str | None    = None,
+    # ── timing/schedule fields (Part 2) ──
+    expected_at: str | None          = None,
+    expected_time_local: str | None  = None,
+    report_time_status: str | None   = None,
+    report_period: str | None        = None,
+    schedule_source: str | None      = None,
+    schedule_updated_at: str | None  = None,
+    fmp_check_stage: str | None      = None,
 ) -> dict | None:
     conn = _get_conn()
     if conn is None:
@@ -200,9 +224,13 @@ def upsert_target(
             INSERT INTO public.earnings_monitor_targets
                 (symbol, expected_date, expected_timing, fiscal_period, fiscal_year,
                  status, monitoring_start_at, monitoring_end_at,
-                 next_sec_check_at, next_fmp_check_at, updated_at)
+                 next_sec_check_at, next_fmp_check_at,
+                 expected_at, expected_time_local, report_time_status,
+                 report_period, schedule_source, schedule_updated_at, fmp_check_stage,
+                 updated_at)
             VALUES
-                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                 %s, %s, %s, %s, %s, %s, %s, NOW())
             ON CONFLICT (symbol, expected_date) DO UPDATE SET
                 expected_timing      = EXCLUDED.expected_timing,
                 fiscal_period        = COALESCE(EXCLUDED.fiscal_period, earnings_monitor_targets.fiscal_period),
@@ -215,14 +243,29 @@ def upsert_target(
                 monitoring_end_at    = COALESCE(EXCLUDED.monitoring_end_at,   earnings_monitor_targets.monitoring_end_at),
                 next_sec_check_at    = COALESCE(EXCLUDED.next_sec_check_at,   earnings_monitor_targets.next_sec_check_at),
                 next_fmp_check_at    = COALESCE(EXCLUDED.next_fmp_check_at,   earnings_monitor_targets.next_fmp_check_at),
+                expected_at          = COALESCE(EXCLUDED.expected_at,          earnings_monitor_targets.expected_at),
+                expected_time_local  = COALESCE(EXCLUDED.expected_time_local,  earnings_monitor_targets.expected_time_local),
+                report_time_status   = CASE
+                    WHEN EXCLUDED.report_time_status = 'confirmed' THEN 'confirmed'
+                    WHEN earnings_monitor_targets.report_time_status = 'confirmed' THEN 'confirmed'
+                    ELSE COALESCE(EXCLUDED.report_time_status, earnings_monitor_targets.report_time_status)
+                END,
+                report_period        = COALESCE(EXCLUDED.report_period,        earnings_monitor_targets.report_period),
+                schedule_source      = COALESCE(EXCLUDED.schedule_source,      earnings_monitor_targets.schedule_source),
+                schedule_updated_at  = COALESCE(EXCLUDED.schedule_updated_at,  earnings_monitor_targets.schedule_updated_at),
+                fmp_check_stage      = COALESCE(EXCLUDED.fmp_check_stage,      earnings_monitor_targets.fmp_check_stage),
                 updated_at           = NOW()
             RETURNING id, symbol, expected_date, expected_timing, fiscal_period, fiscal_year,
                       status, next_sec_check_at, next_fmp_check_at,
-                      worker_lease_owner, worker_lease_expires_at
+                      worker_lease_owner, worker_lease_expires_at,
+                      expected_at, expected_time_local, report_time_status,
+                      report_period, schedule_source, fmp_check_stage
         """, (
             symbol, expected_date, expected_timing, fiscal_period, fiscal_year,
             status, monitoring_start_at, monitoring_end_at,
             next_sec_check_at, next_fmp_check_at,
+            expected_at, expected_time_local, report_time_status,
+            report_period, schedule_source, schedule_updated_at, fmp_check_stage,
         ))
         row = cur.fetchone()
         conn.commit()
@@ -230,7 +273,8 @@ def upsert_target(
         if not row:
             return None
         cols = ["id","symbol","expected_date","expected_timing","fiscal_period","fiscal_year",
-                "status","next_sec_check_at","next_fmp_check_at","worker_lease_owner","worker_lease_expires_at"]
+                "status","next_sec_check_at","next_fmp_check_at","worker_lease_owner","worker_lease_expires_at",
+                "expected_at","expected_time_local","report_time_status","report_period","schedule_source","fmp_check_stage"]
         return dict(zip(cols, row))
     except Exception as exc:
         print(f"[EarnMonStore] upsert_target error {symbol}: {exc}")
@@ -243,6 +287,16 @@ def upsert_target(
         _put_conn(conn)
 
 
+_TARGET_COLS = [
+    "id","symbol","expected_date","expected_timing","fiscal_period","fiscal_year",
+    "status","next_sec_check_at","next_fmp_check_at","worker_lease_owner",
+    "worker_lease_expires_at","updated_at",
+    "expected_at","expected_time_local","report_time_status",
+    "report_period","schedule_source","fmp_check_stage","results_first_detected_at",
+]
+_TARGET_SELECT = ", ".join(_TARGET_COLS)
+
+
 def get_active_targets(limit: int = 100) -> list[dict]:
     """Return targets not yet complete, ordered by expected_date."""
     conn = _get_conn()
@@ -250,23 +304,54 @@ def get_active_targets(limit: int = 100) -> list[dict]:
         return []
     try:
         cur = conn.cursor()
-        cur.execute("""
-            SELECT id, symbol, expected_date, expected_timing, fiscal_period, fiscal_year,
-                   status, next_sec_check_at, next_fmp_check_at,
-                   worker_lease_owner, worker_lease_expires_at, updated_at
+        cur.execute(f"""
+            SELECT {_TARGET_SELECT}
             FROM   public.earnings_monitor_targets
             WHERE  status NOT IN ('complete','unavailable')
             ORDER  BY expected_date ASC NULLS LAST
             LIMIT  %s
         """, (limit,))
-        cols = ["id","symbol","expected_date","expected_timing","fiscal_period","fiscal_year",
-                "status","next_sec_check_at","next_fmp_check_at","worker_lease_owner",
-                "worker_lease_expires_at","updated_at"]
         rows = cur.fetchall()
         cur.close()
-        return [dict(zip(cols, r)) for r in rows]
+        return [dict(zip(_TARGET_COLS, r)) for r in rows]
     except Exception as exc:
         print(f"[EarnMonStore] get_active_targets error: {exc}")
+        return []
+    finally:
+        _put_conn(conn)
+
+
+def get_due_targets(limit: int = 100) -> list[dict]:
+    """
+    Return active targets that are DUE for a check right now.
+    A target is due when next_fmp_check_at <= NOW() OR next_sec_check_at <= NOW().
+    Ordered by the earliest due time ascending (most overdue first).
+    """
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT {_TARGET_SELECT}
+            FROM   public.earnings_monitor_targets
+            WHERE  status NOT IN ('complete','unavailable')
+              AND  (
+                    (next_fmp_check_at IS NOT NULL AND next_fmp_check_at <= NOW())
+                 OR (next_sec_check_at IS NOT NULL AND next_sec_check_at <= NOW())
+                 OR (next_fmp_check_at IS NULL AND next_sec_check_at IS NULL)
+              )
+            ORDER BY LEAST(
+                COALESCE(next_fmp_check_at, NOW() + INTERVAL '999 days'),
+                COALESCE(next_sec_check_at, NOW() + INTERVAL '999 days')
+            ) ASC NULLS LAST
+            LIMIT %s
+        """, (limit,))
+        rows = cur.fetchall()
+        cur.close()
+        return [dict(zip(_TARGET_COLS, r)) for r in rows]
+    except Exception as exc:
+        print(f"[EarnMonStore] get_due_targets error: {exc}")
         return []
     finally:
         _put_conn(conn)
@@ -315,6 +400,11 @@ def update_target(target_id: int, **fields) -> bool:
         "monitoring_start_at", "monitoring_end_at",
         "fiscal_period", "fiscal_year", "expected_timing",
         "worker_lease_owner", "worker_lease_expires_at",
+        # Part 2 timing fields
+        "expected_at", "expected_time_local", "expected_timezone",
+        "report_time_status", "report_period", "schedule_source",
+        "schedule_updated_at", "fmp_check_stage",
+        "results_first_detected_at", "monitoring_expires_at",
     }
     update_fields = {k: v for k, v in fields.items() if k in allowed}
     if not update_fields:

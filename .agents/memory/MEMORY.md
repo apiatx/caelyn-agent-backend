@@ -73,3 +73,4 @@
 - [Earnings Intelligence Architecture](earnings-intelligence-arch.md) — atomic write in upsert_snapshot before it fires; edgar_cache keyed by CIK not ticker (sec_filings omitted); acceptedDate ET heuristic for BMO/AMC timing
 - [Cold-startup Python bytecode fix](cold-startup-pyc.md) — deployment containers have no .pyc → cold import ~50s vs 7s warm; fix: build step compileall on source dirs + .pythonlibs (~21s); never target `.` (hits .cache/.upm)
 - [EI Materials EFTS attachment index](ei-materials-efts.md) — EDGAR -index.json is 404; use efts.sec.gov/LATEST/search-index?q="{acc}"; primary-doc fallback when EFTS 403; is_primary_body guard prevents XBRL false investor_presentation
+- [Earnings monitor Part 2 timing](earnings-monitor-part2-timing.md) — FMP Starter returns time=amc/bmo/null + confirmed bool (no clock time); one batch calendar call per universe; get_due_targets() skips non-due rows

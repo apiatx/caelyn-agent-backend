@@ -52,6 +52,11 @@ _FMP_INTERVAL_ACTIVE  = 60
 _FMP_INTERVAL_POST    = 300  # after results received
 _SCHEDULE_REFRESH_TTL = 3600  # refresh upcoming schedule hourly
 
+# Anchor times (hour, minute ET) used to compute expected_at for FMP timing
+# FMP Starter only returns "bmo" / "amc" / None — no exact clock time
+_BMO_ANCHOR_H, _BMO_ANCHOR_M = 8, 0    # 08:00 ET: midpoint of BMO window
+_AMC_ANCHOR_H, _AMC_ANCHOR_M = 16, 30  # 16:30 ET: shortly after regular close
+
 _last_schedule_refresh: float = 0.0
 
 
@@ -135,6 +140,98 @@ def _next_check_ts(seconds: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
 
 
+# ── Part 2: timing / scheduling helpers ───────────────────────────────────────
+
+def _expected_time_local(timing: str | None) -> str | None:
+    """Human-readable release window string for UI display."""
+    t = (timing or "").lower()
+    if t == "bmo":
+        return "Before Market Open (BMO)"
+    if t in ("amc", "after market close"):
+        return "After Market Close (AMC)"
+    return None
+
+
+def _compute_expected_at(
+    date_str: str | None,
+    timing: str | None,
+) -> Optional[datetime]:
+    """
+    Compute an anchor UTC timestamp for pre-release polling.
+
+    FMP Starter only provides "bmo" / "amc" / None — never an exact clock time.
+    We use conservative anchors:
+      BMO  → 08:00 ET (well before typical pre-market release)
+      AMC  → 16:30 ET (30 min after close, most AMC releases land here)
+      None → 16:30 ET (default: treat as AMC so we don't miss anything)
+    """
+    if not date_str:
+        return None
+    try:
+        d = datetime.strptime(date_str, "%Y-%m-%d")
+        t = (timing or "").lower()
+        if t == "bmo":
+            h, m = _BMO_ANCHOR_H, _BMO_ANCHOR_M
+        else:
+            h, m = _AMC_ANCHOR_H, _AMC_ANCHOR_M
+        anchor_et = datetime(d.year, d.month, d.day, h, m, tzinfo=ET)
+        return anchor_et.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _compute_next_fmp_check(
+    expected_at: Optional[datetime],
+    now_utc: datetime,
+    results_detected_at: Optional[datetime] = None,
+) -> tuple[datetime, str]:
+    """
+    Compute next FMP check timestamp and stage label.
+
+    Pre-release cadence (relative to expected_at anchor):
+      expected_at − 30 min → pre_release_m30
+      expected_at − 15 min → pre_release_m15
+      expected_at −  5 min → pre_release_m5
+      expected_at +  0 min → at_release
+      expected_at +  1 min → post_release_m1
+
+    Post-release rolling polls (no results yet):
+      every 60 s until expected_at + 30 min
+      every 120 s until expected_at + 2 h
+      every 300 s until expected_at + 24 h
+      every 6 h  thereafter (expired)
+
+    Once results are detected: every 300 s for corrections window.
+    """
+    if results_detected_at is not None:
+        return now_utc + timedelta(seconds=300), "post_results"
+
+    if expected_at is None:
+        return now_utc + timedelta(seconds=_FMP_INTERVAL_ACTIVE), "active"
+
+    checkpoints = [
+        (expected_at - timedelta(minutes=30), "pre_release_m30"),
+        (expected_at - timedelta(minutes=15), "pre_release_m15"),
+        (expected_at - timedelta(minutes=5),  "pre_release_m5"),
+        (expected_at,                         "at_release"),
+        (expected_at + timedelta(minutes=1),  "post_release_m1"),
+    ]
+    for ts, stage in checkpoints:
+        if ts > now_utc:
+            return ts, stage
+
+    # Past all pre-release checkpoints — rolling poll
+    elapsed = (now_utc - expected_at).total_seconds()
+    if elapsed < 1800:    # < 30 min
+        return now_utc + timedelta(seconds=60), "polling_60s"
+    elif elapsed < 7200:  # 30 min – 2 h
+        return now_utc + timedelta(seconds=120), "polling_120s"
+    elif elapsed < 86400: # 2 h – 24 h
+        return now_utc + timedelta(seconds=300), "polling_300s"
+    else:                 # > 24 h
+        return now_utc + timedelta(hours=6), "expired"
+
+
 # ── FMP result classification ─────────────────────────────────────────────────
 
 def _compute_checksum(obj: Any) -> str:
@@ -205,8 +302,16 @@ async def _build_universe() -> list[str]:
 async def _refresh_schedule(symbols: list[str], now_et: datetime) -> None:
     """
     Refresh upcoming earnings targets from FMP for all symbols.
-    Uses FMPProvider.get_earnings_history() which already has 300s TTL cache.
-    Only refreshes if _SCHEDULE_REFRESH_TTL has elapsed.
+
+    Part 2 changes:
+      • One call to get_earnings_calendar_with_times() for the full date window
+        instead of N per-symbol calls — consumes exactly 1 FMP budget unit.
+      • FMP Starter ignores the symbol filter on earnings-calendar, so we fetch
+        the whole calendar and filter client-side by our universe set.
+      • Timing fields (expected_timing, expected_at, report_time_status, …) are
+        extracted from the real FMP response and persisted for precise scheduling.
+      • Fallback: for symbols with existing active targets that didn't appear in
+        the calendar, a single get_earnings_history call confirms the date.
     """
     global _last_schedule_refresh
     now_ts = time.time()
@@ -217,11 +322,12 @@ async def _refresh_schedule(symbols: list[str], now_et: datetime) -> None:
     from data.earnings_monitor_store import upsert_target
     import asyncio as _aio
 
-    today   = now_et.date()
-    window_start = today - timedelta(days=1)
-    window_end   = today + timedelta(days=8)
+    today        = now_et.date()
+    from_date    = (today - timedelta(days=2)).strftime("%Y-%m-%d")
+    to_date      = (today + timedelta(days=10)).strftime("%Y-%m-%d")
+    window_start = today - timedelta(days=2)
+    window_end   = today + timedelta(days=10)
 
-    # We want the FMPProvider but import lazily to avoid circular imports
     try:
         from data.fmp_provider import FMPProvider
         from api_budget import daily_budget
@@ -233,46 +339,127 @@ async def _refresh_schedule(symbols: list[str], now_et: datetime) -> None:
         print(f"[EarnMon] FMP provider init error: {exc}")
         return
 
-    processed = 0
-    for sym in symbols:
-        if not daily_budget.can_spend("fmp", 1):
-            print("[EarnMon] FMP budget exhausted during schedule refresh")
-            break
+    # Build universe set for O(1) lookup
+    sym_set = {s.upper().strip() for s in symbols if s}
+    now_utc = datetime.now(timezone.utc)
+    run_ts  = now_utc.isoformat()
+
+    # ── One FMP call: full calendar for window ────────────────────────────────
+    cal_rows: list[dict] = []
+    if daily_budget.can_spend("fmp", 1):
+        daily_budget.spend("fmp")
         try:
-            daily_budget.spend("fmp")
-            records = await fmp.get_earnings_history(sym, limit=4)
+            cal_rows = await asyncio.wait_for(
+                fmp.get_earnings_calendar_with_times(from_date, to_date),
+                timeout=25.0,
+            )
+        except Exception as exc:
+            print(f"[EarnMon] calendar fetch error: {exc}")
+
+    # Build per-symbol lookup from calendar rows (last row wins if dupes)
+    cal_by_sym: dict[str, dict] = {}
+    for row in cal_rows:
+        sym = (row.get("symbol") or "").upper().strip()
+        if not sym:
+            continue
+        date_str = row.get("expected_date") or ""
+        # Validate date falls in window
+        try:
+            rec_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if not (window_start <= rec_date <= window_end):
+            continue
+        if sym in sym_set:
+            cal_by_sym[sym] = row
+
+    cal_matches = len(cal_by_sym)
+    processed   = 0
+    fallback_calls = 0
+
+    for sym in symbols:
+        sym = sym.upper().strip()
+        if not sym:
+            continue
+
+        cal_row = cal_by_sym.get(sym)
+        if cal_row:
+            # ── Primary path: data from earnings-calendar ─────────────────────
+            date_str           = cal_row.get("expected_date")
+            timing             = cal_row.get("expected_timing")
+            report_time_status = cal_row.get("report_time_status") or "unknown"
+            fiscal_period      = cal_row.get("fiscal_period")
+            fiscal_year        = cal_row.get("fiscal_year")
+            report_period      = cal_row.get("report_period")
+            schedule_source    = "fmp_earnings_calendar"
+        else:
+            # ── Fallback: per-symbol get_earnings_history ─────────────────────
+            # Only run for symbols that have or recently had a target in our window.
+            # Limit to avoid exhausting budget across 400 symbols.
+            if fallback_calls >= 30 or not daily_budget.can_spend("fmp", 1):
+                continue
+            try:
+                daily_budget.spend("fmp")
+                fallback_calls += 1
+                records = await fmp.get_earnings_history(sym, limit=4)
+                await asyncio.sleep(0.05)
+            except Exception as exc:
+                print(f"[EarnMon] fallback history error {sym}: {exc}")
+                continue
+
+            date_str = None
             for rec in records:
-                date_str = rec.get("date")
-                if not date_str:
+                ds = rec.get("date")
+                if not ds:
                     continue
                 try:
-                    rec_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                    rd = datetime.strptime(ds, "%Y-%m-%d").date()
                 except ValueError:
                     continue
-                if not (window_start <= rec_date <= window_end):
-                    continue
-                # upcoming = eps_actual is None
-                is_upcoming = rec.get("eps_actual") is None
-                if not is_upcoming:
-                    # Already released — only enqueue if it happened recently
-                    if rec_date < window_start:
-                        continue
-                timing = None  # FMP stable/earnings doesn't expose timing directly
-                start_iso = _monitoring_start_et(date_str, timing)
-                end_iso   = _monitoring_end_et(date_str, timing)
-                next_check = _next_check_ts(60)
-                await _aio.to_thread(
-                    upsert_target,
-                    sym, date_str, timing, None, None,
-                    "scheduled", start_iso, end_iso, next_check, next_check,
-                )
-            processed += 1
-            # slight delay to avoid hammering FMP
-            await asyncio.sleep(0.1)
-        except Exception as exc:
-            print(f"[EarnMon] schedule refresh error {sym}: {exc}")
+                if window_start <= rd <= window_end:
+                    date_str = ds
+                    break
+            if not date_str:
+                continue  # no upcoming earnings for this symbol in window
 
-    print(f"[EarnMon] schedule refresh done: {processed}/{len(symbols)} symbols processed")
+            timing             = None
+            report_time_status = "unknown"
+            fiscal_period      = None
+            fiscal_year        = None
+            report_period      = None
+            schedule_source    = "fmp_earnings"
+
+        if not date_str:
+            continue
+
+        # ── Compute scheduling fields ─────────────────────────────────────────
+        expected_at_dt  = _compute_expected_at(date_str, timing)
+        expected_at_iso = expected_at_dt.isoformat() if expected_at_dt else None
+        time_local      = _expected_time_local(timing)
+        start_iso       = _monitoring_start_et(date_str, timing)
+        end_iso         = _monitoring_end_et(date_str, timing)
+
+        # Initial poll checkpoint: schedule from expected_at
+        next_check_dt, _ = _compute_next_fmp_check(expected_at_dt, now_utc)
+        next_check = next_check_dt.isoformat()
+
+        await _aio.to_thread(
+            upsert_target,
+            sym, date_str, timing, fiscal_period, fiscal_year,
+            "scheduled", start_iso, end_iso, next_check, next_check,
+            expected_at=expected_at_iso,
+            expected_time_local=time_local,
+            report_time_status=report_time_status,
+            report_period=report_period,
+            schedule_source=schedule_source,
+            schedule_updated_at=run_ts,
+        )
+        processed += 1
+
+    print(
+        f"[EarnMon] schedule refresh done: {processed}/{len(symbols)} symbols upserted, "
+        f"{cal_matches} calendar matches, {fallback_calls} fallback calls"
+    )
 
 
 # ── SEC detection ──────────────────────────────────────────────────────────────
@@ -335,6 +522,48 @@ async def _check_fmp_results(symbol: str) -> dict | None:
     except Exception as exc:
         print(f"[EarnMon] FMP results check error {symbol}: {exc}")
         return None
+
+
+# ── EI refresh trigger ─────────────────────────────────────────────────────────
+
+async def _trigger_ei_refresh(symbol: str) -> bool:
+    """
+    Narrow single-symbol Earnings Intelligence refresh.
+    Called as a fire-and-forget background task after new results are detected.
+    Uses FmpFundamentalsRefresher._fetch_earnings_intelligence() (up to 8 FMP calls)
+    then merges the result into watchlist_fundamentals_cache via merge_fields().
+    Zero side effects on failure — catches all exceptions.
+    """
+    try:
+        import asyncio as _aio
+        from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher
+        from data.watchlist_fundamentals_store import merge_fields
+
+        fmp_key = os.environ.get("FMP_API_KEY", "")
+        if not fmp_key:
+            return False
+
+        refresher = FmpFundamentalsRefresher(fmp_api_key=fmp_key)
+        ei_data = await asyncio.wait_for(
+            refresher._fetch_earnings_intelligence(symbol.upper()),
+            timeout=50.0,
+        )
+        if not ei_data:
+            print(f"[EarnMon] EI refresh: no data returned for {symbol}")
+            return False
+
+        ei_data.pop("_call_count", None)
+        ok = await _aio.to_thread(
+            merge_fields, symbol.upper(), {"earnings_intelligence": ei_data}
+        )
+        print(f"[EarnMon] EI refresh {symbol}: merged={ok}")
+        return bool(ok)
+    except asyncio.TimeoutError:
+        print(f"[EarnMon] EI refresh timeout {symbol}")
+        return False
+    except Exception as exc:
+        print(f"[EarnMon] EI refresh error {symbol}: {exc}")
+        return False
 
 
 # ── reaction price capture ─────────────────────────────────────────────────────
@@ -651,9 +880,39 @@ async def _process_target(
                     except Exception:
                         pass
 
-            interval = _FMP_INTERVAL_POST if new_state in ("results_available","complete","results_updated") else _FMP_INTERVAL_ACTIVE
-            next_fmp = _next_check_ts(interval)
-            await _aio.to_thread(update_target, target_id, next_fmp_check_at=next_fmp)
+            # ── Precise scheduling via expected_at anchor ────────────────────
+            _exp_at_raw = target.get("expected_at")
+            _exp_at_dt: Optional[datetime] = None
+            if _exp_at_raw:
+                try:
+                    _exp_at_dt = datetime.fromisoformat(str(_exp_at_raw))
+                    if _exp_at_dt.tzinfo is None:
+                        _exp_at_dt = _exp_at_dt.replace(tzinfo=timezone.utc)
+                except Exception:
+                    pass
+
+            _rfda_raw = target.get("results_first_detected_at")
+            _rfda_dt: Optional[datetime] = None
+            if _rfda_raw and new_state in ("results_available","complete","results_updated"):
+                try:
+                    _rfda_dt = datetime.fromisoformat(str(_rfda_raw))
+                    if _rfda_dt.tzinfo is None:
+                        _rfda_dt = _rfda_dt.replace(tzinfo=timezone.utc)
+                except Exception:
+                    pass
+
+            _next_fmp_dt, _next_stage = _compute_next_fmp_check(_exp_at_dt, now_utc, _rfda_dt)
+            next_fmp = _next_fmp_dt.isoformat()
+            _tgt_updates: dict = {"next_fmp_check_at": next_fmp, "fmp_check_stage": _next_stage}
+
+            # Record first detection timestamp when results first seen
+            if (
+                new_state in ("results_available","results_updated","results_partial")
+                and not target.get("results_first_detected_at")
+            ):
+                _tgt_updates["results_first_detected_at"] = now_utc.isoformat()
+
+            await _aio.to_thread(update_target, target_id, **_tgt_updates)
 
     # ── detect meaningful change in Python (reliable vs DB xmax tricks) ──────
     # A meaningful change is:
@@ -710,6 +969,10 @@ async def _process_target(
         _fire_alerts_for_event(event_row, users)
     elif existing and new_state == existing_state:
         _STATE["duplicates_suppressed"] += 1
+
+    # ── EI refresh on first structured results (fire-and-forget) ─────────────
+    if state_changed and new_state in ("results_available", "results_updated") and not dry_run:
+        asyncio.create_task(_trigger_ei_refresh(symbol))
 
     # ── mark target complete ──────────────────────────────────────────────────
     if new_state == "complete" and not dry_run:
@@ -860,7 +1123,7 @@ async def run_live_earnings_monitor_once(
 
     try:
         import asyncio as _aio
-        from data.earnings_monitor_store import get_active_targets
+        from data.earnings_monitor_store import get_due_targets
 
         # Build universe — when force-checking one symbol, skip full universe build
         # to avoid scanning all 399 symbols in _refresh_schedule
@@ -870,14 +1133,19 @@ async def run_live_earnings_monitor_once(
         else:
             universe = await _build_universe()
 
-        # Refresh schedule from FMP
+        # Refresh schedule from FMP (runs at most once per _SCHEDULE_REFRESH_TTL)
         await _refresh_schedule(universe, now_et)
 
-        # Load active targets
-        targets = await _aio.to_thread(get_active_targets, 200)
         if force_symbol:
+            # force_symbol: load ALL active targets regardless of due time,
+            # then filter to the requested symbol so we always process it.
+            from data.earnings_monitor_store import get_active_targets
+            all_active = await _aio.to_thread(get_active_targets, 200)
             sym = force_symbol.upper()
-            targets = [t for t in targets if t["symbol"] == sym] or targets
+            targets = [t for t in all_active if t["symbol"] == sym]
+        else:
+            # Normal path: only process targets due for a check RIGHT NOW.
+            targets = await _aio.to_thread(get_due_targets, 200)
 
         _STATE["active_target_count"] = len(targets)
 
@@ -930,10 +1198,33 @@ async def live_earnings_monitor_loop(interval_seconds: int = 30) -> None:
 
 
 def get_monitor_status() -> dict:
+    sched_age = time.time() - _last_schedule_refresh if _last_schedule_refresh > 0 else None
     return {
         **_STATE,
-        "deployment_note": (
-            "Autoscale: persistent loop not guaranteed while scaled to zero. "
-            "Run-once CLI: python -m backend.scripts.run_live_earnings_monitor_once"
+        # ── schedule refresh ──────────────────────────────────────────────────
+        "schedule_refresh_ttl_s":    _SCHEDULE_REFRESH_TTL,
+        "schedule_refresh_age_s":    round(sched_age, 1) if sched_age is not None else None,
+        "last_schedule_refresh_at": (
+            datetime.fromtimestamp(_last_schedule_refresh, tz=timezone.utc).isoformat()
+            if _last_schedule_refresh > 0 else None
         ),
+        "next_schedule_refresh_at": (
+            datetime.fromtimestamp(
+                _last_schedule_refresh + _SCHEDULE_REFRESH_TTL, tz=timezone.utc
+            ).isoformat()
+            if _last_schedule_refresh > 0 else None
+        ),
+        # ── timing anchors ────────────────────────────────────────────────────
+        "bmo_anchor_et": f"{_BMO_ANCHOR_H:02d}:{_BMO_ANCHOR_M:02d}",
+        "amc_anchor_et": f"{_AMC_ANCHOR_H:02d}:{_AMC_ANCHOR_M:02d}",
+        # ── monitoring windows ────────────────────────────────────────────────
+        "bmo_window_et":  f"{_BMO_START[0]:02d}:{_BMO_START[1]:02d}–{_BMO_END[0]:02d}:{_BMO_END[1]:02d}",
+        "amc_window_et":  f"{_AMC_START[0]:02d}:{_AMC_START[1]:02d}–{_AMC_END[0]:02d}:{_AMC_END[1]:02d}",
+        # ── deployment ────────────────────────────────────────────────────────
+        "deployment_note": (
+            "Autoscale mode: use Replit Scheduled Deployment (every minute) to run "
+            "python -m backend.scripts.run_live_earnings_monitor_once on a schedule. "
+            "Persistent loop also available via LIVE_EARNINGS_MONITOR_ENABLED=true."
+        ),
+        "cli_command": "python -m backend.scripts.run_live_earnings_monitor_once",
     }

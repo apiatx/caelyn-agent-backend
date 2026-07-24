@@ -242,28 +242,64 @@ async def clear_replay_events(request: Request):
 
 # ── GET /api/earnings/monitor/targets ─────────────────────────────────────────
 
+def _target_to_dict(t: dict) -> dict:
+    """Serialize a target row to a JSON-safe dict (used by multiple endpoints)."""
+    return {
+        "id":                       t["id"],
+        "symbol":                   t["symbol"],
+        "expected_date":            str(t.get("expected_date") or ""),
+        "expected_timing":          t.get("expected_timing"),
+        "expected_time_local":      t.get("expected_time_local"),
+        "expected_at":              str(t.get("expected_at") or ""),
+        "report_time_status":       t.get("report_time_status"),
+        "report_period":            t.get("report_period"),
+        "fiscal_period":            t.get("fiscal_period"),
+        "fiscal_year":              t.get("fiscal_year"),
+        "schedule_source":          t.get("schedule_source"),
+        "fmp_check_stage":          t.get("fmp_check_stage"),
+        "results_first_detected_at": str(t.get("results_first_detected_at") or ""),
+        "status":                   t.get("status"),
+        "next_sec_check":           str(t.get("next_sec_check_at") or ""),
+        "next_fmp_check":           str(t.get("next_fmp_check_at") or ""),
+        "lease_owner":              t.get("worker_lease_owner"),
+        "lease_expires":            str(t.get("worker_lease_expires_at") or ""),
+        "updated_at":               str(t.get("updated_at") or ""),
+    }
+
+
 @router.get("/monitor/targets")
 async def list_targets(request: Request):
-    """Admin: list all active monitoring targets."""
+    """Admin: list all active monitoring targets with full scheduling detail."""
+    _check_admin(request)
+    from data.earnings_monitor_store import get_active_targets, get_due_targets
+    all_active = get_active_targets(200)
+    due_now    = get_due_targets(200)
+    due_ids    = {t["id"] for t in due_now}
+    rows = []
+    for t in all_active:
+        d = _target_to_dict(t)
+        d["due_now"] = t["id"] in due_ids
+        rows.append(d)
+    return {
+        "targets":    rows,
+        "count":      len(rows),
+        "due_count":  len(due_now),
+    }
+
+
+@router.get("/monitor/targets/{symbol}")
+async def get_target_by_symbol(symbol: str, request: Request):
+    """Admin: return current monitoring target for a specific symbol."""
     _check_admin(request)
     from data.earnings_monitor_store import get_active_targets
-    targets = get_active_targets(200)
+    targets = get_active_targets(500)
+    sym_upper = symbol.upper()
+    matches = [t for t in targets if t["symbol"] == sym_upper]
+    if not matches:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"No active target for {sym_upper}")
     return {
-        "targets": [
-            {
-                "id":              t["id"],
-                "symbol":          t["symbol"],
-                "expected_date":   str(t.get("expected_date") or ""),
-                "expected_timing": t.get("expected_timing"),
-                "fiscal_period":   t.get("fiscal_period"),
-                "fiscal_year":     t.get("fiscal_year"),
-                "status":          t.get("status"),
-                "next_sec_check":  str(t.get("next_sec_check_at") or ""),
-                "next_fmp_check":  str(t.get("next_fmp_check_at") or ""),
-                "lease_owner":     t.get("worker_lease_owner"),
-                "lease_expires":   str(t.get("worker_lease_expires_at") or ""),
-            }
-            for t in targets
-        ],
-        "count": len(targets),
+        "symbol":  sym_upper,
+        "targets": [_target_to_dict(t) for t in matches],
+        "count":   len(matches),
     }

@@ -1,0 +1,459 @@
+FINAL BACKEND FIX — EXACT EARNINGS TIME + TARGETED RELEASE POLLING + CURRENT-QUARTER REFRESH
+
+Complete this in one autonomous pass.
+
+Do not modify the frontend.
+Do not redesign the existing Live Earnings architecture.
+Do not create another FMP client.
+Do not create another live-event table.
+Do not run a full-universe earnings refresh during an active event.
+Do not add work before FastAPI lifespan yield.
+Do not push to Git.
+
+This is a targeted completion/fix pass, not another architecture exploration.
+
+CURRENT FAILURE TO FIX
+
+INTC reported after market today, but the UI still shows:
+
+- state: scheduled
+- date only: Jul 23, 2026
+- historical latest earnings: Q1 2026 from Apr 23
+- no newly reported quarter
+- no structured EPS/revenue results
+
+The backend previously reported:
+
+- deployment mode: autoscale
+- persistent monitor enabled: false
+- live-event infrastructure exists
+- CLI run-once function exists
+- Neon targets/events/read tables exist
+
+The current implementation is therefore not actually performing reliable release-window monitoring.
+
+PRIMARY OBJECTIVES
+
+1. Obtain and persist the most precise available earnings report time.
+2. Show whether that time is confirmed or estimated.
+3. Schedule narrowly targeted FMP checks at the correct moments.
+4. Detect SEC filings independently of FMP actuals.
+5. Continue polling only the reporting symbol until results arrive.
+6. Refresh that symbol’s existing Earnings Intelligence immediately.
+7. Make INTC’s newly reported quarter replace the stale April quarter as the newest historical record.
+8. Make production monitoring operational under the actual Replit deployment model.
+
+PART 1 — AUDIT ONLY THE RELEVANT EXISTING PATHS
+
+Locate and reuse:
+
+- FMPProvider
+- existing earnings-calendar fetch method
+- get_earnings_history_live or equivalent
+- earnings_monitor_service
+- earnings_monitor_store
+- run_live_earnings_monitor_once
+- existing SEC materials detection/classification
+- narrow single-symbol Earnings Intelligence refresh
+- ticker-detail cache/store
+- Replit deployment/run command configuration
+
+Do not return an audit-only report.
+
+After locating these exact paths, implement the fix.
+
+PART 2 — FMP EXACT/ESTIMATED REPORT TIME
+
+Authenticated-probe the existing FMP Starter plan against:
+
+GET /stable/earnings-calendar
+with:
+includeReportTimes=true
+
+Probe at least:
+
+- INTC
+- AAPL
+- COIN
+
+Use the canonical FMPProvider rather than raw duplicate HTTP logic.
+
+Inspect and document the exact live response field names.
+
+FMP’s current Earnings Calendar supports additional report-time metadata when includeReportTimes=true, including:
+
+- reporting period
+- confirmed versus estimated status
+- estimated report time
+
+Map the real returned fields into a stable internal contract.
+
+Recommended normalized fields:
+
+expected_date
+expected_time_local
+expected_at
+expected_timezone
+expected_timing
+report_time_status
+report_period
+schedule_source
+schedule_updated_at
+
+Expected-timing values:
+
+bmo
+amc
+during_market
+unknown
+
+Report-time-status values should reflect the actual provider response, for example:
+
+confirmed
+estimated
+unknown
+
+Do not label an estimated time as confirmed.
+
+Do not fabricate an exact time when the provider returns only BMO/AMC.
+
+When only BMO/AMC exists, persist a monitoring-window anchor separately from the user-facing time.
+
+All normalized timestamps should be timezone-aware.
+
+Use America/New_York for US earnings-display and monitoring calculations.
+
+PART 3 — TARGET SCHEDULE STORAGE
+
+Extend the existing earnings_monitor_targets row rather than creating a parallel scheduler.
+
+Persist the exact live-response fields needed by the frontend:
+
+- expected_date
+- expected_time_local
+- expected_at
+- expected_timezone
+- expected_timing
+- report_time_status
+- report_period
+- schedule_source
+- schedule_updated_at
+
+Also persist due-check state:
+
+- next_fmp_check_at
+- next_sec_check_at
+- fmp_check_stage
+- results_first_detected_at
+- monitoring_started_at
+- monitoring_expires_at
+
+Apply a safe additive Neon migration using existing conventions.
+
+PART 4 — PRE-RELEASE FMP CHECK SCHEDULE
+
+For a target with a valid expected_at, schedule one targeted per-symbol FMP result check at:
+
+- expected_at minus 30 minutes
+- expected_at minus 15 minutes
+- expected_at minus 5 minutes
+- expected_at
+- expected_at plus 1 minute
+- then every 60 seconds until structured results are detected
+
+After 30 minutes without results:
+
+- poll every 2 minutes through expected_at + 2 hours
+
+After 2 hours without results:
+
+- poll every 5 minutes through the end of the monitoring window
+
+Continue a limited delayed-report check into the next trading day when results remain absent.
+
+Do not replay missed intervals.
+
+On each worker execution, perform only the single currently due check per target.
+
+Do not poll all 399 symbols.
+
+Do not refresh the whole earnings calendar at every due check.
+
+The actuals check must be symbol-specific through the canonical FMP provider.
+
+PART 5 — FALLBACK WHEN EXACT TIME IS UNAVAILABLE
+
+When FMP returns only BMO:
+
+Use an internal anchor appropriate for premarket monitoring, but expose:
+
+Before Market Open
+Exact time unavailable
+
+When FMP returns only AMC:
+
+Use an internal anchor shortly after the regular close, but expose:
+
+After Market Close
+Exact time unavailable
+
+Internal fallback anchors are scheduling implementation details.
+
+They must not be displayed as confirmed company release times.
+
+Unknown timing should use a broader limited window, not constant all-day per-symbol polling.
+
+PART 6 — SEC DETECTION
+
+Continue using the existing SEC materials architecture.
+
+During the active event window, check only due reporting symbols for:
+
+- 8-K
+- 8-K/A
+- 6-K
+- 10-Q
+- 10-K
+- earnings-related attachments
+
+Use accession-number deduplication and existing document classification.
+
+When a relevant filing appears before FMP actuals:
+
+- create/update live event state = filing_detected
+- persist accepted timestamp
+- persist filing URL and accession
+- trigger a targeted materials refresh
+- make this available immediately to the alert feed and ticker-detail
+- continue FMP polling
+
+Do not wait for structured actuals before surfacing the release.
+
+PART 7 — STRUCTURED RESULT DETECTION
+
+Use the canonical live FMP earnings-report method.
+
+Detect staged publication correctly:
+
+- EPS actual only → results_partial
+- Revenue actual only → results_partial
+- both actuals present → results_available
+- corrected actual/estimate values → results_updated
+
+Missing values are null, never zero.
+
+Classification:
+
+double_beat:
+EPS surprise > 0 and revenue surprise > 0
+
+double_miss:
+EPS surprise < 0 and revenue surprise < 0
+
+mixed:
+one positive and one negative, or an in-line comparison
+
+partial:
+only one valid comparison exists
+
+unclassified:
+required estimates are missing
+
+Do not classify using nonsensical cross-zero EPS percentage alone.
+
+PART 8 — REFRESH THE ACTUAL EARNINGS TAB DATA
+
+This is mandatory.
+
+When new structured results are detected for a symbol:
+
+1. Invoke the narrowest existing single-symbol Earnings Intelligence refresh.
+2. Insert/update the newly reported quarter in:
+   earnings_intelligence.earnings_history
+3. Ensure the newly reported quarter becomes record index 0/newest.
+4. Recompute recent/nonfinal reaction fields only.
+5. Preserve:
+   - old historical quarters
+   - ratings
+   - price targets
+   - SEC materials
+   - unrelated fundamentals JSONB fields
+6. Persist using the existing JSONB merge-safe path.
+7. Invalidate or refresh any ticker-detail cache layer that would continue returning the old April quarter.
+8. Do not wait for weekly refresh.
+
+The live card and newly reported historical quarter may update in stages:
+
+- first: filing_detected/results_partial
+- next: results_available
+- then: refreshed Earnings Intelligence quarter
+
+But the stale prior quarter must not remain the newest quarter once FMP supplies the new report.
+
+PART 9 — BADGE-STATE TRUTH
+
+The backend event state must distinguish:
+
+scheduled:
+future event exists, monitor not yet inside active window
+
+monitoring:
+currently inside active release window and checks are running
+
+filing_detected:
+SEC materials found
+
+results_partial:
+one structured result available
+
+results_available:
+structured report available
+
+results_updated:
+structured values revised
+
+complete:
+correction window finished
+
+Do not call an event “live” merely because its date is today.
+
+PART 10 — WORKER EXECUTION IN PRODUCTION
+
+The current production web deployment is Autoscale.
+
+An in-process loop alone is not reliable because Autoscale can scale to zero.
+
+Preserve the Autoscale API deployment.
+
+Use the existing run-once CLI as the canonical worker entry point.
+
+Set up or fully prepare one Replit Scheduled Deployment that invokes the run-once command frequently enough to honor due timestamps.
+
+Preferred execution:
+
+- worker launches every minute on earnings weekdays
+- run_once checks Neon due timestamps
+- when no target is due, it exits quickly without provider calls
+- when targets are due, it processes only due symbols
+- worker uses Neon leases/advisory locking so overlapping scheduled runs cannot duplicate work
+
+Inspect the scheduling options available in the actual Replit project.
+
+When the Replit Agent can configure the Scheduled Deployment, configure it.
+
+When cloud-deployment configuration requires a manual UI action, complete all code and return exactly one manual operation containing:
+
+- deployment type
+- exact schedule text
+- exact run command
+- required environment variables/secrets
+- timeout
+- machine size recommendation
+
+Do not require another coding prompt.
+
+Do not claim monitoring is operational unless either:
+
+- the Scheduled Deployment is active, or
+- the API has been moved to an approved always-on Reserved VM
+
+Do not silently change the user’s billing/deployment type.
+
+PART 11 — INTC LIVE VALIDATION
+
+Use INTC as the required real validation case.
+
+Verify:
+
+- the target contains the most precise FMP report time available
+- report_time_status is persisted
+- timing displays AMC or the real exact time
+- worker due times include −30, −15, −5, 0
+- at least one targeted live FMP check occurs
+- today’s SEC filing/material is detected when available
+- today’s structured EPS and revenue are detected when FMP supplies them
+- live event advances beyond scheduled
+- new quarter is added to earnings_history
+- old Q1 Apr 23 record is no longer record 0
+- ticker-detail returns the newest quarter and live event
+- no full-universe FMP scan occurs
+
+If FMP has not yet published one or both actual fields, report that honestly but prove the polling schedule remains active and that SEC detection works independently.
+
+PART 12 — ADMIN/STATUS VERIFICATION
+
+Extend the existing monitor status output to show:
+
+- worker deployment mode
+- last worker invocation
+- next worker expected
+- exact-time coverage count
+- confirmed-time count
+- estimated-time count
+- BMO/AMC-only count
+- due targets now
+- last FMP check by symbol
+- next FMP check by symbol
+- last SEC check by symbol
+- results detected
+- delayed targets
+- worker lease state
+- provider calls made during the last pass
+
+Add no sensitive keys.
+
+PART 13 — ACCEPTANCE TESTS
+
+Do not declare completion until:
+
+1. FMP includeReportTimes is live-probed.
+2. Exact live field names are mapped.
+3. Confirmed and estimated times are distinguishable.
+4. INTC contains a time or a truthful AMC-only state.
+5. −30/−15/−5/0 due timestamps are generated.
+6. Only due symbols are checked.
+7. No 399-symbol force-check occurs.
+8. SEC detection works independently.
+9. Partial results work.
+10. Complete results work.
+11. Result corrections deduplicate correctly.
+12. New result triggers single-symbol EI refresh.
+13. New quarter becomes earnings_history[0].
+14. Ticker-detail remains provider-call-free.
+15. Live event survives restart.
+16. Worker lease prevents duplicate processing.
+17. API startup remains fast.
+18. Replit worker configuration is active or one exact final manual deployment action is provided.
+19. Production endpoint is published and healthy.
+
+FINAL REPORT
+
+Return one report only:
+
+1. Files changed
+2. Exact FMP report-time fields discovered
+3. Normalized scheduling contract
+4. INTC schedule data
+5. Poll cadence implemented
+6. SEC detection result
+7. FMP result-detection result
+8. Single-symbol EI refresh proof
+9. Newest-quarter proof
+10. Worker deployment configuration
+11. Provider-call totals
+12. Live production verification
+13. Exact frontend-ready additions
+
+End with exactly:
+
+LIVE MONITOR OPERATIONAL
+
+or
+
+ONE MANUAL WORKER DEPLOYMENT ACTION REQUIRED
+
+or
+
+NOT COMPLETE
+
+Do not stop after code compilation.

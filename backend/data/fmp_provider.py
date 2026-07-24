@@ -311,6 +311,106 @@ class FMPProvider:
         cache.set(live_key, results, 120)  # 2-minute short TTL for live monitoring
         return results
 
+    async def get_earnings_calendar_with_times(
+        self,
+        from_date: str,
+        to_date: str,
+    ) -> list[dict]:
+        """
+        Fetch earnings calendar with report-timing metadata.
+        Uses /stable/earnings-calendar?includeReportTimes=true
+
+        Real FMP fields (Starter plan):
+          symbol, date, time (amc/bmo/null), confirmed (bool),
+          periodEnding, fiscalPeriod, fiscalYear, lastUpdated,
+          epsActual, epsEstimated, revenueActual, revenueEstimated
+
+        Returns normalized dicts with stable internal contract:
+          symbol, expected_date, expected_timing (amc/bmo/None),
+          report_time_status (confirmed/estimated/unknown),
+          report_period, fiscal_period, fiscal_year, period_ending,
+          schedule_source, schedule_updated_at,
+          eps_actual, eps_estimate, revenue_actual, revenue_estimate.
+
+        NOTE: FMP Starter ignores the symbol filter on this endpoint —
+        it returns all companies in the date window. Filter client-side.
+        Cache TTL: 1800s (30 min) so it survives the hourly schedule refresh.
+        """
+        cache_key = f"fmp:earn_cal_times:{from_date}:{to_date}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        params = {
+            "from": from_date,
+            "to": to_date,
+            "includeReportTimes": "true",
+            "apikey": self.api_key,
+        }
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{self.STABLE_URL}/earnings-calendar",
+                    params=params,
+                    timeout=20,
+                )
+            if resp.status_code != 200:
+                print(f"[FMP] earnings-calendar HTTP {resp.status_code}")
+                return []
+            data = resp.json()
+            if not isinstance(data, list):
+                return []
+
+            _timing_map = {
+                "amc": "amc",
+                "after market close": "amc",
+                "pm": "amc",
+                "bmo": "bmo",
+                "pre market": "bmo",
+                "before market open": "bmo",
+                "am": "bmo",
+            }
+            results = []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                fmp_time = item.get("time")
+                confirmed_raw = item.get("confirmed")
+
+                raw_key = (fmp_time or "").lower().strip()
+                expected_timing = _timing_map.get(raw_key)
+
+                if confirmed_raw is True:
+                    report_time_status = "confirmed"
+                elif confirmed_raw is False:
+                    report_time_status = "estimated"
+                else:
+                    report_time_status = "unknown"
+
+                results.append({
+                    "symbol":              (item.get("symbol") or "").upper(),
+                    "expected_date":       item.get("date"),
+                    "expected_timing":     expected_timing,
+                    "report_time_status":  report_time_status,
+                    "report_period":       item.get("fiscalPeriod"),
+                    "fiscal_period":       item.get("fiscalPeriod"),
+                    "fiscal_year":         item.get("fiscalYear"),
+                    "period_ending":       item.get("periodEnding"),
+                    "schedule_source":     "fmp_earnings_calendar",
+                    "schedule_updated_at": item.get("lastUpdated"),
+                    "eps_actual":          item.get("epsActual"),
+                    "eps_estimate":        item.get("epsEstimated"),
+                    "revenue_actual":      item.get("revenueActual"),
+                    "revenue_estimate":    item.get("revenueEstimated"),
+                })
+
+            if results:
+                cache.set(cache_key, results, 1800)
+            return results
+        except Exception as exc:
+            print(f"[FMP] earnings-calendar-with-times failed: {exc}")
+            return []
+
     async def get_income_statement(self, ticker: str, limit: int = 4, period: str = "quarter") -> list:
         """
         Per-ticker income statement (quarterly or annual) via stable/income-statement.
