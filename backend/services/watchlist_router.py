@@ -4963,29 +4963,30 @@ async def ticker_detail_endpoint(symbol: str):
     try:
         def _fetch_live_event():
             from data.earnings_monitor_store import (
-                get_live_event_for_symbol, get_active_targets,
+                get_live_event_for_symbol, get_targets_for_symbols,
             )
             ev = get_live_event_for_symbol(sym, include_dry_run=False)
             if not ev:
                 return None
 
             # ── enrich with schedule fields from earnings_monitor_targets ─────
+            # Use get_targets_for_symbols (not get_active_targets) so complete
+            # targets are included and schedule fields are never NULL post-results.
             sched: dict = {}
             try:
-                all_targets = get_active_targets(500)
-                for t in all_targets:
-                    if (t.get("symbol") or "").upper() == sym.upper():
-                        ea = t.get("expected_at")
-                        sched = {
-                            "expected_at":         str(ea).replace("+00:00", "Z") if ea else None,
-                            "expected_timing":     t.get("expected_timing"),
-                            "expected_time_local": t.get("expected_time_local"),
-                            "expected_timezone":   "America/New_York",
-                            "report_time_status":  t.get("report_time_status"),
-                            "report_period":       t.get("report_period"),
-                            "schedule_source":     t.get("schedule_source"),
-                        }
-                        break
+                targets = get_targets_for_symbols([sym])
+                if targets:
+                    t = targets[0]
+                    ea = t.get("expected_at")
+                    sched = {
+                        "expected_at":         str(ea).replace("+00:00", "Z") if ea else None,
+                        "expected_timing":     t.get("expected_timing"),
+                        "expected_time_local": t.get("expected_time_local"),
+                        "expected_timezone":   "America/New_York",
+                        "report_time_status":  t.get("report_time_status"),
+                        "report_period":       t.get("report_period"),
+                        "schedule_source":     t.get("schedule_source"),
+                    }
             except Exception:
                 pass
 

@@ -88,27 +88,31 @@ def _get_target_schedules(symbols: list[str]) -> dict[str, dict]:
     Batch-fetch schedule metadata from earnings_monitor_targets for the given
     symbols.  Pure Neon read — no external API calls.
     Returns {symbol: schedule_dict}.
+
+    Uses get_targets_for_symbols (not get_active_targets) so that complete
+    targets are included and schedule fields (expected_at, expected_timing,
+    report_time_status, etc.) are never NULL just because a target is complete.
     """
     if not symbols:
         return {}
     try:
-        from data.earnings_monitor_store import get_active_targets
-        all_targets = get_active_targets(500)
-        sym_set = {s.upper() for s in symbols}
+        from data.earnings_monitor_store import get_targets_for_symbols
+        targets = get_targets_for_symbols(symbols)
         result: dict[str, dict] = {}
-        for t in all_targets:
+        for t in targets:
             sym = (t.get("symbol") or "").upper()
-            if sym and sym in sym_set:
-                ea = t.get("expected_at")
-                result[sym] = {
-                    "expected_at":         str(ea).replace("+00:00", "Z") if ea else None,
-                    "expected_timing":     t.get("expected_timing"),
-                    "expected_time_local": t.get("expected_time_local"),
-                    "expected_timezone":   "America/New_York",
-                    "report_time_status":  t.get("report_time_status"),
-                    "report_period":       t.get("report_period"),
-                    "schedule_source":     t.get("schedule_source"),
-                }
+            if not sym:
+                continue
+            ea = t.get("expected_at")
+            result[sym] = {
+                "expected_at":         str(ea).replace("+00:00", "Z") if ea else None,
+                "expected_timing":     t.get("expected_timing"),
+                "expected_time_local": t.get("expected_time_local"),
+                "expected_timezone":   "America/New_York",
+                "report_time_status":  t.get("report_time_status"),
+                "report_period":       t.get("report_period"),
+                "schedule_source":     t.get("schedule_source"),
+            }
         return result
     except Exception:
         return {}

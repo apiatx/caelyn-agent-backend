@@ -297,6 +297,37 @@ _TARGET_COLS = [
 _TARGET_SELECT = ", ".join(_TARGET_COLS)
 
 
+def get_targets_for_symbols(symbols: list[str]) -> list[dict]:
+    """
+    Return the most-recent target row per symbol for ANY status, including
+    'complete' and 'unavailable'.  Used by read endpoints that need to join
+    schedule fields (expected_at, expected_timing, etc.) even after a target
+    has advanced beyond 'scheduled'.
+    """
+    if not symbols:
+        return []
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        cur = conn.cursor()
+        placeholders = ",".join(["%s"] * len(symbols))
+        cur.execute(f"""
+            SELECT DISTINCT ON (symbol) {_TARGET_SELECT}
+            FROM   public.earnings_monitor_targets
+            WHERE  symbol = ANY(ARRAY[{placeholders}])
+            ORDER  BY symbol, expected_date DESC NULLS LAST
+        """, [s.upper() for s in symbols])
+        rows = cur.fetchall()
+        cur.close()
+        return [dict(zip(_TARGET_COLS, r)) for r in rows]
+    except Exception as exc:
+        print(f"[EarnMonStore] get_targets_for_symbols error: {exc}")
+        return []
+    finally:
+        _put_conn(conn)
+
+
 def get_active_targets(limit: int = 100) -> list[dict]:
     """Return targets not yet complete, ordered by expected_date."""
     conn = _get_conn()
@@ -551,7 +582,18 @@ def get_live_event_by_id(event_id: str) -> dict | None:
 
 
 def get_live_event_for_symbol(symbol: str, include_dry_run: bool = False) -> dict | None:
-    """Most-recent non-complete live event for a symbol."""
+    """
+    Canonical current live event for a symbol.
+
+    Within the same symbol, selects the most advanced state using explicit
+    precedence so a stale 'scheduled' transition never beats 'complete' or
+    'results_available' merely because its updated_at was touched more recently.
+
+    Precedence (ascending = wins):
+      complete=0, results_updated=1, results_available=2, results_partial=3,
+      filing_detected=4, monitoring=5, scheduled=6, other=7
+    Ties broken by revision DESC then updated_at DESC.
+    """
     conn = _get_conn()
     if conn is None:
         return None
@@ -565,7 +607,19 @@ def get_live_event_for_symbol(symbol: str, include_dry_run: bool = False) -> dic
                    source_status, classification, checksum, created_at
             FROM   public.earnings_live_events
             WHERE  symbol = %s {dry_clause}
-            ORDER  BY updated_at DESC
+            ORDER  BY
+                CASE state
+                    WHEN 'complete'          THEN 0
+                    WHEN 'results_updated'   THEN 1
+                    WHEN 'results_available' THEN 2
+                    WHEN 'results_partial'   THEN 3
+                    WHEN 'filing_detected'   THEN 4
+                    WHEN 'monitoring'        THEN 5
+                    WHEN 'scheduled'         THEN 6
+                    ELSE                          7
+                END ASC,
+                revision DESC,
+                updated_at DESC
             LIMIT  1
         """, (symbol.upper(),))
         row = cur.fetchone()
@@ -585,7 +639,13 @@ def get_live_event_for_symbol(symbol: str, include_dry_run: bool = False) -> dic
 
 
 def get_live_events_for_symbols(symbols: list[str], include_dry_run: bool = False) -> dict[str, dict]:
-    """Return {symbol: latest_event} for a list of symbols."""
+    """
+    Return {symbol: canonical_current_event} for a list of symbols.
+
+    Uses the same state-precedence ORDER BY as get_live_event_for_symbol so
+    that DISTINCT ON (symbol) selects the most advanced valid state rather than
+    the most recently touched row.
+    """
     if not symbols:
         return {}
     conn = _get_conn()
@@ -603,7 +663,19 @@ def get_live_events_for_symbols(symbols: list[str], include_dry_run: bool = Fals
                    source_status, classification, checksum, created_at
             FROM   public.earnings_live_events
             WHERE  symbol = ANY(ARRAY[{placeholders}]) {dry_clause}
-            ORDER  BY symbol, updated_at DESC
+            ORDER  BY symbol,
+                CASE state
+                    WHEN 'complete'          THEN 0
+                    WHEN 'results_updated'   THEN 1
+                    WHEN 'results_available' THEN 2
+                    WHEN 'results_partial'   THEN 3
+                    WHEN 'filing_detected'   THEN 4
+                    WHEN 'monitoring'        THEN 5
+                    WHEN 'scheduled'         THEN 6
+                    ELSE                          7
+                END ASC,
+                revision DESC,
+                updated_at DESC
         """, [s.upper() for s in symbols])
         cols = ["event_id","event_key","symbol","expected_date","fiscal_period","fiscal_year",
                 "state","detected_at","updated_at","revision","is_dry_run",

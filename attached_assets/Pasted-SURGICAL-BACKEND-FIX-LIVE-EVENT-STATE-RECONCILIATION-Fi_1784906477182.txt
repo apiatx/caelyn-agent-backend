@@ -1,0 +1,217 @@
+SURGICAL BACKEND FIX — LIVE-EVENT STATE RECONCILIATION
+
+Fix only the stale current-event selection and state reconciliation.
+
+Do not add features.
+Do not change polling cadence.
+Do not change FMP calls.
+Do not modify the frontend.
+Do not create new tables or endpoints.
+Do not redesign the monitor.
+Do not push to Git.
+
+CURRENT PRODUCTION CONTRADICTION
+
+For INTC:
+
+- earnings_history[0] correctly contains Q2 2026 results from Jul 23
+- EPS actual = 0.42
+- Revenue actual = 16128000000
+- both estimates were beaten
+- the backend previously detected results_available / double_beat
+
+But ticker-detail/frontend still receives or selects a live event that says:
+
+- state = scheduled
+- Upcoming Earnings
+- Timing not confirmed
+
+This means the system has both a stale scheduled transition and a newer completed/result transition, and the stale event is being selected as the current live event.
+
+OBJECTIVE
+
+Return one canonical current event for each symbol/reporting period.
+
+PART 1 — TRACE THE REAL INTC RECORDS
+
+Inspect Neon for all INTC rows in:
+
+- earnings_monitor_targets
+- earnings_live_events
+
+Report for every INTC event row:
+
+- event_id
+- event_key
+- expected_date
+- fiscal_year
+- fiscal_period
+- state
+- classification
+- revision
+- detected_at
+- updated_at
+- results_payload presence
+- is_dry_run
+
+Also inspect the INTC target:
+
+- status
+- expected_at
+- expected_timing
+- report_time_status
+- expected_time_local
+- next_fmp_check_at
+- fmp_check_stage
+
+Identify exactly why the scheduled transition is winning.
+
+Do not stop at the audit. Fix it.
+
+PART 2 — CANONICAL EVENT IDENTITY
+
+Treat transitions belonging to the same earnings event as one logical event family.
+
+Preferred identity:
+
+- event_key when it already identifies symbol + fiscal period/year
+
+Fallback:
+
+- symbol + fiscal_year + fiscal_period
+- symbol + expected_date when fiscal labels are unavailable
+
+Do not compare unrelated quarters as though they are the same event.
+
+PART 3 — STATE PRECEDENCE WITHIN ONE EVENT
+
+Within the same logical event family, select the most advanced valid state:
+
+complete
+results_updated
+results_available
+results_partial
+filing_detected
+monitoring
+scheduled
+
+Then break ties using:
+
+1. highest revision
+2. newest updated_at
+3. newest detected_at
+
+A scheduled transition must never replace results_available for the same symbol and quarter merely because its row was touched later.
+
+PART 4 — TARGET STATUS RECONCILIATION
+
+When complete structured results are found:
+
+- target status must advance beyond scheduled
+- results_first_detected_at must be populated
+- high-frequency polling must stop
+- next_fmp_check_at should be cleared or moved into the bounded correction window
+- fmp_check_stage should reflect correction monitoring or completion
+- the target must not continue presenting itself as an upcoming event
+
+When the correction window finishes:
+
+- target status = complete
+- no further live polling unless a material correction or explicitly scheduled retry is required
+
+PART 5 — CURRENT-EVENT READ PATH
+
+Create or correct one canonical helper used by both:
+
+GET /api/earnings/live-events
+
+and:
+
+GET /api/watchlist/ticker-detail/{symbol}
+
+The helper must return the canonical winning transition for the current event family.
+
+The alert feed may retain historical transition rows when useful, but ticker-detail `earnings_intelligence.live_event` must return only the correct current state.
+
+Schedule fields must still be joined from earnings_monitor_targets:
+
+- expected_at
+- expected_timing
+- expected_time_local
+- expected_timezone
+- report_time_status
+- report_period
+- schedule_source
+
+Full payloads must remain present:
+
+- results_payload
+- filing_payload
+- reaction_payload
+
+No FMP, SEC, or Tradier calls may occur during these read endpoints.
+
+PART 6 — DEFENSIVE DATA CONSISTENCY
+
+When earnings_history[0]:
+
+- matches the live event date or fiscal period
+- contains reported EPS or revenue actuals
+
+then a scheduled state for that same event is internally inconsistent.
+
+The backend should resolve that inconsistency to at least:
+
+results_partial
+
+or:
+
+results_available
+
+based on the stored actuals.
+
+Do not rely solely on the frontend to hide corrupted state.
+
+PART 7 — REPAIR EXISTING INTC STATE
+
+Repair the existing INTC current event without deleting valid transition history.
+
+Required final INTC state:
+
+- current event date: Jul 23, 2026
+- fiscal period: Q2 2026
+- state: results_available, results_updated, or complete
+- classification: double_beat
+- expected_timing: amc
+- report_time_status: confirmed
+- EPS actual: 0.42
+- Revenue actual: 16128000000
+
+No scheduled current event should remain selected for INTC.
+
+PART 8 — VALIDATION
+
+Verify locally and in production:
+
+1. ticker-detail/INTC returns one correct current live_event.
+2. Its state is not scheduled.
+3. Classification is double_beat.
+4. Full result payload is present.
+5. AMC/confirmed schedule fields are present.
+6. earnings_history[0] remains Q2 2026.
+7. The feed’s newest INTC event is the correct advanced transition.
+8. No duplicate scheduled alert is presented as current.
+9. Read endpoints remain provider-call-free.
+10. Health remains 200.
+
+Publish the backend.
+
+Return the abbreviated live production JSON for INTC from both endpoints.
+
+End with exactly:
+
+INTC LIVE STATE RECONCILED
+
+or:
+
+NOT COMPLETE
