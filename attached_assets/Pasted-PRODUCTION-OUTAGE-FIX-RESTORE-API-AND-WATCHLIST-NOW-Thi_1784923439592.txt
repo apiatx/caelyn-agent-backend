@@ -1,0 +1,199 @@
+PRODUCTION OUTAGE FIX — RESTORE API AND WATCHLIST NOW
+
+This is a production-stability task only.
+
+Do not add features.
+Do not redesign anything.
+Do not modify the frontend.
+Do not perform another broad architecture project.
+Do not reset or overwrite the current Git-pushed workspace.
+Do not stop after a local restart.
+Do not push to Git.
+
+CURRENT PRODUCTION FAILURE
+
+The frontend is receiving HTTP 500 responses from multiple FastAPI endpoints, including:
+
+- /api/watchlist/list
+- /api/home/dashboard
+- /api/playbooks
+- /api/themes/relative-strength
+- and other unrelated routes
+
+The Watchlist therefore cannot load.
+
+Recent backend changes added or modified:
+
+- live earnings monitor loops
+- startup earnings catch-up
+- reaction finalization
+- recent-earnings repair/backfills
+- post-yield background jobs
+
+The priority is restoring the full API immediately while preserving completed earnings data.
+
+PART 1 — INSPECT THE ACTUAL DEPLOYED FAILURE
+
+Start with the production deployment:
+
+https://fast-api-server-aidanpilon.replit.app
+
+Inspect the latest production runtime logs and obtain the real exception/traceback for the 500 responses.
+
+Test directly against production:
+
+GET /health
+GET /api/admin/startup-status
+GET /api/watchlist/list
+GET /api/home/dashboard
+GET /api/playbooks
+GET /api/themes/relative-strength
+GET /api/watchlist/earnings
+GET /api/watchlist/ticker-detail/NVEC
+
+Determine whether the failure is:
+
+- application startup failure
+- shared database connection/pool exhaustion
+- a Neon schema/query exception
+- event-loop blocking
+- deadlock or long-held lock
+- runaway background task
+- earnings catch-up monopolizing resources
+- import/runtime exception
+- stale deployment
+- authentication middleware failure
+- malformed shared cache data
+
+Do not infer the cause from local dev behavior. Use the actual production logs.
+
+PART 2 — RESTORE CORE API FIRST
+
+The following must remain responsive even when an optional background task fails:
+
+- health
+- watchlist
+- dashboard
+- playbooks
+- themes
+- ticker detail
+
+If a newly added earnings background task is responsible:
+
+- disable that task temporarily
+- restore API availability first
+- then isolate and re-enable it safely
+
+It is acceptable to pause reaction catch-up or live earnings monitoring briefly to restore the Watchlist.
+
+Do not delete persisted earnings results or recent-reaction data.
+
+PART 3 — BACKGROUND-JOB ISOLATION
+
+Audit every newly added post-yield earnings task.
+
+Requirements:
+
+- no synchronous network or database loop on the FastAPI event loop
+- bounded symbol count per pass
+- bounded concurrency
+- bounded timeouts
+- short database transactions
+- every connection returned to the pool
+- one symbol failure cannot fail the whole pass
+- one task failure cannot crash or block the API
+- startup catch-up must not process hundreds of symbols in one blocking request
+- no background job should hold a global file/database lock while API reads wait
+- no repeated repair/backfill job should run automatically on every normal request
+
+Heavy synchronous functions must use the existing thread-isolation conventions.
+
+Async provider work must yield normally and must not run a tight CPU/database loop.
+
+PART 4 — DATABASE POOL CHECK
+
+Inspect:
+
+- active Neon connections
+- pool size
+- checked-out connections
+- leaked cursors/connections
+- long-running queries
+- transactions left idle
+- concurrent backfill jobs
+- scheduler overlap
+
+If the new earnings work is exhausting the pool:
+
+- fix connection lifecycle
+- reduce concurrency
+- add worker leases
+- make bulk jobs resumable and bounded
+- ensure read endpoints always have capacity
+
+Do not merely increase the pool size to hide a leak.
+
+PART 5 — WATCHLIST ENDPOINT
+
+Verify the canonical Watchlist route and storage still work.
+
+Confirm:
+
+- authenticated user resolves correctly
+- saved watchlists still exist
+- no migration or query changed the user identifier
+- no empty default-user fallback replaced the real user
+- response shape remains what the frontend expects
+- the endpoint returns the existing saved watchlist and symbols
+
+Do not create a replacement watchlist.
+
+Do not seed a fake watchlist.
+
+PART 6 — OPTIONAL SERVICE FAILURE SAFETY
+
+Wrap optional post-yield initialization and loops so failures are logged but do not make unrelated API endpoints return 500.
+
+The service should expose optional subsystem errors in startup/status diagnostics, but core API requests must continue working.
+
+PART 7 — REQUIRED PRODUCTION VALIDATION
+
+After fixing:
+
+1. Publish the backend.
+2. Verify production /health returns 200.
+3. Verify /api/watchlist/list returns the user’s real saved watchlist.
+4. Verify /api/home/dashboard returns 200.
+5. Verify /api/playbooks returns 200.
+6. Verify /api/themes/relative-strength returns 200.
+7. Verify /api/watchlist/earnings returns 200.
+8. Verify ticker-detail/NVEC returns 200.
+9. Verify no request hangs while background earnings jobs run.
+10. Verify startup remains fast.
+11. Verify the API stays responsive for at least several consecutive checks.
+12. Confirm no new production traceback appears.
+
+Do not declare success from localhost alone.
+
+FINAL REPORT
+
+Return:
+
+1. Exact production root cause
+2. Exception/traceback summary
+3. Files changed
+4. Whether a background job was disabled or corrected
+5. Database-pool findings
+6. Production endpoint results
+7. Watchlist count/name/symbol count returned
+8. Startup and response timings
+9. Publish result
+10. Remaining limitations
+
+End with exactly:
+
+PRODUCTION API RESTORED
+
+or:
+
+NOT COMPLETE

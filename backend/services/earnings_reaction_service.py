@@ -328,7 +328,10 @@ async def finalize_reactions_for_event(
 
 _REACTION_CATCHUP_LOOKBACK_DAYS = 10
 
-async def reaction_catchup_pass(lookback_days: int = _REACTION_CATCHUP_LOOKBACK_DAYS) -> dict:
+async def reaction_catchup_pass(
+    lookback_days: int = _REACTION_CATCHUP_LOOKBACK_DAYS,
+    max_symbols: int | None = None,
+) -> dict:
     """
     Startup-safe catch-up: finds complete/results_* events from the last
     `lookback_days` days that have incomplete or missing reaction horizons,
@@ -336,6 +339,10 @@ async def reaction_catchup_pass(lookback_days: int = _REACTION_CATCHUP_LOOKBACK_
 
     Designed to be called at the end of _earnings_catchup_pass() so it runs
     once per process start without blocking the main lifespan yield.
+
+    max_symbols: cap on symbols processed per call (None = unlimited).
+        Set to a small value (e.g. 15) on startup so the pass completes
+        quickly and doesn't compete with API request serving.
     """
     import asyncio as _aio
 
@@ -368,11 +375,17 @@ async def reaction_catchup_pass(lookback_days: int = _REACTION_CATCHUP_LOOKBACK_
     checked           = 0
     finalized         = 0
     already_complete  = 0
+    symbols_processed: set[str] = set()
 
     for ev in candidates:
         sym = (ev.get("symbol") or "").upper()
-        if not sym:
+        if not sym or sym in symbols_processed:
             continue
+        # Enforce per-call symbol cap so startup passes don't starve API requests
+        if max_symbols is not None and len(symbols_processed) >= max_symbols:
+            print(f"{_LOG}[catchup] max_symbols={max_symbols} reached — deferring rest to tick loop")
+            break
+        symbols_processed.add(sym)
 
         rp   = _coerce_reaction_dict(ev.get("reaction_payload"))
         have = {k for k in WANTED if rp.get(k) is not None}
@@ -416,6 +429,8 @@ async def reaction_catchup_pass(lookback_days: int = _REACTION_CATCHUP_LOOKBACK_
                     print(f"{_LOG}[catchup] {sym}: backfill_ei warning: {_bf_exc}")
         except Exception as exc:
             print(f"{_LOG}[catchup] {sym}: error: {exc}")
+        # Yield to event loop so HTTP requests are not starved between symbols
+        await _aio.sleep(0)
 
     print(
         f"{_LOG}[catchup] complete: "
@@ -732,6 +747,7 @@ async def bulk_backfill_ei_reactions(lookback_days: int = 30) -> dict:
         except Exception as exc:
             print(f"{_LOG}[bulk_backfill] {sym}: {exc}")
             fail_count += 1
+        await _aio.sleep(0)  # yield to event loop between symbols
 
     return {
         "symbols_attempted": len(seen),

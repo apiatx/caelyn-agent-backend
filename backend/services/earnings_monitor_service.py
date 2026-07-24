@@ -1372,6 +1372,9 @@ async def _earnings_catchup_pass() -> dict:
                 retry_set += 1
                 print(f"[EarnMon][catchup] {symbol}: no results yet — retry in {_CATCHUP_RETRY_DELAY_S//60}min")
 
+            # Yield to event loop between targets so API requests are not blocked
+            await asyncio.sleep(0)
+
         _STATE["catchup_last_run"]        = now_utc.isoformat()
         _STATE["catchup_symbols_checked"] = checked
         _STATE["catchup_results_filled"]  = filled
@@ -1383,10 +1386,12 @@ async def _earnings_catchup_pass() -> dict:
         )
 
         # ── reaction finalization pass (separate concern, non-blocking) ───────
+        # max_symbols=15 bounds the startup pass so it completes quickly and
+        # does not starve API request serving.  The tick loop handles the rest.
         reaction_result: dict = {}
         try:
             from services.earnings_reaction_service import reaction_catchup_pass
-            reaction_result = await reaction_catchup_pass(lookback_days=10)
+            reaction_result = await reaction_catchup_pass(lookback_days=10, max_symbols=15)
         except Exception as _rex:
             print(f"[EarnMon][catchup] reaction_catchup_pass error: {_rex}")
 
