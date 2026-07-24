@@ -1,0 +1,87 @@
+FINALIZE LIVE EARNINGS IN PRODUCTION — PUBLISH + ACTIVATE WORKER ONLY
+
+Do not redesign anything.
+Do not add features.
+Do not modify the frontend.
+Do not rewrite the monitor.
+Do not run another broad audit.
+Do not push to Git.
+
+The latest exact-time and targeted-polling implementation has already passed all 12 local acceptance tests.
+
+The only remaining job is to make that exact code operational in production.
+
+1. Publish the current backend code to the existing production deployment:
+   https://fast-api-server-aidanpilon.replit.app
+
+2. Verify the deployed production API contains the latest fields and behavior, not the older deployment.
+
+3. Configure the existing run-once CLI as a Replit Scheduled Deployment running once per minute on earnings weekdays.
+
+Use the actual canonical command already created in this repository.
+
+The worker must:
+
+- invoke run_live_earnings_monitor_once
+- exit quickly when no checks are due
+- process only due symbols
+- use the existing Neon leases
+- preserve the Autoscale web deployment
+- not start another web server
+- not run the full 399-symbol refresh
+- inherit the existing backend secrets/environment variables
+
+If Replit Agent cannot create the Scheduled Deployment directly, return exactly one manual setup block containing:
+
+- deployment type
+- exact run command
+- exact schedule
+- required secrets
+- timeout
+- machine size
+- where to click in Replit
+
+Do not require another coding prompt.
+
+PRODUCTION VERIFICATION
+
+Verify against the deployed URL:
+
+1. Health returns 200.
+2. Monitor status includes the new exact-time fields.
+3. INTC target returns:
+   - expected timing AMC
+   - confirmed status
+   - expected time 4:30 PM ET, or the exact currently stored value
+   - source fmp_earnings_calendar
+4. Due timestamps include the implemented -30/-15/-5/0 cadence.
+5. The deployed ticker-detail endpoint includes the latest live-event schedule fields.
+6. The deployed event feed still works.
+7. The Scheduled Deployment has executed at least once successfully.
+8. The worker status records a recent invocation.
+9. No duplicate worker processing occurs.
+10. Normal API requests remain responsive.
+
+Do not repeat local tests unless production fails.
+
+Return:
+
+- publish result
+- live health result
+- live INTC schedule payload
+- scheduled-worker status
+- last worker invocation
+- exact worker command
+- confirmation that the production API is using the latest code
+
+End with exactly:
+
+LIVE MONITOR OPERATIONAL
+
+or
+
+ONE MANUAL WORKER DEPLOYMENT ACTION REQUIRED
+
+or
+
+NOT COMPLETE
