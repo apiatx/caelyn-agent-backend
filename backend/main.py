@@ -1004,7 +1004,29 @@ async def lifespan(app):
         _BOOTSTRAP_STATE["started_at"] = _bt0
         print("[BOOTSTRAP] post-yield bootstrap starting")
 
-        # 0. Live Earnings Monitor — optional persistent loop (LIVE_EARNINGS_MONITOR_ENABLED=true)
+        # 0a. Earnings tick loop — autoscale-native, always on, no env-var gate.
+        #     Wakes every 60s, processes only due earnings_monitor_targets.
+        #     Does NOT scan the full watchlist universe on each tick.
+        try:
+            from services.earnings_monitor_service import earnings_monitor_tick_loop as _em_tick
+            asyncio.create_task(_em_tick())
+            print("[EARNINGS_MONITOR] tick loop registered (60s interval, 30s initial delay)")
+        except Exception as _em_tick_err:
+            print(f"[EARNINGS_MONITOR] tick loop init error (non-fatal): {_em_tick_err}")
+
+        # 0b. Earnings catch-up pass — runs ONCE per cold start (25s delay).
+        #     Fills missing/partial results for earnings from the past 4 days.
+        #     Makes one targeted FMP call per symbol; triggers EI refresh on hit.
+        try:
+            from services.earnings_monitor_service import _earnings_catchup_pass as _em_catchup
+            asyncio.create_task(_em_catchup())
+            print("[EARNINGS_MONITOR] startup catch-up pass registered (25s delay)")
+        except Exception as _em_catchup_err:
+            print(f"[EARNINGS_MONITOR] catch-up init error (non-fatal): {_em_catchup_err}")
+
+        # 0c. Live Earnings Monitor — optional persistent loop (Reserved VM mode only).
+        #     Use LIVE_EARNINGS_MONITOR_ENABLED=true for always-on VMs.
+        #     For Autoscale, the tick loop above (0a) is the canonical scheduler.
         import os as _os
         if _os.environ.get("LIVE_EARNINGS_MONITOR_ENABLED", "").lower() in ("1", "true", "yes"):
             try:
@@ -1014,7 +1036,7 @@ async def lifespan(app):
             except Exception as _em_loop_err:
                 print(f"[EARNINGS_MONITOR] Loop start error (non-fatal): {_em_loop_err}")
         else:
-            print("[EARNINGS_MONITOR] Persistent loop disabled — set LIVE_EARNINGS_MONITOR_ENABLED=true to enable")
+            print("[EARNINGS_MONITOR] Persistent loop disabled (tick loop handles Autoscale mode)")
 
         # 1. Defiance 2X leveraged ETFs — load disk LKG + daily refresh loop.
         _t = _bst.monotonic()

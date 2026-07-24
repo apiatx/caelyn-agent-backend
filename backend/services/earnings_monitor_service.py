@@ -36,6 +36,15 @@ _STATE: dict[str, Any] = {
     "failures":              0,
     "active_target_count":   0,
     "worker_id":             f"w_{socket.gethostname()}_{os.getpid()}",
+    # ── tick loop (autoscale post-yield scheduler) ────────────────────────────
+    "tick_loop_enabled":      False,
+    "tick_loop_last_tick":    None,
+    "tick_loop_tick_count":   0,
+    # ── startup catch-up pass ──────────────────────────────────────────────────
+    "catchup_last_run":       None,
+    "catchup_symbols_checked": 0,
+    "catchup_results_filled":  0,
+    "catchup_ei_triggered":    0,
 }
 
 # ── monitoring windows (ET) ───────────────────────────────────────────────────
@@ -728,6 +737,7 @@ async def _process_target(
     worker_id: str,
     now_et: datetime,
     dry_run: bool = False,
+    catchup_mode: bool = False,
 ) -> None:
     """
     Process one earnings target: SEC check + FMP check + state transitions.
@@ -798,6 +808,10 @@ async def _process_target(
         except Exception:
             pass
 
+    # catchup_mode: suppress SEC for old events (filing already days old)
+    if catchup_mode:
+        should_sec = False
+
     if should_sec and existing_state not in ("results_available","complete","results_updated"):
         if _is_monitoring_window(now_et, timing) or dry_run:
             is_new, acc, materials = await _check_sec(symbol, existing_filing_acc)
@@ -814,7 +828,8 @@ async def _process_target(
     # ── FMP check ─────────────────────────────────────────────────────────────
     fmp_due = target.get("next_fmp_check_at")
     should_fmp = True
-    if fmp_due and not dry_run:
+    if fmp_due and not dry_run and not catchup_mode:
+        # catchup_mode always forces FMP check regardless of scheduled time
         try:
             fmp_dt = datetime.fromisoformat(str(fmp_due))
             if fmp_dt.tzinfo is None:
@@ -824,7 +839,8 @@ async def _process_target(
             pass
 
     if should_fmp and existing_state not in ("complete",):
-        if _is_monitoring_window(now_et, timing) or dry_run:
+        # catchup_mode bypasses window gate — fills results any time of day
+        if _is_monitoring_window(now_et, timing) or dry_run or catchup_mode:
             fmp_rec = await _check_fmp_results(symbol)
             _STATE["check_count"] += 1
             if fmp_rec and fmp_rec.get("eps_actual") is not None:
@@ -1108,12 +1124,20 @@ async def run_replay(symbol: str = "COIN") -> dict:
 # ── main entry points ─────────────────────────────────────────────────────────
 
 async def run_live_earnings_monitor_once(
-    now_et: datetime | None = None,
-    dry_run: bool           = False,
-    force_symbol: str | None= None,
+    now_et: datetime | None  = None,
+    dry_run: bool            = False,
+    force_symbol: str | None = None,
+    tick_mode: bool          = False,
 ) -> dict:
     """
-    Idempotent monitoring pass.  Safe to call from CLI or scheduled job.
+    Idempotent monitoring pass.  Safe to call from CLI, scheduled job, or tick loop.
+
+    tick_mode=True  — autoscale-native post-yield scheduler path:
+        • Skips _build_universe() (expensive watchlist scan).
+        • Uses the symbols already registered in earnings_monitor_targets as the
+          schedule-refresh universe; no new symbols are added.
+        • Processes only targets that are due RIGHT NOW (get_due_targets).
+        • No universe membership filter — all DB-registered targets are eligible.
     """
     if now_et is None:
         now_et = _now_et()
@@ -1123,42 +1147,44 @@ async def run_live_earnings_monitor_once(
 
     try:
         import asyncio as _aio
-        from data.earnings_monitor_store import get_due_targets
+        from data.earnings_monitor_store import get_due_targets, get_active_targets
 
-        # Build universe — when force-checking one symbol, skip full universe build
-        # to avoid scanning all 399 symbols in _refresh_schedule
         if force_symbol:
-            sym = force_symbol.upper()
+            # ── force-symbol path: single-symbol targeted check ─────────────
+            sym      = force_symbol.upper()
             universe = [sym]
-        else:
-            universe = await _build_universe()
-
-        # Refresh schedule from FMP (runs at most once per _SCHEDULE_REFRESH_TTL)
-        await _refresh_schedule(universe, now_et)
-
-        if force_symbol:
-            # force_symbol: load ALL active targets regardless of due time,
-            # then filter to the requested symbol so we always process it.
-            from data.earnings_monitor_store import get_active_targets
+            await _refresh_schedule(universe, now_et)
             all_active = await _aio.to_thread(get_active_targets, 200)
-            sym = force_symbol.upper()
-            targets = [t for t in all_active if t["symbol"] == sym]
+            targets    = [t for t in all_active if t["symbol"] == sym]
+
+        elif tick_mode:
+            # ── tick mode: use existing DB targets, no watchlist scan ────────
+            # Use the already-registered symbols as the schedule-refresh universe
+            # so that timing data stays current without rebuilding from scratch.
+            all_active       = await _aio.to_thread(get_active_targets, 500)
+            refresh_universe = [t["symbol"] for t in all_active]
+            await _refresh_schedule(refresh_universe, now_et)   # TTL-protected
+            targets  = await _aio.to_thread(get_due_targets, 200)
+            universe = None  # None signals: skip membership filter below
+
         else:
-            # Normal path: only process targets due for a check RIGHT NOW.
-            targets = await _aio.to_thread(get_due_targets, 200)
+            # ── normal path: full universe build ────────────────────────────
+            universe = await _build_universe()
+            await _refresh_schedule(universe, now_et)
+            targets  = await _aio.to_thread(get_due_targets, 200)
 
         _STATE["active_target_count"] = len(targets)
 
         worker_id = _STATE["worker_id"]
-        errors = 0
+        errors    = 0
         processed = 0
 
         for target in targets:
-            sym = target.get("symbol","")
+            sym = target.get("symbol", "")
             if not sym:
                 continue
-            # skip symbols not in our universe unless force_symbol
-            if not force_symbol and sym not in universe:
+            # Universe membership filter — skipped in tick_mode and force_symbol
+            if universe is not None and not force_symbol and sym not in universe:
                 continue
             try:
                 await _process_target(target, worker_id, now_et, dry_run)
@@ -1172,8 +1198,9 @@ async def run_live_earnings_monitor_once(
         return {
             "processed": processed,
             "errors":    errors,
-            "universe":  len(universe),
+            "universe":  len(universe) if universe is not None else len(targets),
             "targets":   len(targets),
+            "tick_mode": tick_mode,
         }
     except Exception as exc:
         _STATE["failures"] += 1
@@ -1184,7 +1211,8 @@ async def run_live_earnings_monitor_once(
 async def live_earnings_monitor_loop(interval_seconds: int = 30) -> None:
     """
     Persistent monitoring loop. Started only after FastAPI lifespan yield.
-    Controlled by LIVE_EARNINGS_MONITOR_ENABLED env var.
+    Controlled by LIVE_EARNINGS_MONITOR_ENABLED env var (Reserved VM mode).
+    For Autoscale deployments use earnings_monitor_tick_loop instead.
     """
     _STATE["enabled"] = True
     print(f"[EarnMon] persistent loop started (interval={interval_seconds}s)")
@@ -1195,6 +1223,170 @@ async def live_earnings_monitor_loop(interval_seconds: int = 30) -> None:
             _STATE["failures"] += 1
             print(f"[EarnMon] loop iteration error: {exc}")
         await asyncio.sleep(interval_seconds)
+
+
+# ── autoscale-native tick loop ─────────────────────────────────────────────────
+
+_TICK_INITIAL_DELAY_S = 30   # let bootstrap settle before first tick
+_TICK_INTERVAL_S      = 60   # wake every minute
+
+async def earnings_monitor_tick_loop() -> None:
+    """
+    Post-yield scheduler for Autoscale deployments.  Wakes every 60 seconds,
+    processes only earnings_monitor_targets that are due RIGHT NOW, and exits
+    immediately when nothing is due.  No full watchlist scan occurs.
+
+    Differences from live_earnings_monitor_loop:
+        • Always started (no env-var gate) — Autoscale native.
+        • Calls run_live_earnings_monitor_once(tick_mode=True) which skips
+          _build_universe() and uses the DB-registered target list.
+        • Targets with no due check-time are skipped (get_due_targets).
+        • High-frequency cadence (-30/-15/-5/0/+1 min) is driven by the
+          expected_at anchor already stored in each target row.
+    """
+    _STATE["tick_loop_enabled"] = True
+    print(f"[EarnMon] tick loop started (initial_delay={_TICK_INITIAL_DELAY_S}s, interval={_TICK_INTERVAL_S}s)")
+    await asyncio.sleep(_TICK_INITIAL_DELAY_S)
+    while True:
+        try:
+            _STATE["tick_loop_last_tick"]  = datetime.now(timezone.utc).isoformat()
+            _STATE["tick_loop_tick_count"] = _STATE["tick_loop_tick_count"] + 1
+            result = await run_live_earnings_monitor_once(tick_mode=True)
+            if result.get("processed", 0) > 0:
+                print(f"[EarnMon][tick] processed={result['processed']} targets={result['targets']}")
+        except Exception as exc:
+            _STATE["failures"] += 1
+            print(f"[EarnMon] tick loop error: {exc}")
+        await asyncio.sleep(_TICK_INTERVAL_S)
+
+
+# ── startup catch-up pass ──────────────────────────────────────────────────────
+
+_CATCHUP_LOOKBACK_DAYS  = 4    # inspect earnings from up to 4 calendar days ago
+_CATCHUP_STARTUP_DELAY  = 25   # seconds to wait after yield before running
+_CATCHUP_RETRY_DELAY_S  = 1800 # 30-min bounded retry when FMP has no data yet
+
+async def _earnings_catchup_pass() -> dict:
+    """
+    Runs once per process start after a short startup delay.
+
+    Selects recent earnings targets (past _CATCHUP_LOOKBACK_DAYS days) whose
+    live-event state is not yet 'complete', makes ONE targeted FMP call per
+    symbol, and runs the full state-transition pipeline (including alert + EI
+    refresh) if results are found.
+
+    If FMP has no data yet, the target's next_fmp_check_at is set to
+    now + _CATCHUP_RETRY_DELAY_S (30 min) so the tick loop picks it up without
+    hammering FMP on every tick.
+
+    Does NOT replay pre-release (-30/-15/-5 min) intervals — those only fire
+    during live windows via the tick loop.
+    """
+    await asyncio.sleep(_CATCHUP_STARTUP_DELAY)
+
+    try:
+        import asyncio as _aio
+        from datetime import date, timedelta as _td
+        from data.earnings_monitor_store import (
+            get_active_targets, get_live_event_for_symbol, update_target,
+        )
+
+        now_utc    = datetime.now(timezone.utc)
+        now_et     = _now_et()
+        cutoff     = (date.today() - _td(days=_CATCHUP_LOOKBACK_DAYS)).isoformat()
+        today_str  = date.today().isoformat()
+        worker_id  = _STATE["worker_id"]
+
+        all_active = await _aio.to_thread(get_active_targets, 500)
+
+        # Select targets in the recent window that are not yet complete
+        recent = [
+            t for t in all_active
+            if (
+                t.get("expected_date")
+                and str(t["expected_date"]) >= cutoff
+                and str(t["expected_date"]) <= today_str
+                and t.get("status") not in ("complete",)
+            )
+        ]
+
+        if not recent:
+            print("[EarnMon][catchup] no recent incomplete targets — nothing to do")
+            _STATE["catchup_last_run"] = now_utc.isoformat()
+            return {"checked": 0, "filled": 0, "ei_triggered": 0}
+
+        print(f"[EarnMon][catchup] inspecting {len(recent)} recent target(s)")
+
+        checked      = 0
+        filled       = 0
+        ei_triggered = 0
+        retry_set    = 0
+
+        for target in recent:
+            symbol = (target.get("symbol") or "").upper()
+            if not symbol:
+                continue
+
+            # Load current live event to see how far state machine has progressed
+            existing = await _aio.to_thread(get_live_event_for_symbol, symbol, False)
+            existing_state = (existing.get("state") or "scheduled") if existing else "scheduled"
+
+            if existing_state == "complete":
+                # Already fully resolved.  If EI was never triggered (edge case
+                # where process restarted before the fire-and-forget task ran),
+                # re-trigger it now.
+                if not target.get("results_first_detected_at"):
+                    asyncio.create_task(_trigger_ei_refresh(symbol))
+                    ei_triggered += 1
+                continue
+
+            checked += 1
+
+            # Force the FMP check to run regardless of next_fmp_check_at and
+            # window time by using catchup_mode=True in _process_target.
+            # To satisfy the `should_fmp` gate we patch the target dict in-memory.
+            target_patched = dict(target)
+            target_patched["next_fmp_check_at"] = now_utc.isoformat()
+
+            # First, probe FMP so we can decide between fill vs bounded-retry
+            # without burning two FMP calls when data is absent.
+            probe = await _check_fmp_results(symbol)
+
+            if probe and probe.get("eps_actual") is not None:
+                # Results are on FMP — run full state machine to get
+                # alert + EI refresh + state transition in one pass.
+                try:
+                    await _process_target(
+                        target_patched, worker_id, now_et,
+                        dry_run=False, catchup_mode=True,
+                    )
+                    filled += 1
+                    print(f"[EarnMon][catchup] {symbol}: filled (eps={probe.get('eps_actual')})")
+                except Exception as exc:
+                    print(f"[EarnMon][catchup] _process_target error {symbol}: {exc}")
+            else:
+                # FMP doesn't have results yet — set bounded retry so the tick
+                # loop re-checks in 30 min rather than on every tick.
+                retry_ts = (now_utc + timedelta(seconds=_CATCHUP_RETRY_DELAY_S)).isoformat()
+                await _aio.to_thread(update_target, target["id"], next_fmp_check_at=retry_ts)
+                retry_set += 1
+                print(f"[EarnMon][catchup] {symbol}: no results yet — retry in {_CATCHUP_RETRY_DELAY_S//60}min")
+
+        _STATE["catchup_last_run"]        = now_utc.isoformat()
+        _STATE["catchup_symbols_checked"] = checked
+        _STATE["catchup_results_filled"]  = filled
+        _STATE["catchup_ei_triggered"]    = ei_triggered
+
+        print(
+            f"[EarnMon][catchup] complete: "
+            f"checked={checked} filled={filled} ei_triggered={ei_triggered} retry_set={retry_set}"
+        )
+        return {"checked": checked, "filled": filled, "ei_triggered": ei_triggered, "retry_set": retry_set}
+
+    except Exception as exc:
+        print(f"[EarnMon][catchup] top-level error: {exc}")
+        _STATE["catchup_last_run"] = datetime.now(timezone.utc).isoformat()
+        return {"error": str(exc)}
 
 
 def get_monitor_status() -> dict:
@@ -1220,11 +1412,17 @@ def get_monitor_status() -> dict:
         # ── monitoring windows ────────────────────────────────────────────────
         "bmo_window_et":  f"{_BMO_START[0]:02d}:{_BMO_START[1]:02d}–{_BMO_END[0]:02d}:{_BMO_END[1]:02d}",
         "amc_window_et":  f"{_AMC_START[0]:02d}:{_AMC_START[1]:02d}–{_AMC_END[0]:02d}:{_AMC_END[1]:02d}",
+        # ── tick loop ─────────────────────────────────────────────────────────
+        "tick_interval_s":      _TICK_INTERVAL_S,
+        "tick_initial_delay_s": _TICK_INITIAL_DELAY_S,
+        # ── catch-up ──────────────────────────────────────────────────────────
+        "catchup_lookback_days": _CATCHUP_LOOKBACK_DAYS,
+        "catchup_retry_delay_s": _CATCHUP_RETRY_DELAY_S,
         # ── deployment ────────────────────────────────────────────────────────
         "deployment_note": (
-            "Autoscale mode: use Replit Scheduled Deployment (every minute) to run "
-            "python -m backend.scripts.run_live_earnings_monitor_once on a schedule. "
-            "Persistent loop also available via LIVE_EARNINGS_MONITOR_ENABLED=true."
+            "Autoscale mode: post-yield tick loop runs every 60s while the process "
+            "is awake. Startup catch-up fills any results missed while scaled-to-zero. "
+            "Optional persistent loop via LIVE_EARNINGS_MONITOR_ENABLED=true (VM mode)."
         ),
         "cli_command": "python -m backend.scripts.run_live_earnings_monitor_once",
     }
