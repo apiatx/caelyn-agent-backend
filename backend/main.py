@@ -2125,12 +2125,18 @@ async def admin_startup_status():
 
     Returns immediately — never waits for bootstrap to complete.
     Fields:
-      bootstrap_done   — True once all deferred steps have run
-      elapsed_ms       — total bootstrap wall-clock time (None until done)
-      steps            — per-step {ok, ms, error?} (populated as each step completes)
-      init_complete    — FastAPI _do_init() thread finished
+      bootstrap_done      — True once all deferred steps have run
+      elapsed_ms          — total bootstrap wall-clock time (None until done)
+      steps               — per-step {ok, ms, error?} (populated as each step completes)
+      init_complete       — FastAPI _do_init() thread finished
+      options_session     — current options market session info (scan gate status)
     """
     import time as _st
+    try:
+        from data.tradier_market_session import get_options_session_info as _sess_info
+        _options_session = _sess_info()
+    except Exception as _se:
+        _options_session = {"error": str(_se)}
     return {
         "bootstrap_done":  _BOOTSTRAP_STATE.get("done", False),
         "elapsed_ms":      _BOOTSTRAP_STATE.get("elapsed_ms"),
@@ -2139,6 +2145,7 @@ async def admin_startup_status():
         "init_error":      _init_error,
         "uptime_s":        round(_st.monotonic() - _BOOTSTRAP_STATE["started_at"], 1)
                            if _BOOTSTRAP_STATE.get("started_at") else None,
+        "options_session": _options_session,
     }
 
 
@@ -13441,7 +13448,10 @@ async def _sectors_fast_backfill_loop():
     )
     from data.sectors_chain_summarizer import scan_batch_for_sectors as _sbf_scan_batch
     from data.tradier_budget import lane as _sbf_lane, diagnostics as _sbf_budget_diag
-    from data.tradier_market_session import get_session as _sbf_get_session
+    from data.tradier_market_session import (
+        get_session                as _sbf_get_session,
+        is_regular_options_session as _sbf_is_regular_session,
+    )
 
     # Batch / sleep / lane settings
     _SBF_PRIORITY_BATCH   = 25   # tickers per batch when Sectors page is active
@@ -13465,7 +13475,10 @@ async def _sectors_fast_backfill_loop():
         _sbf_sleep_s = _SBF_BACKGROUND_SLEEP   # reset each cycle
         try:
             _sbf_sess    = _sbf_get_session()
-            _sbf_off     = _sbf_sess in ("off_hours", "weekend")
+            # Gate: only scan during the REGULAR session (09:30–16:00 ET, trading days).
+            # Previously this allowed premarket and postmarket scans which produced
+            # false confirmed_no_options from Tradier returning empty chains off-hours.
+            _sbf_off     = not _sbf_is_regular_session()
 
             if _sbf_off:
                 _sbf_upd_diag({
@@ -13789,7 +13802,10 @@ async def _theme_options_supplement_loop():
     _scan_cursor = 0
     _local_expiry: dict = {}   # separate from master screener expiry cache
 
-    from data.tradier_market_session import get_session as _get_supp_session
+    from data.tradier_market_session import (
+        get_session                as _get_supp_session,
+        is_regular_options_session as _supp_is_regular_session,
+    )
     import data.loop_diagnostics as _ld_supp
 
     def _sf(v):
@@ -13805,14 +13821,17 @@ async def _theme_options_supplement_loop():
 
     while True:
         _supp_sess = _get_supp_session()
-        _supp_is_active = _supp_sess not in ("off_hours", "weekend")
+        # Only scan during the REGULAR session (09:30–16:00 ET, trading days only).
+        # Previously this allowed premarket and postmarket scans too, which caused
+        # false confirmed_no_options and wasted Tradier budget.
+        _supp_is_active = _supp_is_regular_session()
 
         if not _supp_is_active:
             _supp_next = _ts.time() + _OFFHOURS_SUPP_SLEEP
             _ld_supp.update_supplement_loop("maintenance", next_run_at=_supp_next)
             _ld_supp.increment_suppressed(1)
             print(
-                f"[THEME_SUPP] Off-hours ({_supp_sess}) — skipping scan, "
+                f"[THEME_SUPP] Outside regular session ({_supp_sess}) — skipping scan, "
                 f"sleeping {_OFFHOURS_SUPP_SLEEP // 60} min."
             )
             await asyncio.sleep(_OFFHOURS_SUPP_SLEEP)

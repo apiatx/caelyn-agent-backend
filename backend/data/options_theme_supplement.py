@@ -42,8 +42,8 @@ import time
 from typing import Optional
 
 _SUPPLEMENT_LKG_DISK_PATH    = _pathlib.Path(__file__).resolve().parent / "options_supplement_lkg_v1.json"
-_SUPPLEMENT_LKG_DISK_MAX_AGE = 345600  # 96 h (4 days) — keeps Friday-close data live over weekend
-_SUPPLEMENT_LKG_STALE_TTL    = 345600  # 96 h cache TTL for stale (>24 h) startup loads
+_SUPPLEMENT_LKG_DISK_MAX_AGE = 604800  # 7 days — keeps LKG live across full weekends + holidays
+_SUPPLEMENT_LKG_STALE_TTL    = 604800  # 7 days — stale LKG persists until next regular-session scan
 _SUPPLEMENT_LKG_FRESH_AGE    = 86400   # rows < 24 h old are "lkg_market_closed"; older = "stale_but_usable"
 
 _NO_OPTIONS_CACHE_KEY  = "options_no_options_tracking:v1"
@@ -53,7 +53,10 @@ _SUPPLEMENT_CACHE_KEY  = "options_theme_supplement_v1"
 _SUPPLEMENT_CACHE_TTL  = 14400   # 4 h — accumulates across batches within a session
 
 _SUPPLEMENT_LKG_CACHE_KEY = "options_supplement_lkg_v1"
-_SUPPLEMENT_LKG_CACHE_TTL = 14400   # 4 h — disk data loaded at startup
+# 7-day TTL so the in-memory LKG survives market close, overnight, and full weekends.
+# Without this the 4 h TTL caused the LKG to expire during off-hours, making options
+# data disappear from Watchlist/Sectors views after hours.
+_SUPPLEMENT_LKG_CACHE_TTL = 604800  # 7 days (was 4 h)
 
 # ── Confluence extra symbols — watchlist US tickers for supplement scanning ───
 # Populated at startup from the active watchlists so the supplement scanner
@@ -497,12 +500,21 @@ def get_supplement_data_by_ticker() -> dict[str, dict]:
 
     Priority: fresh supplement (this session) > LKG supplement (disk-loaded).
     Both layers are keyed separately so fresh data can be cleanly identified.
+
+    Auto-rehydrate: if the LKG in-memory cache has expired (e.g. after a very
+    long off-hours period that exceeded the 7-day TTL), reload from disk before
+    falling through to an empty set.  This ensures the LKG is always available
+    as long as the disk file is within its own max-age window.
     """
     try:
         from data.cache import cache
         # Start with LKG (disk-loaded at startup, supplement_lkg tagged)
-        lkg_snap  = cache.get(_SUPPLEMENT_LKG_CACHE_KEY) or {}
-        combined  = dict(lkg_snap.get("ticker_data", {}))
+        lkg_snap = cache.get(_SUPPLEMENT_LKG_CACHE_KEY)
+        if lkg_snap is None:
+            # In-memory LKG expired — attempt disk rehydration before serving empty
+            _load_supplement_lkg_from_disk()
+            lkg_snap = cache.get(_SUPPLEMENT_LKG_CACHE_KEY) or {}
+        combined = dict(lkg_snap.get("ticker_data", {}))
         # Fresh session results override LKG
         fresh_snap = cache.get(_SUPPLEMENT_CACHE_KEY) or {}
         for sym, row in fresh_snap.get("ticker_data", {}).items():

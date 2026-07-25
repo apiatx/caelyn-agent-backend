@@ -108,15 +108,12 @@ def _is_stale_lkg(row: dict) -> bool:
 
 
 def _is_market_hours_et() -> bool:
-    """True when US equity markets are likely open (Mon–Fri 09:30–16:00 ET).
-    Conservative: returns True if timezone detection fails."""
+    """True only during the regular US options session (09:30–16:00 ET, Mon–Fri, no holidays).
+    Delegates to the canonical is_regular_options_session() gate.
+    Conservative: returns True if the gate check fails (safe default: allow scan)."""
     try:
-        import datetime as _dt
-        import zoneinfo as _zi
-        _et = _dt.datetime.now(_zi.ZoneInfo("America/New_York"))
-        if _et.weekday() >= 5:          # Saturday=5, Sunday=6
-            return False
-        return _dt.time(9, 30) <= _et.time() <= _dt.time(16, 0)
+        from data.tradier_market_session import is_regular_options_session
+        return is_regular_options_session()
     except Exception:
         return True
 

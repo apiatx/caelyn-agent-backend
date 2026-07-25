@@ -1,0 +1,587 @@
+BACKEND ONLY — PERMANENT OPTIONS CACHE, MARKET-HOURS, AND DATA-UNIFICATION FIX
+
+Work only in the backend repository.
+
+Audit first, then implement the fix in this same task.
+
+Do not touch the frontend.
+Do not create a new parallel options scanner.
+Do not create a competing options cache architecture.
+Do not add request-time Tradier calls.
+Do not change the current Options Score formula or scoring weights in this task.
+Do not remove existing endpoints or response fields.
+Preserve existing paths and repair the architecture in place.
+
+GOALS
+
+Fix these two related problems together:
+
+1. Options data becomes incomplete or blank after normal market hours and over weekends.
+2. The Watchlist Options view and Options Flow page expose different subsets of options data and may still trigger separate Tradier scans for the same ticker.
+
+The final architecture must have:
+
+* Tradier options scans only during the regular U.S. options session
+* one canonical per-ticker options snapshot
+* one durable last-known-good snapshot
+* all pages reading the same cached snapshot
+* zero duplicate Tradier chain scans caused by different pages
+* full options field availability for Watchlist, Options Flow, Portfolio, ticker popup, and Confluence
+* no scoring changes yet
+
+==================================================
+PART 1 — AUDIT THE CURRENT ARCHITECTURE
+=======================================
+
+Before editing, trace every options-related path.
+
+Inspect at minimum:
+
+* backend/data/tradier_market_session.py
+* backend/data/options_flow_engine.py
+* backend/data/tradier_flow_engine.py
+* backend/data/options_theme_supplement.py
+* backend/data/options_flow_sectors.py
+* backend/data/options_net_premium_history.py
+* backend/data/portfolio_options_service.py
+* backend/services/options_alignment.py
+* backend/services/watchlist_router.py
+* backend/main.py
+* Options Flow routers
+* master screener loops
+* supplement loops
+* sectors backfill loops
+* Watchlist options refresh paths
+* Portfolio options refresh paths
+* ticker popup options paths
+* Confluence options consumers
+* startup cache hydration
+* manual refresh routes
+* retry and stale-LKG drain functions
+
+Return an audit table containing:
+
+* file
+* function
+* consumer/page
+* cache key read
+* cache key written
+* disk or Neon snapshot read/written
+* Tradier methods called
+* current market-hours guard
+* whether it can scan outside regular hours
+* whether another path can scan the same ticker
+* required fix
+
+Explicitly audit Tradier calls to:
+
+* get_quotes
+* get_option_expirations
+* get_option_chain
+* full chain with Greeks
+
+Do not assume calls are shared merely because they use the same Tradier client, rate limiter, or in-flight guard.
+
+==================================================
+PART 2 — ONE CANONICAL MARKET-SESSION GATE
+==========================================
+
+Create or repair one authoritative market-session helper used by every Tradier options scan path.
+
+Tradier options scans must only run during the actual regular U.S. market session:
+
+* America/New_York timezone
+* valid U.S. trading day
+* normally 9:30 a.m.–4:00 p.m. ET
+* actual early-close time on early-close days
+* no scans on full market holidays
+* no scans during premarket
+* no scans during postmarket
+* no scans overnight
+* no scans on weekends
+
+Reuse an existing canonical exchange-calendar helper if one exists.
+
+Do not use weekday and clock-time checks alone if a proper market calendar is already available.
+
+Expose functions equivalent to:
+
+* is_regular_options_session(now=None)
+* get_options_session_info(now=None)
+
+Return metadata:
+
+* options_market_session
+* options_scan_allowed
+* regular_open_at
+* regular_close_at
+* next_regular_open_at
+* market_calendar_status
+* reason
+
+When the market is closed:
+
+* make zero Tradier options calls
+* do not fetch quotes for an options scan
+* do not fetch expirations
+* do not fetch chains
+* do not run reduced-cadence scans
+* do not run retries
+* do not refresh stale LKG rows
+* do not run gap-fill scans
+* do not run supplement scans
+* do not run sectors backfill scans
+* do not allow manual refresh routes to bypass the gate
+
+Closed-market requests must return cached data immediately.
+
+==================================================
+PART 3 — ONE CANONICAL PER-TICKER OPTIONS SNAPSHOT
+==================================================
+
+Formalize one canonical per-ticker snapshot built from existing Tradier chain responses.
+
+All consumers must read this snapshot:
+
+* Options Flow
+* Watchlist
+* Portfolio
+* ticker popup
+* Confluence
+* sectors/themes aggregation
+* historical net-premium storage
+
+Do not make a new provider call merely because a consumer needs a field that another endpoint currently does not expose.
+
+The canonical snapshot must contain, when available:
+
+Identity and lifecycle:
+
+* ticker
+* scan_id
+* schema_version
+* options_score_version
+* options_score_source
+* options_snapshot_status
+* options_source
+* options_as_of
+* regular_session_date
+* last_successful_scan_at
+* expiration_scope
+* expiration_used
+* dte_used
+* premium_scope_id
+* premium_calc_method
+
+Core metrics:
+
+* options_score
+* options_signal
+* options_confidence
+* IV
+* Expected Move
+* total options volume
+* call volume
+* put volume
+* volume put/call ratio
+* total open interest
+* call open interest
+* put open interest
+* volume/OI metrics already calculated
+
+Premium-flow metrics:
+
+* call premium
+* put premium
+* net premium
+* premium put/call ratio
+* raw premium put/call ratio
+* effective premium put/call ratio
+* one-sided flow classification
+* ask premium
+* bid premium
+* midpoint or unclassified premium
+* ask premium percentage
+* bid premium percentage
+* classified trade-side percentage
+* premium per contract
+
+Historical metrics from the existing database:
+
+* net premium 1-day change
+* net premium 7-day change
+* net premium 30-day change
+* availability/status for each interval
+
+Historical trend lookup must make zero Tradier calls.
+
+==================================================
+PART 4 — PRESERVE BOTH P/C DEFINITIONS
+======================================
+
+There are two different metrics and they must remain separate:
+
+* volume_put_call_ratio = put contract volume / call contract volume
+* premium_put_call_ratio = put premium dollars / call premium dollars
+
+Audit every generic field:
+
+* pc_ratio
+* p_c
+* put_call
+* put_call_ratio
+* options_put_call_ratio
+
+Document which ratio each currently represents.
+
+Do not silently change the meaning of an existing compatibility field.
+
+Add explicit canonical field names and retain compatibility aliases where needed.
+
+==================================================
+PART 5 — REUSE THE SAME CHAIN RESPONSE
+======================================
+
+For a ticker and scan window:
+
+* fetch expirations once
+* fetch each required chain once
+* normalize the chain once
+* calculate all Watchlist and Options Flow metrics from that normalized result
+* cache the complete canonical snapshot
+* let every consumer project the fields it needs
+
+Use an existing global in-flight system or improve it so simultaneous consumers coalesce around the same work.
+
+A request from Watchlist, Options Flow, Portfolio, ticker popup, or Confluence must not create separate chain scans for the same ticker and scan fingerprint.
+
+Use a fingerprint based on existing architecture, such as:
+
+ticker + regular_session_date + expiration scope + expiration used + schema version
+
+Do not create separate fingerprints merely because the requesting page differs.
+
+==================================================
+PART 6 — PERMANENT LAST-KNOWN-GOOD BEHAVIOR
+===========================================
+
+The last successful regular-session snapshot must remain available:
+
+* after market close
+* overnight
+* over weekends
+* through holidays
+* through early-close days
+* after backend restarts
+* until a newer successful regular-session snapshot replaces it
+
+A valid LKG must not disappear because of:
+
+* four-hour TTL
+* 96-hour maximum age
+* memory-cache expiration
+* process restart
+* partial current cache
+* a failed refresh
+
+A structurally valid older snapshot may be marked stale, but it must remain displayable.
+
+Required statuses:
+
+* available_live
+* available_cached
+* lkg_market_closed
+* stale_but_usable
+* stale_invalid
+* missing_cache
+* confirmed_no_options
+* not_scanned
+
+Do not treat `lkg_market_closed` or `stale_but_usable` as missing.
+
+If an in-memory cache expires, automatically rehydrate from durable LKG.
+
+Prefer the existing canonical Neon snapshot mechanism if one already exists.
+
+Do not create a parallel database table unless no suitable durable mechanism exists.
+
+==================================================
+PART 7 — SAFE PROMOTION AND MERGING
+===================================
+
+Separate:
+
+1. working scan state
+2. canonical last-known-good state
+
+Do not replace the canonical snapshot after each partial batch.
+
+Promote a new LKG only when:
+
+* scan occurred during regular market hours
+* scan completed successfully
+* schema is valid
+* expected universe is known
+* coverage is reasonably consistent with the previous successful snapshot
+* result is not suspiciously smaller
+* provider failure level is acceptable
+* meaningful options fields are present
+
+Promotion must be atomic.
+
+If validation fails, keep the previous LKG unchanged.
+
+Per ticker, do not overwrite valid prior data with:
+
+* null fields
+* empty chains
+* empty expirations caused by failure
+* timeout
+* rate-limit result
+* scan_pending
+* scan_in_progress
+* optionable_pending_chain
+* generic pending
+* malformed response
+* closed-market result
+* sparse placeholder
+* accidental zero-filled row
+
+Only mark `confirmed_no_options` from a valid regular-session result with the existing safeguards.
+
+==================================================
+PART 8 — FIX PARTIAL-CACHE SUPPRESSION
+======================================
+
+Audit all combined-cache accessors.
+
+A small nonempty master cache must not suppress a much larger supplement, sectors, disk, or Neon LKG.
+
+Correct behavior must be per ticker:
+
+1. durable LKG provides the broad baseline
+2. valid supplement/current rows overlay it
+3. valid master/live rows overlay those
+4. missing tickers retain their LKG rows
+5. partial memory coverage never blocks durable fallback loading
+
+Remove any global behavior equivalent to:
+
+`if not combined: load the LKG`
+
+The fallback decision must happen per symbol.
+
+==================================================
+PART 9 — SCORE SEMANTICS AUDIT
+==============================
+
+Do not change scoring in this task.
+
+Audit and compare:
+
+* master Options Flow composite score
+* final composite score
+* Watchlist/Portfolio scoped fallback score
+* Confluence options score
+* sectors heat score
+
+Return:
+
+* inputs
+* weights
+* formula
+* score version
+* score source
+* whether values are truly comparable
+
+Current suspected issue:
+
+* master score uses flow, gamma, asymmetry, volatility, sentiment, and stock context
+* scoped Watchlist fallback uses total volume, IV, and volume P/C deviation
+
+If confirmed, expose:
+
+* options_score_version
+* options_score_source
+* options_score_inputs
+* options_score_components
+* score_comparable_across_rows
+
+Prefer the canonical master score when available.
+
+Do not add Premium P/C or net-premium trends to Opt Score yet.
+
+==================================================
+PART 10 — ENDPOINT FIELD PARITY
+===============================
+
+The Watchlist options endpoint must return the full canonical snapshot, including:
+
+* Opt Score
+* Opt Signal
+* IV
+* Expected Move
+* options volume
+* OI
+* Vol P/C
+* Prem P/C
+* call premium
+* put premium
+* net premium
+* ask premium
+* bid premium
+* midpoint/unclassified premium
+* 1-day net-premium change
+* 7-day net-premium change
+* 30-day net-premium change
+* lifecycle metadata
+* methodology metadata
+* score version/source
+
+The Options Flow ticker rows must also return:
+
+* canonical Opt Score
+* Opt Signal
+* IV
+* Expected Move
+* total OI
+* call OI
+* put OI
+* score version/source
+
+Endpoint projection must be cache-only and must not trigger provider calls.
+
+Do not remove existing fields.
+
+==================================================
+PART 11 — CLOSED-MARKET ASK/BID PREMIUM
+=======================================
+
+Current live interval Ask Premium and Bid Premium must not be presented as live after market close.
+
+However, they must not simply disappear.
+
+Persist the last completed regular-session values:
+
+* last_completed_session_ask_premium
+* last_completed_session_bid_premium
+* last_completed_session_midpoint_unknown_premium
+* last_completed_session_interval_started_at
+* last_completed_session_interval_ended_at
+* last_completed_session_date
+
+During closed markets:
+
+* return those values
+* mark them as prior-session/LKG data
+* expose the correct as-of timestamp
+* make zero Tradier calls
+
+It is acceptable for current live interval fields to be null outside regular hours only when the last-completed-session fields are present.
+
+==================================================
+PART 12 — DIAGNOSTICS
+=====================
+
+Add diagnostics proving cache reuse and deduplication:
+
+* canonical_snapshot_hits
+* master_snapshot_hits
+* supplement_snapshot_hits
+* LKG_hits
+* provider_scan_requests
+* provider_scans_coalesced
+* duplicate_scan_attempts_blocked
+* quote_calls
+* expiration_calls
+* chain_calls
+* calls by originating scope
+* calls by ticker
+* calls by scan fingerprint
+* consumers served from each snapshot
+* last successful promotion time
+* last rejected promotion reason
+* current coverage count
+* expected universe count
+
+Opening another page for an already-scanned ticker must increase cache-hit counters, not chain-call counters.
+
+==================================================
+PART 13 — REGRESSION TESTS
+==========================
+
+Use frozen America/New_York times.
+
+Test:
+
+* Friday 3:59 p.m. ET: scans allowed
+* Friday 4:00 p.m. ET: scans blocked
+* Friday evening: LKG served
+* Saturday: LKG served
+* Sunday: LKG served
+* Monday 9:29 a.m. ET: scans blocked
+* Monday 9:30 a.m. ET on a normal trading day: scans allowed
+* full market holiday: scans blocked
+* early-close day after actual close: scans blocked
+* backend restart during weekend: LKG immediately available
+* memory TTL expiration: durable LKG rehydrated
+* valid LKG older than 96 hours: still returned as stale_but_usable
+* partial master cache plus full LKG: full combined coverage returned
+* failed or sparse scan: previous LKG retained
+* simultaneous requests from Watchlist, Options Flow, Portfolio, ticker popup, and Confluence
+* Options Flow first, then Watchlist
+* Watchlist first, then Options Flow
+* repeated page refreshes
+* requests while a scan is already in flight
+
+Required assertions:
+
+* zero Tradier options calls while market is closed
+* one canonical scan per ticker and scan fingerprint
+* no duplicate chain scans caused by different consumers
+* both views return the same Vol P/C
+* both views return the same Prem P/C
+* both views return the same score version/source
+* historical 1-day, 7-day, and 30-day fields make zero Tradier calls
+* last completed Ask/Bid premium remains available after hours
+* complete LKG remains available after restart
+* partial cache does not suppress broad LKG coverage
+
+==================================================
+FINAL REPORT REQUIRED
+=====================
+
+Return:
+
+1. Root causes found
+2. Every options call site audited
+3. Whether Watchlist and Options Flow previously caused separate scans
+4. Exact files changed
+5. Canonical market-calendar helper used
+6. Canonical snapshot/cache selected
+7. Durable LKG behavior
+8. Cache TTL changes
+9. Per-ticker merge changes
+10. Safe-promotion rules
+11. Exact definitions of Vol P/C and Prem P/C
+12. Score formula comparison by source
+13. Confirmation scoring was not changed
+14. Field parity matrix for Watchlist and Options Flow
+15. Duplicate Tradier calls before and after
+16. Closed-market Tradier call count
+17. Before/after ticker coverage
+18. Regression test results
+19. Proof that simultaneous consumers generated one scan
+20. Proof that historical trends generated zero Tradier calls
+21. Proof that data survives market close, weekends, restart, four hours, and 96 hours
+22. Confirmation that no frontend or unrelated logic was changed
+
+Do not report success merely because the backend starts.
+
+Success means:
+
+* closed-market Tradier call count is zero
+* options data remains fully visible from LKG
+* all consumers use the same canonical snapshot
+* duplicate chain scans are eliminated
+* endpoint field parity is complete

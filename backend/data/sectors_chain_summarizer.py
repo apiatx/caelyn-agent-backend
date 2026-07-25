@@ -257,9 +257,9 @@ def _budget_ok() -> bool:
     """
     try:
         import data.tradier_budget as _bgt
-        from data.tradier_market_session import is_active_session as _is_act
-        if not (_bgt.FORCE_ENFORCE or _is_act()):
-            return True   # budget not enforced off-hours
+        from data.tradier_market_session import is_regular_options_session as _is_reg
+        if not (_bgt.FORCE_ENFORCE or _is_reg()):
+            return False  # options scans not allowed outside regular session
         return _bgt.check_budget(_bgt.get_current_lane())
     except Exception:
         return True   # default: proceed
