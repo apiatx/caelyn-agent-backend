@@ -661,6 +661,11 @@ def update_supplement_cache(results: list[dict]) -> None:
                 "expected_move_dollars", "expected_move_pct",
                 "options_score", "options_signal",
                 "underlying_price",
+                # Status fields — guard against partial re-scans erasing
+                # field-specific provenance recorded by the previous scan.
+                "underlying_price_status", "expected_move_status",
+                "options_score_status", "options_score_version",
+                "options_score_source", "rich_metrics_unavailable_reason",
             )
             _existing = ticker_data.get(sym) or _lkg_td.get(sym)
             if _existing:
@@ -1332,8 +1337,32 @@ _RICH_BACKFILL_CANDIDATES: set[str] = set()
 
 
 def _row_is_rich(row: dict) -> bool:
-    """Return True if the row has all five required supplement_v2 rich fields."""
-    return all(row.get(f) is not None for f in _RICH_FIELDS_REQUIRED)
+    """Return True if the row has all required supplement_v2 rich fields,
+    OR if each missing field has an explicit legitimate unavailable reason.
+
+    IV and OI are always computable from the chain alone — they must be
+    present for any "rich" row.  EM and Score require an underlying price;
+    a row is considered complete when they carry an explicit unavailability
+    reason (no_underlying_price, no_valid_atm_straddle, …) rather than None.
+    This prevents endless retries for structurally unavailable metrics while
+    still retrying transient failures (where the reason field is absent).
+    """
+    # Fast path — all 5 required fields populated
+    if all(row.get(f) is not None for f in _RICH_FIELDS_REQUIRED):
+        return True
+    # IV and OI must always be present (computable from chain, no price needed)
+    if row.get("combined_iv") is None or row.get("total_oi") is None:
+        return False
+    # EM and Score require underlying price.  Accept explicit unavail reasons.
+    _LEGIT_EM_REASONS    = {"no_underlying_price", "no_valid_atm_straddle"}
+    _LEGIT_SCORE_REASONS = {"no_underlying_price", "chain_empty_or_no_contracts"}
+    em_ok    = (row.get("expected_move_pct") is not None or
+                row.get("expected_move_status") in _LEGIT_EM_REASONS)
+    score_ok = (row.get("options_score") is not None or
+                row.get("options_score_status") in _LEGIT_SCORE_REASONS)
+    signal_ok = (row.get("options_signal") is not None or
+                 row.get("options_score_status") in _LEGIT_SCORE_REASONS)
+    return em_ok and score_ok and signal_ok
 
 
 def _load_priority_disk() -> None:
@@ -1561,10 +1590,12 @@ def identify_rich_backfill_candidates() -> int:
     options_signal, combined_iv, expected_move_pct, total_oi).
 
     Queues identified symbols at the front of the priority queue so the first
-    regular-session supplement scan enriches them.  Only the existing
-    supplement loop runs those scans — this function just identifies and queues.
+    regular-session supplement scan enriches them.  Watchlist symbols are
+    queued BEFORE non-watchlist theme-universe symbols so the primary user-
+    facing Watchlist Options page is enriched as early as possible.
 
-    Returns the number of legacy-partial candidates queued.
+    Only the existing supplement loop runs those scans — this function just
+    identifies and queues.  Returns the number of legacy-partial candidates.
 
     Safe to call from any sync context at startup.
     """
@@ -1577,9 +1608,22 @@ def identify_rich_backfill_candidates() -> int:
         print(f"[RICH_BACKFILL] LKG read failed: {_e}")
         lkg_td = {}
 
-    candidates: list[str] = []
-    enriched   = 0
-    legacy     = 0
+    # Load watchlist symbol set for priority ordering (best-effort — sync read)
+    _wl_syms: set[str] = set()
+    try:
+        from services.watchlist_service import load_watchlist_store as _lws
+        _store = _lws() or {}
+        for _wl in (_store.get("watchlists") or {}).values():
+            for _t in (_wl.get("tickers") or []):
+                if isinstance(_t, str):
+                    _wl_syms.add(_t.upper())
+    except Exception:
+        pass
+
+    wl_candidates:     list[str] = []
+    non_wl_candidates: list[str] = []
+    enriched = 0
+    legacy   = 0
 
     for sym, row in lkg_td.items():
         if not _lkg_has_real_data(row):
@@ -1588,7 +1632,13 @@ def identify_rich_backfill_candidates() -> int:
             enriched += 1
         else:
             legacy += 1
-            candidates.append(sym)
+            if sym.upper() in _wl_syms:
+                wl_candidates.append(sym)
+            else:
+                non_wl_candidates.append(sym)
+
+    # Watchlist symbols first, then remaining theme-universe symbols
+    candidates = wl_candidates + non_wl_candidates
 
     _RICH_BACKFILL_CANDIDATES = set(candidates)
     _RICH_BACKFILL_STATE["rich_backfill_candidates"] = len(candidates)
@@ -1599,14 +1649,16 @@ def identify_rich_backfill_candidates() -> int:
     _RICH_BACKFILL_STATE["enriched_supplement_rows"] = enriched
     _RICH_BACKFILL_STATE["legacy_partial_rows"]      = legacy
     _RICH_BACKFILL_STATE["identified_at"]            = time.time()
+    _RICH_BACKFILL_STATE["wl_candidates"]            = len(wl_candidates)
+    _RICH_BACKFILL_STATE["non_wl_candidates"]        = len(non_wl_candidates)
 
     if candidates:
         add_high_priority_symbols(candidates)
         _RICH_BACKFILL_STATE["rich_backfill_queued"] = len(candidates)
         print(
             f"[RICH_BACKFILL] {len(candidates)} legacy-partial supplement rows queued "
-            f"(enriched={enriched}, missing rich fields={legacy}) — "
-            f"will be scanned at next regular session"
+            f"(wl={len(wl_candidates)}, non-wl={len(non_wl_candidates)}, "
+            f"enriched={enriched}) — will be scanned at next regular session"
         )
     else:
         print(
@@ -1619,10 +1671,10 @@ def identify_rich_backfill_candidates() -> int:
 
 def get_rich_backfill_diag() -> dict:
     """
-    Return a copy of the current rich-backfill progress counters for the
-    /api/rate-status endpoint.
+    Return a copy of the current rich-backfill progress counters PLUS
+    field-specific coverage diagnostics for the /api/rate-status endpoint.
 
-    Fields:
+    Backfill progress fields:
       rich_backfill_candidates  — total legacy-partial rows identified at startup
       rich_backfill_queued      — how many were added to the priority queue
       rich_backfill_completed   — enriched successfully this session
@@ -1630,9 +1682,115 @@ def get_rich_backfill_diag() -> dict:
       rich_backfill_remaining   — candidates not yet completed (still queued)
       enriched_supplement_rows  — LKG rows with all 5 required fields
       legacy_partial_rows       — LKG rows missing ≥1 required field
+      wl_candidates             — watchlist-symbol candidates (high priority)
+      non_wl_candidates         — non-watchlist candidates (normal priority)
       identified_at             — epoch timestamp of the last identification run
+
+    Field-specific coverage (computed live from current LKG):
+      watchlist_symbols_requested             — count of watchlist tickers (best-effort)
+      watchlist_rich_backfill_remaining       — watchlist symbols still in backfill queue
+      rows_with_cached_underlying_price       — LKG rows that have underlying_price
+      rows_missing_underlying_price           — LKG rows without underlying_price
+      rows_with_iv                            — rows with combined_iv
+      rows_missing_iv_no_active_contracts     — rows where chain had no IV contracts
+      rows_with_oi                            — rows with total_oi
+      rows_with_expected_move                 — rows with expected_move_pct
+      rows_missing_expected_move_no_price     — EM unavailable (no price)
+      rows_missing_expected_move_no_atm       — EM unavailable (no ATM straddle)
+      rows_with_score                         — rows with options_score
+      rows_with_signal                        — rows with options_signal
+      rows_with_complete_rich_metrics         — rows passing _row_is_rich()
+      provider_calls_for_quotes               — always 0 (no quote calls in this path)
     """
-    return dict(_RICH_BACKFILL_STATE)
+    out = dict(_RICH_BACKFILL_STATE)
+
+    # Live field-specific coverage from current supplement LKG
+    try:
+        from data.cache import cache as _c
+        lkg_snap = _c.get(_SUPPLEMENT_LKG_CACHE_KEY) or {}
+        lkg_td: dict = lkg_snap.get("ticker_data", {})
+
+        rows_with_price  = 0
+        rows_no_price    = 0
+        rows_with_iv     = 0
+        rows_no_iv       = 0
+        rows_with_oi     = 0
+        rows_with_em     = 0
+        rows_no_em_price = 0
+        rows_no_em_atm   = 0
+        rows_with_score  = 0
+        rows_with_signal = 0
+        rows_rich        = 0
+
+        for row in lkg_td.values():
+            if not _lkg_has_real_data(row):
+                continue
+            has_price  = row.get("underlying_price") is not None
+            if has_price:
+                rows_with_price += 1
+            else:
+                rows_no_price += 1
+
+            has_iv = row.get("combined_iv") is not None
+            if has_iv:
+                rows_with_iv += 1
+            else:
+                rows_no_iv += 1
+
+            if row.get("total_oi") is not None:
+                rows_with_oi += 1
+
+            em_status = row.get("expected_move_status")
+            if row.get("expected_move_pct") is not None:
+                rows_with_em += 1
+            elif em_status == "no_underlying_price":
+                rows_no_em_price += 1
+            elif em_status == "no_valid_atm_straddle":
+                rows_no_em_atm += 1
+
+            if row.get("options_score") is not None:
+                rows_with_score += 1
+            if row.get("options_signal") is not None:
+                rows_with_signal += 1
+            if _row_is_rich(row):
+                rows_rich += 1
+
+        out.update({
+            "rows_with_cached_underlying_price":   rows_with_price,
+            "rows_missing_underlying_price":        rows_no_price,
+            "rows_with_iv":                         rows_with_iv,
+            "rows_missing_iv_no_active_contracts":  rows_no_iv,
+            "rows_with_oi":                         rows_with_oi,
+            "rows_with_expected_move":              rows_with_em,
+            "rows_missing_expected_move_no_price":  rows_no_em_price,
+            "rows_missing_expected_move_no_atm_straddle": rows_no_em_atm,
+            "rows_with_score":                      rows_with_score,
+            "rows_with_signal":                     rows_with_signal,
+            "rows_with_complete_rich_metrics":      rows_rich,
+            "provider_calls_for_quotes":            0,
+        })
+
+        # Watchlist-specific counts (best-effort)
+        try:
+            from services.watchlist_service import load_watchlist_store as _lws2
+            _store2 = _lws2() or {}
+            _wl_syms2: set[str] = set()
+            for _wl2 in (_store2.get("watchlists") or {}).values():
+                for _t2 in (_wl2.get("tickers") or []):
+                    if isinstance(_t2, str):
+                        _wl_syms2.add(_t2.upper())
+            wl_remaining = len(
+                _wl_syms2 & _RICH_BACKFILL_CANDIDATES
+            )
+            out["watchlist_symbols_requested"]       = len(_wl_syms2)
+            out["watchlist_rich_backfill_remaining"] = wl_remaining
+        except Exception:
+            pass
+
+    except Exception:
+        pass
+
+    return out
 
 
 # ── Neon Contract Snapshot Recovery ──────────────────────────────────────────

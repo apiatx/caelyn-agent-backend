@@ -242,6 +242,62 @@ def snapshot_cache_stats() -> dict:
     }
 
 
+def get_cached_underlying_prices(symbols: list[str]) -> dict[str, float]:
+    """
+    Build an {UPPERCASE_SYM: float_price} map from existing in-memory caches.
+
+    Zero Tradier / FMP calls.  Priority order:
+      1. services.watchlist_quote_cache._quote_cache  (10-min module-level dict)
+      2. data.cache  tradier:quote:sym:{SYM}           (60-s per-symbol cache)
+      3. data.cache  quote:lkg:{SYM}                  (72-h LKG cache)
+
+    Returns only symbols with a valid positive price.  Never blocks or awaits.
+    Safe to call from any sync context.
+    """
+    prices: dict[str, float] = {}
+    syms_upper = [s.upper() for s in symbols]
+
+    # ── Layer 1: watchlist_quote_cache module-level dict ──────────────────────
+    try:
+        import services.watchlist_quote_cache as _wqc
+        _wq: dict = _wqc._quote_cache          # pure dict read — no lock needed
+        for sym in syms_upper:
+            q = _wq.get(sym) or {}
+            try:
+                p_raw = q.get("price")
+                if p_raw is not None:
+                    p = float(p_raw)
+                    if p > 0 and p == p:       # finite and positive
+                        prices[sym] = p
+            except (TypeError, ValueError):
+                pass
+    except Exception:
+        pass
+
+    # ── Layer 2 + 3: per-symbol data.cache entries for remaining symbols ──────
+    missing = [s for s in syms_upper if s not in prices]
+    if missing:
+        try:
+            from data.cache import cache as _dc
+            for sym in missing:
+                for _key in (f"tradier:quote:sym:{sym}", f"quote:lkg:{sym}"):
+                    raw = _dc.get(_key)
+                    if not raw:
+                        continue
+                    p_raw = raw.get("last") or raw.get("price")
+                    try:
+                        p = float(p_raw) if p_raw is not None else None
+                    except (TypeError, ValueError):
+                        p = None
+                    if p is not None and p > 0:
+                        prices[sym] = p
+                        break
+        except Exception:
+            pass
+
+    return prices
+
+
 # ── core chain summarizer ──────────────────────────────────────────────────────
 
 def _budget_ok() -> bool:
@@ -623,19 +679,33 @@ async def summarize_ticker_chain(
     else:
         combined_iv = iv_skew = None
 
-    # ── supplement_v2: underlying price (cache-first, no API call) ───────────
-    spot = underlying_price
-    if spot is None:
+    # ── supplement_v2: underlying price (caller-supplied → master screener) ──
+    spot = _sf(underlying_price) if underlying_price is not None else None
+    if spot is not None and spot <= 0:
+        spot = None
+    _spot_source: Optional[str] = None
+    if spot is not None:
+        _spot_source = "canonical_quote_cache"
+        _underlying_price_status = "canonical_quote_cache"
+    else:
+        # Fallback: master screener in-memory cache (covers tickers already
+        # in options_master_screener_v1 — avoids a Tradier quote call).
         try:
             from data.cache import cache as _mc2
             _ms = _mc2.get("options_master_screener_v1") or _mc2.get("options_master_lkg_v1")
             if _ms:
                 for _mr in (_ms.get("tickers") or []):
                     if (_mr.get("ticker") or "").upper() == sym:
-                        spot = _sf(_mr.get("underlying_price") or _mr.get("price"))
+                        _p = _sf(_mr.get("underlying_price") or _mr.get("price"))
+                        if _p and _p > 0:
+                            spot = _p
+                            _spot_source = "master_screener_cache"
+                            _underlying_price_status = "master_screener_cache"
                         break
         except Exception:
             pass
+        if spot is None:
+            _underlying_price_status = "not_found"
 
     # ── supplement_v2: expected move (ATM straddle) ───────────────────────────
     em_dict: Optional[dict] = None
@@ -649,6 +719,13 @@ async def summarize_ticker_chain(
     em_dollars = em_dict.get("expected_move_dollars") if em_dict else None
     em_pct     = em_dict.get("expected_move_pct")     if em_dict else None
     em_strike  = em_dict.get("atm_strike")            if em_dict else None
+
+    if spot is None:
+        _em_status = "no_underlying_price"
+    elif em_pct is not None:
+        _em_status = "calculated"
+    else:
+        _em_status = "no_valid_atm_straddle"
 
     # ── supplement_v2: chain scoring ─────────────────────────────────────────
     _score_result: dict = {}
@@ -664,6 +741,17 @@ async def summarize_ticker_chain(
     score_components   = _score_result.get("score_components") or {}
     score_method       = _score_result.get("score_method") or "chain_summary_v1"
     contracts_scored   = _score_result.get("contracts_scored") or 0
+
+    if spot is None:
+        _score_status = "no_underlying_price"
+    elif options_score is not None:
+        _score_status = "chain_summary_scored"
+    else:
+        _score_status = "chain_empty_or_no_contracts"
+
+    _unavail_reason: Optional[str] = (
+        "no_underlying_price" if spot is None else None
+    )
 
     # ── Interval trade-side percentages ───────────────────────────────────────
     # Derived from summed delta dollars only — never per-contract averages.
@@ -715,13 +803,21 @@ async def summarize_ticker_chain(
         "expected_move_dollars":  em_dollars,
         "expected_move_pct":      em_pct,
         "expected_move_atm_strike": em_strike,
-        "underlying_price":       spot,
+        "underlying_price":        spot,
+        "underlying_price_source": _spot_source,
+        "underlying_price_status": _underlying_price_status,
         # ── Chain score (supplement_v2, requires underlying_price) ─────────────
-        "options_score":     options_score,
-        "options_signal":    options_signal,
-        "score_components":  score_components,
-        "score_method":      score_method,
-        "contracts_scored":  contracts_scored,
+        "options_score":           options_score,
+        "options_signal":          options_signal,
+        "score_components":        score_components,
+        "score_method":            score_method,
+        "contracts_scored":        contracts_scored,
+        "options_score_version":   "chain_summary_v1",
+        "options_score_source":    "chain_summary_v1" if options_score is not None else None,
+        "options_score_status":    _score_status,
+        # ── Expected move status ───────────────────────────────────────────────
+        "expected_move_status":           _em_status,
+        "rich_metrics_unavailable_reason": _unavail_reason,
         # schema version — downstream consumers can gate on this
         "supplement_schema_version": "supplement_v2",
         # ── Incremental interval trade-side classification ─────────────────────
@@ -771,6 +867,7 @@ async def scan_batch_for_sectors(
     expiry_cache: dict,
     *,
     concurrency: int = 6,
+    underlying_prices: Optional[dict] = None,
 ) -> list[dict]:
     """
     Scan a list of symbols concurrently (up to *concurrency* at a time).
@@ -778,18 +875,33 @@ async def scan_batch_for_sectors(
     The caller must wrap this in the appropriate lane() context so the
     Tradier budget system charges the correct lane.
 
+    underlying_prices — optional {SYMBOL: float} map pre-built by the caller
+    from existing in-memory quote caches (zero Tradier calls).  When supplied,
+    each ticker's price is passed directly into summarize_ticker_chain() so
+    Expected Move and Score/Signal are computed without a separate quote fetch.
+    Build with get_cached_underlying_prices(batch) before calling this.
+
     Example::
 
         with lane("sectors"):
-            results = await scan_batch_for_sectors(batch, tradier, expiry_cache)
+            prices = get_cached_underlying_prices(batch)
+            results = await scan_batch_for_sectors(
+                batch, tradier, expiry_cache, underlying_prices=prices
+            )
 
     Returns a list of result dicts — one per symbol, in order.
     """
     sem = asyncio.Semaphore(concurrency)
+    _prices = underlying_prices or {}
 
     async def _one(sym: str) -> dict:
         async with sem:
-            return await summarize_ticker_chain(sym, tradier, expiry_cache)
+            return await summarize_ticker_chain(
+                sym,
+                tradier,
+                expiry_cache,
+                underlying_price=_prices.get(sym.upper()),
+            )
 
     raw = await asyncio.gather(*[_one(s) for s in symbols], return_exceptions=True)
     out: list[dict] = []

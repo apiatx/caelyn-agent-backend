@@ -13618,6 +13618,27 @@ async def _sectors_fast_backfill_loop():
                 f"(lane={_lane_name}, sleep={_sbf_sleep_s}s)"
             )
 
+            # ── Build underlying price map (zero Tradier calls) ────────────────
+            # Reads from existing in-memory quote caches only.  One dict lookup
+            # per ticker across three cache layers (watchlist_quote_cache →
+            # tradier:quote:sym → quote:lkg).  Loaded once per batch, not once
+            # per ticker coroutine.
+            _underlying_prices: dict = {}
+            try:
+                from data.sectors_chain_summarizer import (
+                    get_cached_underlying_prices as _sbf_get_prices,
+                )
+                _underlying_prices = _sbf_get_prices(batch)
+                _sbf_p_found   = len(_underlying_prices)
+                _sbf_p_missing = len(batch) - _sbf_p_found
+                print(
+                    f"[SECTORS_BF] Price map: {_sbf_p_found}/{len(batch)} "
+                    f"symbols have cached price ({_sbf_p_missing} missing — "
+                    f"IV/OI still computed, EM/Score need price)"
+                )
+            except Exception as _sbf_pm_e:
+                print(f"[SECTORS_BF] Price map build failed (non-fatal): {_sbf_pm_e}")
+
             # ── Run chain summarizer for this batch ────────────────────────────
             _now_sbf = _ts_sbf.time()
             results: list[dict] = []
@@ -13628,6 +13649,7 @@ async def _sectors_fast_backfill_loop():
                         data_service.tradier,
                         _sbf_local_expiry,
                         concurrency=6,
+                        underlying_prices=_underlying_prices,
                     )
             except Exception as _be:
                 print(f"[SECTORS_BF] Batch scan error: {_be}")
@@ -13697,11 +13719,18 @@ async def _sectors_fast_backfill_loop():
                     "expected_move_pct":         r.get("expected_move_pct"),
                     "expected_move_atm_strike":  r.get("expected_move_atm_strike"),
                     "underlying_price":          r.get("underlying_price"),
+                    "underlying_price_source":   r.get("underlying_price_source"),
+                    "underlying_price_status":   r.get("underlying_price_status"),
                     "options_score":             r.get("options_score"),
                     "options_signal":            r.get("options_signal"),
                     "score_components":          r.get("score_components"),
                     "score_method":              r.get("score_method"),
                     "contracts_scored":          r.get("contracts_scored"),
+                    "options_score_version":     r.get("options_score_version") or "chain_summary_v1",
+                    "options_score_source":      r.get("options_score_source"),
+                    "options_score_status":      r.get("options_score_status"),
+                    "expected_move_status":      r.get("expected_move_status"),
+                    "rich_metrics_unavailable_reason": r.get("rich_metrics_unavailable_reason"),
                     "supplement_schema_version": r.get("supplement_schema_version"),
                     # ── Interval trade-side classification pass-through ────────
                     # Direct copy from summarize_ticker_chain() — no recomputation.

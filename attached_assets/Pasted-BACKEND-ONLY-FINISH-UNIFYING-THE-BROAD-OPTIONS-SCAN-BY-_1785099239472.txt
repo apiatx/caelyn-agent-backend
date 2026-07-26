@@ -1,0 +1,303 @@
+BACKEND ONLY — FINISH UNIFYING THE BROAD OPTIONS SCAN BY PASSING EXISTING STOCK PRICES
+
+Do not modify the frontend.
+
+Do not create another options scanner.
+
+Do not make additional Tradier quote calls.
+
+Do not change premium calculations, history calculations, score weights, expiration selection, or chain scheduling.
+
+Current state:
+
+* The broad supplement scanner already fetches the option chain used for Premium P/C, Net Premium, Options Volume, IV, OI, EM, Score, and Signal.
+* IV and OI can be calculated directly from that chain.
+* EM, Score, and Signal require the underlying stock price.
+* `scan_batch_for_sectors()` currently calls `summarize_ticker_chain()` without passing `underlying_price`.
+* `summarize_ticker_chain()` then only searches the master options screener cache for a price.
+* Most supplement-only tickers are not represented in that master cache.
+* Therefore tomorrow’s scan may fill IV and OI but still leave EM, Score, and Signal blank.
+
+Fix this exact missing input.
+
+==================================================
+
+1. FIND THE EXISTING CANONICAL QUOTE SOURCE
+   ==================================================
+
+Locate the existing quote cache already powering the Watchlist ticker prices.
+
+Use the existing canonical quote cache or its existing batch accessor.
+
+Accept, in priority order:
+
+1. Current regular-session quote price
+2. Existing valid quote-cache price
+3. Last valid regular-session/LKG price
+4. No price
+
+Do not call Tradier separately for quotes.
+
+Do not make one lookup per ticker when a batch lookup already exists.
+
+Do not invent another quote cache.
+
+Before editing, report:
+
+* exact existing quote-cache module
+* exact accessor used
+* number of the current 438 rich-backfill candidates with a valid cached price
+* number missing price
+
+==================================================
+2. PASS PRICES INTO THE EXISTING BATCH SCANNER
+==============================================
+
+Extend the existing function without replacing it:
+
+```python
+scan_batch_for_sectors(
+    symbols,
+    tradier,
+    expiry_cache,
+    underlying_prices=None,
+)
+```
+
+Before calling the batch scanner, build one uppercase map:
+
+```python
+{
+    "AMD": 123.45,
+    "MRVL": 87.65,
+}
+```
+
+Inside `_one(sym)`, call:
+
+```python
+summarize_ticker_chain(
+    sym,
+    tradier,
+    expiry_cache,
+    underlying_price=underlying_prices.get(sym),
+)
+```
+
+Load the price map once per batch.
+
+Do not perform quote-cache imports or reads separately inside every ticker coroutine.
+
+==================================================
+3. PRESERVE CHAIN METRICS WHEN PRICE IS MISSING
+===============================================
+
+A missing stock price must not prevent the chain from producing:
+
+* call volume
+* put volume
+* total volume
+* Volume P/C
+* call premium
+* put premium
+* Net Premium
+* Premium P/C
+* call OI
+* put OI
+* total OI
+* call IV
+* put IV
+* combined IV
+
+Only these fields should remain unavailable when price is missing:
+
+* Expected Move
+* Score
+* Signal fields that require the score pipeline
+
+Return explicit statuses:
+
+* `underlying_price_status`
+* `expected_move_status`
+* `options_score_status`
+* `rich_metrics_unavailable_reason`
+
+Examples:
+
+* `underlying_price_status = "canonical_quote_cache"`
+* `expected_move_status = "calculated"`
+* `expected_move_status = "no_underlying_price"`
+* `expected_move_status = "no_valid_atm_straddle"`
+* `options_score_status = "chain_summary_scored"`
+* `options_score_status = "no_underlying_price"`
+
+Do not turn missing values into zero.
+
+==================================================
+4. EXPECTED MOVE
+
+Use the existing ATM-straddle helper and existing percentage-unit normalization.
+
+Do not introduce a different Expected Move formula.
+
+Require:
+
+* valid underlying price
+* valid nearest ATM call
+* valid nearest ATM put
+* usable option prices
+
+Persist:
+
+* `expected_move_dollars`
+* `expected_move_pct`
+* `expected_move_atm_strike`
+* `underlying_price`
+* `underlying_price_source`
+* `expected_move_status`
+
+Do not multiply percentage points by 100 twice.
+
+==================================================
+5. SCORE AND SIGNAL
+
+Continue using the existing `chain_summary_v1` helper for supplement-only rows.
+
+Do not change its weights or formulas.
+
+Persist:
+
+* `options_score`
+* `options_signal`
+* `score_components`
+* `score_method`
+* `contracts_scored`
+* `options_score_version`
+* `options_score_source`
+* `options_score_status`
+
+Use honest provenance:
+
+* master rows remain `tradier_flow_v1`
+* broad supplement rows remain `chain_summary_v1`
+* Neon recovery remains `neon_contract_snapshot_recovery`
+
+A newly scanned supplement_v2 row should replace an older Neon-recovered row when the current scan is valid.
+
+==================================================
+6. BACKFILL PRIORITY
+
+Keep the current rich-backfill queue.
+
+Prioritize actual Watchlist symbols missing any of:
+
+* combined_iv
+* total_oi
+* expected_move_pct
+* options_score
+* options_signal
+
+ahead of non-Watchlist universe symbols.
+
+Do not remove a ticker from the rich-backfill queue merely because IV and OI populated.
+
+Remove it only when:
+
+* all available rich metrics were calculated, or
+* a field has an explicit legitimate unavailable reason such as no active IV or no valid ATM straddle
+
+Prevent endless retries for structurally unavailable metrics while still retrying transient failures.
+
+==================================================
+7. PERSISTENCE
+
+Confirm every successful broad scan immediately persists:
+
+* IV
+* OI
+* EM
+* Score
+* Signal
+* underlying price and price source
+* explicit availability statuses
+
+Guard against sparse refreshes erasing these fields.
+
+The Watchlist endpoint must read the updated supplement row without a restart.
+
+Invalidate any five-minute per-ticker or whole-Watchlist options cache that could continue returning the old partial row after the supplement row updates.
+
+==================================================
+8. FIELD-SPECIFIC COVERAGE DIAGNOSTICS
+
+Add or expose:
+
+* watchlist_symbols_requested
+* watchlist_rich_backfill_remaining
+* rows_with_cached_underlying_price
+* rows_missing_underlying_price
+* rows_with_iv
+* rows_missing_iv_no_active_contracts
+* rows_with_oi
+* rows_with_expected_move
+* rows_missing_expected_move_no_price
+* rows_missing_expected_move_no_atm_straddle
+* rows_with_score
+* rows_with_signal
+* rows_with_complete_rich_metrics
+* provider_calls_for_quotes
+* provider_calls_for_expirations
+* provider_calls_for_chains
+
+`provider_calls_for_quotes` added by this change must be zero.
+
+==================================================
+9. TESTS
+
+Add tests for:
+
+A. Batch scanner passes the existing cached price into `summarize_ticker_chain()`.
+
+B. Only one quote-cache batch lookup occurs for a multi-symbol scan.
+
+C. No Tradier quote call is made.
+
+D. With a valid price and chain, the row contains IV, OI, EM, Score, and Signal.
+
+E. Without a price, IV and OI still populate while EM and Score remain null with explicit reasons.
+
+F. A valid cached LKG price can produce EM during market hours when the current quote is temporarily absent.
+
+G. A sparse scan cannot erase previously valid EM, Score, IV, or OI.
+
+H. A current supplement_v2 row outranks an older Neon-recovered row.
+
+==================================================
+10. REGULAR-SESSION PROOF
+
+Do not claim complete from unit tests alone.
+
+During the next regular options session:
+
+1. Capture before counts for the actual 397-ticker Watchlist.
+2. Let the existing prioritized scanner run.
+3. Show at least ten previously partial, non-master tickers being rescanned.
+4. Print their before/after endpoint rows.
+5. Report after counts for:
+
+   * IV
+   * OI
+   * EM
+   * Score
+   * Signal
+6. Separate legitimate unavailable rows by reason.
+7. Prove the same chain fetch produced premium, volume, IV, OI, EM, Score, and Signal.
+8. Confirm zero additional Tradier quote calls.
+9. Confirm no frontend files changed.
+
+Completion means all eligible optionable Watchlist tickers have either:
+
+* a persisted value, or
+* an explicit legitimate field-specific unavailable reason
+
+There should be no unexplained blanks.
