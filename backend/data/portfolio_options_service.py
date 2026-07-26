@@ -669,9 +669,16 @@ def _merge_options_sources(
     oc_l = (_l or {}).get("options_context") or {}
 
     # ── Score / signal / confidence ───────────────────────────────────────────
+    # Whether the supplement row was recovered from a saved Neon contract snapshot.
+    # When True, its score/signal/iv/em take priority over a stale portfolio LKG
+    # score=0.0 — never let an old fake-zero block a recovered chain score.
+    _s_recovered = bool((_s or {}).get("recovered_from_neon"))
+
     raw_score = _first_non_null(
         (_p or {}).get("final_composite_score"),
         (_p or {}).get("composite_score"),
+        # Neon-recovered supplement score outranks stale portfolio LKG score=0.0
+        (_s or {}).get("options_score") if (not _p and _s_recovered) else None,
         (_l or {}).get("score"),
         (_l or {}).get("options_score"),
         (_l or {}).get("final_composite_score"),
@@ -685,16 +692,20 @@ def _merge_options_sources(
     score_version = _first_non_null(
         (_p or {}).get("options_score_version"),
         "tradier_flow_v1" if master_row_present else None,
+        (_s or {}).get("options_score_version") if _s_recovered else None,
         (_l or {}).get("options_score_version"),
     )
     score_source = _first_non_null(
         (_p or {}).get("options_score_source"),
         "options_master_screener" if master_row_present else None,
+        (_s or {}).get("options_score_source") if _s_recovered else None,
         (_l or {}).get("options_score_source"),
         (_l or {}).get("source"),
     )
     score_status = (
         "master_scored"  if master_row_present
+        # Neon-recovered rows report their own provenance status
+        else (_s or {}).get("options_score_status") if (not _p and _s_recovered and (_s or {}).get("options_score_status"))
         else "lkg_fallback" if (_l and _l.get("score") is not None)
         else "not_scored_by_master"
     )
@@ -1021,6 +1032,15 @@ def _merge_options_sources(
         "from_lkg":            bool((_prov or {}).get("from_lkg")),
         "retry_pending":       (_prov or {}).get("retry_pending"),
         "unavailable_reason":  None,
+        # ── Neon recovery provenance ──────────────────────────────────────────
+        # Passed through from the supplement row so _normalize_to_watchlist_row
+        # can expose them to the frontend without another lookup.
+        "recovered_from_neon":           (_s or {}).get("recovered_from_neon"),
+        "recovery_snapshot_as_of":       (_s or {}).get("recovery_snapshot_as_of"),
+        "awaiting_regular_session_scan": (
+            (_s or {}).get("options_score_status") == "awaiting_regular_session_scan"
+            or bool((_s or {}).get("awaiting_regular_session_scan"))
+        ),
     }
 
 
@@ -1684,6 +1704,10 @@ def _normalize_to_watchlist_row(
         "options_score_status":                r.get("options_score_status"),
         "options_score_unavailable_reason":    r.get("options_score_unavailable_reason"),
         "master_score_row_present":            r.get("master_score_row_present", False),
+        # ── Neon recovery provenance ──────────────────────────────────────────
+        "recovered_from_neon":                 r.get("recovered_from_neon"),
+        "recovery_snapshot_as_of":             r.get("recovery_snapshot_as_of"),
+        "awaiting_regular_session_scan":       r.get("awaiting_regular_session_scan") or False,
         # ── Volume scope metadata ─────────────────────────────────────────────
         "options_volume_scope":                r.get("options_volume_scope"),
         "options_volume_method":               r.get("options_volume_method"),

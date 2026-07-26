@@ -1,0 +1,153 @@
+FINAL VERIFICATION — DO NOT CHANGE CODE UNTIL THE FAILURE LOCATION IS PROVEN
+
+The Neon recovery reports:
+
+- 438 legacy partial rows processed
+- 180 recovered with score
+- 258 with no snapshot
+- 0 failures
+
+Do not make more architectural changes.
+
+First prove whether the recovered rows are reaching the actual Watchlist frontend.
+
+1. CALL THE REAL WATCHLIST ENDPOINT
+
+Call the authenticated endpoint for the real 397-ticker Watchlist:
+
+GET /api/watchlist/{actual_watchlist_id}/options-signals
+
+After the Neon recovery has completed, report coverage from the actual response:
+
+- rows with numeric options_score
+- rows with non-empty options_signal
+- rows with options_iv
+- rows with options_expected_move
+- rows with options_open_interest
+- rows with volume_put_call_ratio
+- rows with premium_put_call_ratio
+- rows with options_net_premium
+- rows recovered_from_neon
+- rows awaiting_regular_session_scan
+- rows with fake score 0 caused by missing data
+
+A genuine calculated zero is allowed.
+A missing score converted to zero is not.
+
+2. PRINT REAL RESPONSE ROWS
+
+Print the complete endpoint rows for:
+
+- AAOI
+- ABCL
+- ACLS
+- AEHR
+- AEVA
+- AKAM
+- AMD
+- MRVL
+- ASTS
+
+For each show:
+
+- options_score
+- options_score_version
+- options_score_source
+- options_score_status
+- options_signal
+- options_iv
+- options_expected_move
+- options_open_interest
+- options_call_open_interest
+- options_put_open_interest
+- volume_put_call_ratio
+- premium_put_call_ratio
+- options_net_premium
+- recovered_from_neon
+- recovery_snapshot_as_of
+- snapshot_status
+
+3. COMPARE THE THREE LAYERS
+
+For each sample ticker compare:
+
+A. Supplement LKG row  
+B. Final options-signals endpoint row  
+C. Frontend optionsSignalsByTicker row
+
+Identify exactly where a populated value disappears.
+
+Do not guess.
+
+4. IF SUPPLEMENT IS POPULATED BUT ENDPOINT IS BLANK
+
+Fix only the backend projection/join.
+
+Confirm that _merge_options_sources() and _normalize_to_watchlist_row() preserve:
+
+- supplement options_score
+- supplement options_signal
+- combined_iv
+- expected_move_pct
+- total_oi
+- recovered score metadata
+
+Do not let an empty Portfolio/master row overwrite recovered supplement fields.
+
+5. IF ENDPOINT IS POPULATED BUT FRONTEND IS BLANK
+
+Fix only the Watchlist frontend query lifecycle.
+
+Inspect:
+
+- optionsSignalsByTicker
+- normalizeOptionsSignal()
+- React Query cache key
+- enabled condition
+- staleTime
+- refetchOnMount
+- query invalidation after backend deploy/recovery
+- activeId matching
+
+Force one normal endpoint refetch when:
+
+- the Options toggle opens
+- the active Watchlist changes
+- the previous payload had zero rich-field coverage
+
+Do not add polling.
+Do not add another API endpoint.
+Do not touch Options Flow.
+
+6. ACTUAL UI PROOF
+
+Open the real Watchlist Options toggle after the endpoint request.
+
+Show a screenshot with at least several rows visibly containing:
+
+- Opt Score
+- Opt Signal
+- Vol P/C
+- Prem P/C
+- IV
+- EM
+- OI
+
+Also show an unrecoverable row honestly displaying missing rich fields or Awaiting Scan rather than fake zero.
+
+7. COMPLETION REQUIREMENT
+
+Do not report completion without:
+
+- actual endpoint coverage counts
+- sample endpoint rows
+- identified disappearance layer
+- actual UI screenshot
+- confirmation no duplicate Tradier calls were added
+- confirmation the 258 unrecoverable rows remain queued for the regular session
+
+Only change code after proving whether the break is:
+
+- supplement → endpoint
+or
+- endpoint → frontend
