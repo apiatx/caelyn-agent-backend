@@ -1,0 +1,205 @@
+FINAL SURGICAL FIX — SCORE AND SIGNAL ONLY
+
+Do not change scoring formulas.
+Do not add a fallback score.
+Do not change IV, Expected Move, OI, premium, history, scanners, Neon recovery, or Tradier behavior.
+Do not make broad architectural changes.
+
+The Watchlist currently displays IV, EM, OI, premium metrics, and volume metrics, but Opt Score and Opt Signal remain blank.
+
+The backend reportedly returns 158 genuine scores, including recovered scores such as AMD, ASTS, and MRVL.
+
+There are only two acceptable failure locations:
+
+1. Backend endpoint returns blank Score/Signal.
+2. Backend endpoint is populated, but the frontend is holding or dropping them.
+
+Prove which one before editing.
+
+==================================================
+STEP 1 — CHECK THE ACTUAL PUBLISHED ENDPOINT
+============================================
+
+Call:
+
+GET /api/watchlist/00a0e3ea-31dc-4223-97bc-470720dd3215/options-signals
+
+Inspect these exact rows:
+
+* AMD
+* ASTS
+* MRVL
+* MSFT
+* HUT
+* BE
+
+Print:
+
+* options_score
+* score
+* options_signal
+* signal
+* options_score_version
+* options_score_source
+* options_score_status
+* recovered_from_neon
+* options_iv
+* options_expected_move
+* options_open_interest
+
+Also return endpoint-wide counts:
+
+* rows with numeric options_score
+* rows with non-empty options_signal
+* recovered_from_neon rows
+* awaiting_regular_session_scan rows
+
+Do not change code until these values are printed.
+
+==================================================
+STEP 2A — IF ENDPOINT HAS SCORE AND SIGNAL
+==========================================
+
+Then the backend is finished.
+
+Fix only `watchlist.tsx`.
+
+The existing React Query is:
+
+`['watchlist-options-signals', activeId]`
+
+It currently has:
+
+* staleTime = 120 seconds
+* refetchOnWindowFocus = false
+* no refetch when the Options toggle opens
+
+Make these surgical changes:
+
+1. Destructure `refetch` from the existing options-signals useQuery.
+
+2. Trigger one refetch whenever:
+
+* `screenerMode` changes to `options`
+* or `activeId` changes while Options mode is open
+
+3. Do not poll.
+
+4. Do not create a second endpoint call or query key.
+
+5. Use the existing query only.
+
+6. Add `{ cache: 'no-store' }` to the existing fetch so browser HTTP caching cannot serve an old pre-recovery response.
+
+7. After refetch, verify:
+
+`optionsSignalsByTicker['MRVL'].options_score`
+
+and:
+
+`optionsSignalsByTicker['MRVL'].options_signal`
+
+contain the exact endpoint values.
+
+8. Confirm `normalizeOptionsSignal()` preserves:
+
+* options_score
+* score fallback
+* options_signal
+* signal fallback
+
+9. Confirm the subsequent Watchlist LKG merge does not replace a populated new Score or Signal with an old blank value.
+
+Do not rewrite the table cells. They already render:
+
+* `stock.options_score`
+* `stock.options_signal`
+
+==================================================
+STEP 2B — IF ENDPOINT SCORE IS POPULATED BUT SIGNAL IS BLANK
+============================================================
+
+Fix only signal precedence in `_merge_options_sources()`.
+
+Current precedence checks legacy Portfolio LKG signal before recovered supplement signal.
+
+Use:
+
+1. Non-empty master primary signal
+2. Non-empty recovered/enriched supplement options signal
+3. Non-empty Portfolio LKG options signal
+4. Non-empty Portfolio LKG signal
+5. Other non-empty supplement signal
+6. Null
+
+Create:
+
+`_first_non_empty_string(*values)`
+
+It must skip:
+
+* None
+* empty string
+* whitespace
+* UNKNOWN
+* NO DATA
+
+Do not use `_first_non_null()` for signals.
+
+For Neon-recovered rows, supplement `options_signal` must outrank stale Portfolio LKG placeholders.
+
+==================================================
+STEP 2C — IF ENDPOINT SCORE IS BLANK
+====================================
+
+Inspect the same ticker in:
+
+1. Supplement LKG
+2. Portfolio LKG
+3. `_merge_options_sources()` result
+4. `_normalize_to_watchlist_row()` result
+
+For recovered rows, supplement fields must survive:
+
+* options_score
+* options_signal
+* options_score_version
+* options_score_source
+* options_score_status
+
+Do not create a new fallback score.
+
+If a ticker genuinely has no calculated master, enriched-supplement, or Neon-recovered score, leave Score null and honestly return:
+
+* options_score_status = awaiting_regular_session_scan
+* options_signal = AWAITING SCAN
+
+A missing score must not become zero.
+
+==================================================
+FINAL PROOF
+===========
+
+After the targeted fix:
+
+1. Call the endpoint again.
+2. Confirm AMD, ASTS, and MRVL contain Score and Signal.
+3. Open the real Watchlist Options toggle.
+4. Confirm the same values display.
+5. Provide a screenshot showing at least AMD, ASTS, or MRVL with:
+
+* Opt Score
+* Opt Signal
+* IV
+* EM
+* OI
+
+Return:
+
+* failure layer found
+* exact file changed
+* endpoint values before and after
+* frontend values before and after
+* screenshot
+* confirmation that no scoring formula changed
+* confirmation that no provider calls were added

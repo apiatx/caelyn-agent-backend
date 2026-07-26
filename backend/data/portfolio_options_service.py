@@ -507,6 +507,25 @@ def _first_non_null(*values):
     return None
 
 
+_SIGNAL_GARBAGE = {"", "unknown", "no data", "no_data", "awaiting scan",
+                   "awaiting_scan", "n/a", "none", "null", "-"}
+
+def _first_non_empty_string(*values) -> str | None:
+    """Return first non-None, non-empty, non-placeholder signal string.
+
+    Skips: None, empty string, whitespace-only, UNKNOWN, NO DATA,
+    AWAITING SCAN (and their snake_case equivalents).
+    Unlike _first_non_null this NEVER returns an empty or garbage string.
+    """
+    for v in values:
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s and s.lower() not in _SIGNAL_GARBAGE:
+            return v  # return original (preserves capitalisation)
+    return None
+
+
 def _si_n(v) -> int | None:
     """Safe int — returns None for None input, int otherwise."""
     if v is None:
@@ -714,10 +733,18 @@ def _merge_options_sources(
         else ("master_row_absent" if not _p else "primary_row_not_scored")
     )
 
-    raw_signal = _first_non_null(
+    # Signal precedence (uses _first_non_empty_string — skips "", UNKNOWN, etc.):
+    #   1. Non-empty master primary signal
+    #   2. Non-empty Neon-recovered supplement signal (outranks stale LKG placeholders)
+    #   3. Non-empty Portfolio LKG options_signal
+    #   4. Non-empty Portfolio LKG signal
+    #   5. Other non-empty supplement signal
+    raw_signal = _first_non_empty_string(
         (_p or {}).get("primary_signal"),
-        (_l or {}).get("signal"),
+        # Recovered supplement signal takes priority over stale portfolio LKG
+        (_s or {}).get("options_signal") if _s_recovered else None,
         (_l or {}).get("options_signal"),
+        (_l or {}).get("signal"),
         # supplement_v2: chain-scored rows from sectors_chain_summarizer
         (_s or {}).get("options_signal"),
     )
@@ -1627,8 +1654,8 @@ def _normalize_to_watchlist_row(
 
     return {
         "ticker":                              sym,
-        "options_score":                       r.get("score") or r.get("options_score"),
-        "options_signal":                      r.get("signal") or r.get("options_signal"),
+        "options_score":                       _first_non_null(r.get("score"), r.get("options_score")),
+        "options_signal":                      _first_non_empty_string(r.get("signal"), r.get("options_signal")),
         # ── Legacy P/C alias (backward compat) ──
         "options_put_call_ratio":              _pc,
         # ── Canonical P/C names ──
