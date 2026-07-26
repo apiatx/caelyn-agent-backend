@@ -342,18 +342,23 @@ def _load_supplement_lkg_from_disk() -> None:
             return
         saved_at = payload.get("saved_at", 0)
         age_s = int(now - saved_at)
-        if age_s > _SUPPLEMENT_LKG_DISK_MAX_AGE:
-            print(f"[SUPP_LKG] Disk LKG too old ({age_s}s > {_SUPPLEMENT_LKG_DISK_MAX_AGE}s) — skipping")
-            return
+        # No age-based rejection — a structurally valid snapshot is always served.
+        # Age controls only the status label; never blocks availability.
         ticker_data: dict = payload.get("ticker_data", {})
         if not ticker_data:
             print("[SUPP_LKG] Disk LKG: empty ticker_data — skipping")
             return
 
-        # Age-based status tag so downstream consumers know how fresh the data is
+        # Age-based status label (informational only — does NOT gate availability)
+        #   lkg_market_closed : < 24 h (same session or overnight)
+        #   stale_but_usable  : 24 h – 7 days (weekend / short holiday)
+        #   stale_long_term   : > 7 days (extended outage / multi-holiday window)
+        _FRESH = _SUPPLEMENT_LKG_FRESH_AGE    # 24 h
+        _WEEK  = 604800                        # 7 days
         _snap_status = (
-            "lkg_market_closed" if age_s < _SUPPLEMENT_LKG_FRESH_AGE
-            else "stale_but_usable"
+            "lkg_market_closed" if age_s < _FRESH
+            else "stale_but_usable" if age_s < _WEEK
+            else "stale_long_term"
         )
         tagged = {
             sym: {
@@ -364,8 +369,8 @@ def _load_supplement_lkg_from_disk() -> None:
             }
             for sym, row in ticker_data.items()
         }
-        # Use extended TTL for stale data so it persists until Monday market open
-        _ttl = _SUPPLEMENT_LKG_CACHE_TTL if age_s < _SUPPLEMENT_LKG_FRESH_AGE else _SUPPLEMENT_LKG_STALE_TTL
+        # Always use full TTL — LKG stays in memory until overwritten by live data
+        _ttl = _SUPPLEMENT_LKG_CACHE_TTL
         from data.cache import cache
         cache.set(
             _SUPPLEMENT_LKG_CACHE_KEY,
@@ -714,99 +719,115 @@ def get_combined_ticker_data() -> dict[str, dict]:
         # confirmed_no_options (KNOWN state, earns confidence) rather than
         # not_scanned (UNKNOWN state, lowers confidence).
         # Runs unconditionally — NOT gated on combined being empty.
-        # Uses _SECTORS_LKG_CNO_MAX_AGE (7 days) for stable confirmed_no_options.
+        # No age-based rejection — structurally valid confirmed_no_options rows
+        # are kept until replaced by a successful live scan.
         try:
             if _SECTORS_LKG_DISK_PATH.exists():
                 import json as _jcno
                 _sec_raw = _jcno.loads(_SECTORS_LKG_DISK_PATH.read_text(encoding="utf-8"))
                 _sec_age = _now_supp - (_sec_raw.get("saved_at") or 0)
-                if _sec_age < _SECTORS_LKG_CNO_MAX_AGE:
-                    _cno_added = 0
-                    for sym, row in (_sec_raw.get("ticker_data") or {}).items():
-                        sym = sym.upper()
-                        if sym in combined:
-                            continue
-                        if isinstance(row, dict) and row.get("scan_result") == "confirmed_no_options":
-                            combined[sym] = {
-                                **row,
-                                "_source":          "sectors_lkg_no_options",
-                                "_snapshot_status": "confirmed_no_options",
-                            }
-                            _cno_added += 1
-                    if _cno_added:
-                        print(
-                            f"[OPTIONS_COMBINED] Sectors-LKG confirmed_no_options layer: "
-                            f"+{_cno_added} tickers (age={_sec_age/3600:.1f}h)"
-                        )
+                _cno_added = 0
+                for sym, row in (_sec_raw.get("ticker_data") or {}).items():
+                    sym = sym.upper()
+                    if sym in combined:
+                        continue
+                    if isinstance(row, dict) and row.get("scan_result") == "confirmed_no_options":
+                        combined[sym] = {
+                            **row,
+                            "_source":          "sectors_lkg_no_options",
+                            "_snapshot_status": "confirmed_no_options",
+                        }
+                        _cno_added += 1
+                if _cno_added:
+                    print(
+                        f"[OPTIONS_COMBINED] Sectors-LKG confirmed_no_options layer: "
+                        f"+{_cno_added} tickers (age={_sec_age/3600:.1f}h)"
+                    )
         except Exception:
             pass
         # ─────────────────────────────────────────────────────────────────────
 
-        # ── Disk LKG fallback — serves Friday close data on weekend/off-hours ──
-        # When both in-memory caches are empty (e.g. post-restart on weekend
-        # before the master screener has run), fall back to disk snapshots.
-        # Priority: supplement disk LKG (643 tickers) > master disk LKG (19).
-        # This prevents the Options Flow page/V4 from going blank over weekends.
-        if not combined:
+        # ── Disk LKG per-ticker fallback ─────────────────────────────────────
+        # For any ticker MISSING from all in-memory layers, fill in from disk
+        # snapshots.  This is a PER-TICKER fallback — a small in-memory master
+        # snapshot (e.g. 3 tickers) never suppresses hundreds of valid supplement
+        # disk LKG rows.  The `if not combined:` global gate is intentionally
+        # removed: per-ticker is the correct merge unit.
+        #
+        # No age-based rejection — structurally valid disk data is always served.
+        # Age controls only the status label:
+        #   lkg_market_closed : < 24 h
+        #   stale_but_usable  : 24 h – 7 days
+        #   stale_long_term   : > 7 days (extended outage / provider failure)
+        try:
             import pathlib as _pl_supp, json as _js_supp
-            _DISK_STALE_MAX_AGE = 345600  # 96 h — same as _SUPPLEMENT_LKG_DISK_MAX_AGE
 
-            # Layer A: supplement disk LKG (full per-ticker options data, ~600+ tickers)
+            # Layer A: supplement disk LKG (~600+ tickers)
             if _SUPPLEMENT_LKG_DISK_PATH.exists():
                 try:
                     _sd_raw  = _js_supp.loads(_SUPPLEMENT_LKG_DISK_PATH.read_text())
                     _sd_sa   = _sd_raw.get("saved_at") or 0
-                    _sd_age  = _now_supp - float(_sd_sa) if _sd_sa else 999999
-                    if _sd_age < _DISK_STALE_MAX_AGE:
-                        _sd_st  = "lkg_market_closed" if _sd_age < 86400 else "stale_but_usable"
-                        for sym, row in (_sd_raw.get("ticker_data") or {}).items():
-                            sym = sym.upper()
-                            if sym:
-                                combined[sym] = {
-                                    **row,
-                                    "_source":          "disk_lkg_supplement",
-                                    "_snapshot_status": _sd_st,
-                                    "_cached_at":       _sd_sa,
-                                    "_lkg_age_s":       round(_sd_age),
-                                }
-                        if combined:
-                            print(
-                                f"[OPTIONS_COMBINED] Supplement disk fallback: {len(combined)} tickers "
-                                f"(age={_sd_age/3600:.1f}h, status={_sd_st})"
-                            )
+                    _sd_age  = _now_supp - float(_sd_sa) if _sd_sa else 0
+                    _sd_st   = (
+                        "lkg_market_closed" if _sd_age < 86400
+                        else "stale_but_usable" if _sd_age < 604800
+                        else "stale_long_term"
+                    )
+                    _sd_added = 0
+                    for sym, row in (_sd_raw.get("ticker_data") or {}).items():
+                        sym = sym.upper()
+                        if sym and sym not in combined:
+                            combined[sym] = {
+                                **row,
+                                "_source":          "disk_lkg_supplement",
+                                "_snapshot_status": _sd_st,
+                                "_cached_at":       _sd_sa,
+                                "_lkg_age_s":       round(_sd_age),
+                            }
+                            _sd_added += 1
+                    if _sd_added:
+                        print(
+                            f"[OPTIONS_COMBINED] Supplement disk per-ticker fill: +{_sd_added} tickers "
+                            f"(age={_sd_age/3600:.1f}h, status={_sd_st})"
+                        )
                 except Exception as _sd_exc:
                     print(f"[OPTIONS_COMBINED] Supplement disk fallback failed: {_sd_exc}")
 
-            # Layer B: master screener disk LKG (screener top-results, ~19 tickers)
+            # Layer B: master screener disk LKG (~19 tickers)
             _master_disk = _pl_supp.Path(__file__).parent.parent / "data" / "options_master_lkg_v1.json"
             if _master_disk.exists():
                 try:
                     _disk_raw   = _js_supp.loads(_master_disk.read_text())
                     _disk_ca    = _disk_raw.get("cached_at") or 0
-                    _disk_age   = _now_supp - float(_disk_ca) if _disk_ca else 999999
-                    if _disk_age < _DISK_STALE_MAX_AGE:
-                        _disk_st    = "lkg_market_closed" if _disk_age < 86400 else "stale_but_usable"
-                        _disk_as_of = _disk_raw.get("updated_at") or _disk_raw.get("cached_at")
-                        _added = 0
-                        for row in _disk_raw.get("tickers", []):
-                            sym = (row.get("ticker") or "").upper()
-                            if sym and sym not in combined:
-                                combined[sym] = {
-                                    **row,
-                                    "_source":          "disk_lkg",
-                                    "_snapshot_status": _disk_st,
-                                    "_cached_at":       _disk_ca,
-                                    "_lkg_age_s":       round(_disk_age),
-                                    "_as_of":           _disk_as_of,
-                                }
-                                _added += 1
-                        if _added:
-                            print(
-                                f"[OPTIONS_COMBINED] Master disk fallback: +{_added} tickers "
-                                f"(age={_disk_age/3600:.1f}h, status={_disk_st})"
-                            )
+                    _disk_age   = _now_supp - float(_disk_ca) if _disk_ca else 0
+                    _disk_st    = (
+                        "lkg_market_closed" if _disk_age < 86400
+                        else "stale_but_usable" if _disk_age < 604800
+                        else "stale_long_term"
+                    )
+                    _disk_as_of = _disk_raw.get("updated_at") or _disk_raw.get("cached_at")
+                    _disk_added = 0
+                    for row in _disk_raw.get("tickers", []):
+                        sym = (row.get("ticker") or "").upper()
+                        if sym and sym not in combined:
+                            combined[sym] = {
+                                **row,
+                                "_source":          "disk_lkg",
+                                "_snapshot_status": _disk_st,
+                                "_cached_at":       _disk_ca,
+                                "_lkg_age_s":       round(_disk_age),
+                                "_as_of":           _disk_as_of,
+                            }
+                            _disk_added += 1
+                    if _disk_added:
+                        print(
+                            f"[OPTIONS_COMBINED] Master disk per-ticker fill: +{_disk_added} tickers "
+                            f"(age={_disk_age/3600:.1f}h, status={_disk_st})"
+                        )
                 except Exception as _disk_exc:
                     print(f"[OPTIONS_COMBINED] Master disk fallback failed: {_disk_exc}")
+        except Exception:
+            pass
         # ─────────────────────────────────────────────────────────────────────
 
         return combined
@@ -1082,9 +1103,8 @@ def load_sectors_universe_lkg_from_disk() -> None:
 
         saved_at = payload.get("saved_at", 0)
         age_s    = int(now - saved_at)
-        if age_s > _SECTORS_LKG_DISK_MAX_AGE:
-            print(f"[SECTORS_LKG] Disk LKG too old ({age_s}s) — skipping")
-            return
+        # No age-based rejection — structurally valid snapshot always loaded.
+        # Age controls only the status label (informational).
 
         ticker_data: dict = payload.get("ticker_data", {})
         if not ticker_data:

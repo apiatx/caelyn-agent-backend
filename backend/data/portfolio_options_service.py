@@ -668,28 +668,48 @@ async def _scan_one_symbol(
             em_display = round(expected_move_raw * 100, 2) if expected_move_raw is not None else None
 
             return {
-                "ticker":              sym,
-                "symbol":              sym,
-                "optionable":          True,
-                "data_available":      True,
-                "score":               score,
-                "p_c":                 pc_ratio,
-                "put_call":            pc_ratio,
-                "iv":                  iv_current,
-                "em":                  em_display,
-                "expected_move":       em_display,
-                "vol":                 total_vol or None,
-                "volume":              total_vol or None,
-                "call_volume":         call_vol or None,
-                "put_volume":          put_vol or None,
-                "open_interest":       oi_total or None,
-                "call_open_interest":  call_oi or None,
-                "put_open_interest":   put_oi or None,
-                "signal":              display,
-                "put_call_direction":  direction,
-                "confidence":          confidence,
-                "source":              "portfolio_scoped_options_screener",
-                "unavailable_reason":  None,
+                "ticker":                 sym,
+                "symbol":                 sym,
+                "optionable":             True,
+                "data_available":         True,
+                "score":                  score,
+                # ── Legacy aliases (backward compat — do not change) ──
+                "p_c":                    pc_ratio,
+                "put_call":               pc_ratio,
+                "put_call_ratio":         pc_ratio,
+                # ── Canonical P/C names ───────────────────────────────
+                # volume_put_call_ratio  = put contract volume / call contract volume
+                # premium_put_call_ratio = put premium dollars / call premium dollars
+                # (premium_put_call_ratio omitted here — portfolio scanner does not
+                #  compute premium dollars; populated by tradier_flow_engine path)
+                "volume_put_call_ratio":  pc_ratio,
+                "premium_put_call_ratio": None,
+                # ── Score metadata ────────────────────────────────────
+                # Formula: vol_score(35) + iv_score(20) + dir_score(20), max ~75
+                "options_score_version":  "portfolio_composite_v1",
+                "options_score_source":   "portfolio_scoped_options_screener",
+                "options_score_inputs":   {
+                    "vol_score":  round(min(35, (total_vol / 10000) * 20), 1) if total_vol else 0,
+                    "iv_score":   round(min(20, (iv_current or 0) * 40), 1),
+                    "dir_score":  round(min(20, abs((pc_ratio or 1.0) - 1.0) * 15), 1) if pc_ratio else 0,
+                },
+                "score_comparable_across_rows": False,  # different formula from tradier_flow_v1
+                # ─────────────────────────────────────────────────────
+                "iv":                     iv_current,
+                "em":                     em_display,
+                "expected_move":          em_display,
+                "vol":                    total_vol or None,
+                "volume":                 total_vol or None,
+                "call_volume":            call_vol or None,
+                "put_volume":             put_vol or None,
+                "open_interest":          oi_total or None,
+                "call_open_interest":     call_oi or None,
+                "put_open_interest":      put_oi or None,
+                "signal":                 display,
+                "put_call_direction":     direction,
+                "confidence":             confidence,
+                "source":                 "portfolio_scoped_options_screener",
+                "unavailable_reason":     None,
             }
 
         except asyncio.TimeoutError:
@@ -1000,19 +1020,36 @@ def _normalize_to_watchlist_row(
         and market_hours and is_stale
     )
     _priority = "high" if _stale_over_sla else ("normal" if is_stale else None)
+    # Resolve canonical P/C names from whichever alias is populated
+    _pc = r.get("volume_put_call_ratio") or r.get("p_c") or r.get("put_call") or r.get("put_call_ratio")
+    _prem_pc = r.get("premium_put_call_ratio")
     return {
         "ticker":                              sym,
-        "options_score":                       r.get("score"),
-        "options_signal":                      r.get("signal"),
-        "options_put_call_ratio":              r.get("p_c"),
-        "options_iv":                          r.get("iv"),
-        "options_expected_move":               r.get("em"),
-        "options_volume":                      r.get("vol"),
-        "options_open_interest":               r.get("open_interest"),
+        "options_score":                       r.get("score") or r.get("options_score"),
+        "options_signal":                      r.get("signal") or r.get("options_signal"),
+        # ── Legacy P/C alias (backward compat) ──
+        "options_put_call_ratio":              _pc,
+        # ── Canonical P/C names ──
+        # volume_put_call_ratio  = put contract volume / call contract volume
+        # premium_put_call_ratio = put premium dollars / call premium dollars
+        "volume_put_call_ratio":               _pc,
+        "premium_put_call_ratio":              _prem_pc,
+        # ── Score metadata ──
+        "options_score_version":               r.get("options_score_version", "portfolio_composite_v1"),
+        "options_score_source":                r.get("options_score_source") or r.get("source"),
+        "options_score_inputs":                r.get("options_score_inputs"),
+        "score_comparable_across_rows":        r.get("score_comparable_across_rows", False),
+        # ── Core fields ──
+        "options_iv":                          r.get("iv") or r.get("options_iv"),
+        "options_expected_move":               r.get("em") or r.get("expected_move") or r.get("options_expected_move"),
+        "options_volume":                      r.get("vol") or r.get("volume") or r.get("options_volume"),
+        "options_open_interest":               r.get("open_interest") or r.get("options_open_interest"),
         "options_call_volume":                 r.get("call_volume"),
         "options_put_volume":                  r.get("put_volume"),
+        "options_call_open_interest":          r.get("call_open_interest") or r.get("call_oi"),
+        "options_put_open_interest":           r.get("put_open_interest") or r.get("put_oi"),
         "options_updated_at":                  r.get("_updated_at") or r.get("_lkg_saved_at"),
-        "options_source":                      r.get("source"),
+        "options_source":                      r.get("source") or r.get("options_source"),
         "options_stale":                       is_stale,
         "options_unavailable_reason":          r.get("unavailable_reason"),
         "options_data_available":              r.get("data_available", False),

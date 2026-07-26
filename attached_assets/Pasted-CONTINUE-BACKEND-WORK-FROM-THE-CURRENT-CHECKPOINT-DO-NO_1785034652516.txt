@@ -1,0 +1,442 @@
+CONTINUE BACKEND WORK FROM THE CURRENT CHECKPOINT — DO NOT RESTART OR REDO THE COMPLETED SESSION-GATE WORK
+
+The first pass only completed the regular-hours gate and extended the supplement LKG to seven days.
+
+That was useful, but the original backend task is not complete.
+
+Continue from the existing checkpoint and finish the missing architecture work now.
+
+Do not touch the frontend.
+Do not undo the working session gates.
+Do not create a new parallel scanner or cache.
+Do not rewrite unrelated options logic.
+Do not claim the original task is complete until the requirements below are implemented and validated.
+
+==================================================
+FIRST — CORRECT TWO DEFECTS IN THE CURRENT PASS
+===============================================
+
+1. EARLY-CLOSE SUPPORT IS STILL MISSING
+
+The current `tradier_market_session.py` hardcodes the regular close at 16:00 ET.
+
+That does not satisfy the requirement for actual early-close days.
+
+Use an existing authoritative exchange-calendar dependency/helper in the repository if available.
+
+The canonical helper must return the actual close for each trading date, including early-close sessions.
+
+Tests must include at least:
+
+* normal trading day close at 16:00 ET
+* day after Thanksgiving early close
+* Christmas Eve early close when applicable
+* July 3 early close when applicable
+* scans allowed before the actual early close
+* scans blocked at and after the actual early close
+
+Do not maintain a growing hand-written list of early-close dates if an exchange calendar is available.
+
+2. SEVEN DAYS IS NOT PERMANENT LKG
+
+The current code still rejects options LKG after 604800 seconds.
+
+That violates the requirement:
+
+A structurally valid last-known-good snapshot remains displayable until a newer successful regular-session snapshot replaces it.
+
+Remove age-based rejection for valid options LKG availability.
+
+Age may control only the status label:
+
+* lkg_market_closed
+* stale_but_usable
+* stale_invalid
+
+Do not delete, skip, or refuse a structurally valid snapshot merely because it is older than seven days.
+
+An old valid snapshot should remain displayable during:
+
+* a long outage
+* multiple holidays
+* a backend deployment problem
+* an extended provider failure
+
+Only structural corruption or failed schema validation may make it unavailable.
+
+==================================================
+NOW FINISH THE ORIGINAL MISSING ARCHITECTURE
+============================================
+
+The previous report did not implement or prove the following. Complete them now.
+
+1. TRACE AND REPORT EVERY OPTIONS PROVIDER PATH
+
+Audit all current calls to:
+
+* Tradier get_quotes used for options scanning
+* get_option_expirations
+* get_option_chain
+* full-chain/Greeks calls
+
+Include:
+
+* master Options Flow scanner
+* supplement scanner
+* sectors chain summarizer
+* Watchlist scanner
+* Portfolio scanner
+* stale-LKG drain
+* quote retry
+* deferred drain
+* popup hydration
+* Confluence
+* startup warmers
+* manual/admin refresh routes
+
+For each call site report:
+
+* file
+* function
+* requesting scope
+* cache checked first
+* in-flight guard used
+* provider calls possible
+* regular-session gate used
+* whether another scope can independently scan the same symbol
+
+Do not merely say all paths use the same Tradier provider or limiter.
+
+2. ONE CANONICAL PER-TICKER OPTIONS SNAPSHOT
+
+Formalize one existing canonical per-ticker options snapshot.
+
+Do not create a competing architecture.
+
+The same stored snapshot must serve:
+
+* Options Flow
+* Watchlist
+* Portfolio
+* ticker popup
+* Confluence
+* sectors/themes aggregation
+* net-premium history writer
+
+The canonical snapshot must include, where available:
+
+Core:
+
+* ticker
+* options_score
+* options_signal
+* options_confidence
+* IV
+* Expected Move
+* total volume
+* call volume
+* put volume
+* volume put/call ratio
+* total OI
+* call OI
+* put OI
+
+Premium:
+
+* call premium
+* put premium
+* net premium
+* premium put/call ratio
+* ask premium
+* bid premium
+* midpoint/unclassified premium
+* premium per contract
+
+History:
+
+* net-premium change 1D
+* net-premium change 7D
+* net-premium change 30D
+* history availability/status
+
+Metadata:
+
+* scan ID or fingerprint
+* schema version
+* score version
+* score source
+* snapshot status
+* source
+* as-of timestamp
+* regular-session date
+* expiration scope
+* expiration used
+* DTE used
+* premium scope ID
+* premium calculation method
+* last successful scan time
+
+Historical fields must use the existing database history and make zero Tradier calls.
+
+3. REUSE THE SAME EXPIRATION AND CHAIN FETCH
+
+For the same ticker and canonical scan window:
+
+* fetch expirations once
+* fetch each required chain once
+* normalize once
+* calculate all core and premium fields from the same normalized result
+* persist the complete snapshot
+* let every consumer read/project it
+
+The requesting page must not be part of the provider-scan identity.
+
+Watchlist, Options Flow, Portfolio, popup, and Confluence requests for the same ticker must coalesce around the same in-flight work or use the existing snapshot.
+
+Do not allow a separate Watchlist fallback chain scan merely because its endpoint currently lacks premium fields.
+
+Do not allow a separate Net Flow scan merely because its endpoint currently lacks score, IV, Expected Move, or OI.
+
+4. PRESERVE BOTH P/C DEFINITIONS
+
+Add explicit authoritative names:
+
+* `volume_put_call_ratio` = put contract volume / call contract volume
+* `premium_put_call_ratio` = put premium dollars / call premium dollars
+
+Audit these current aliases:
+
+* pc_ratio
+* p_c
+* put_call
+* put_call_ratio
+* options_put_call_ratio
+
+Document their current meaning.
+
+Do not silently change compatibility aliases.
+
+5. COMPLETE ENDPOINT FIELD PARITY
+
+The Watchlist options endpoint must return:
+
+* Opt Score
+* Opt Signal
+* IV
+* Expected Move
+* options volume
+* total OI
+* call OI
+* put OI
+* Vol P/C
+* Prem P/C
+* call premium
+* put premium
+* net premium
+* ask premium
+* bid premium
+* midpoint/unclassified premium
+* 1D net-premium change
+* 7D net-premium change
+* 30D net-premium change
+* score/source/methodology/lifecycle metadata
+
+Options Flow ticker nodes must also return:
+
+* canonical Opt Score
+* Opt Signal
+* IV
+* Expected Move
+* total OI
+* call OI
+* put OI
+* score version
+* score source
+* lifecycle metadata
+
+These endpoints must remain cache-only.
+
+Projecting additional fields must make zero provider calls.
+
+6. AUDIT SCORE SEMANTICS — DO NOT CHANGE SCORING
+
+Compare:
+
+* master composite/final score
+* Watchlist/Portfolio fallback score
+* Confluence options score
+* sectors heat score
+
+Return exact:
+
+* formula
+* inputs
+* weights
+* score version
+* score source
+* comparability
+
+Expose fields such as:
+
+* options_score_version
+* options_score_source
+* options_score_inputs
+* options_score_components
+* score_comparable_across_rows
+
+Do not add Premium P/C or net-premium history into the score during this task.
+
+Do not recalibrate weights.
+
+7. PRESERVE LAST COMPLETED ASK/BID PREMIUM
+
+Do not present prior-session interval values as live.
+
+However, preserve:
+
+* last completed regular-session Ask Premium
+* last completed regular-session Bid Premium
+* last completed midpoint/unclassified premium
+* interval start
+* interval end
+* regular-session date
+* as-of timestamp
+
+During closed markets return these as prior-session LKG fields with an honest status.
+
+Do not blank them merely because the live interval ended.
+
+8. FIX PARTIAL-CACHE SUPPRESSION
+
+Audit `get_combined_ticker_data()` and every equivalent merge path.
+
+A small nonempty master snapshot must not prevent loading hundreds of valid supplement/LKG rows.
+
+Required merge order per symbol:
+
+1. durable broad LKG baseline
+2. valid supplement/current data overlay
+3. valid master/live data overlay
+
+A missing ticker in the master must retain its LKG row.
+
+Remove global fallback conditions equivalent to:
+
+`if not combined: load disk LKG`
+
+Fallback must be decided per ticker.
+
+9. SAFE LKG PROMOTION
+
+Do not treat every successful ticker batch as a successful whole-universe snapshot.
+
+Separate:
+
+* working/current scan data
+* promoted canonical LKG
+
+Only promote a whole-universe canonical snapshot after validating:
+
+* regular-session scan
+* known expected universe
+* schema validity
+* coverage count
+* no suspicious coverage collapse
+* acceptable provider failure rate
+* meaningful fields present
+
+Promotion must be atomic.
+
+A partial, timed-out, rate-limited, empty, or sparse scan must not replace the previous broad LKG.
+
+Per-ticker valid data may be merged safely without erasing unrelated symbols.
+
+10. ADD REAL DEDUPLICATION DIAGNOSTICS
+
+Add counters proving the architecture:
+
+* canonical snapshot hits
+* master hits
+* supplement hits
+* LKG hits
+* provider scan requests
+* provider scans coalesced
+* duplicate attempts blocked
+* quote calls
+* expiration calls
+* chain calls
+* calls by scope
+* calls by ticker
+* calls by scan fingerprint
+* consumers served from cache
+* current coverage
+* expected coverage
+* last successful promotion
+* last rejected promotion reason
+
+==================================================
+REQUIRED REGRESSION TESTS
+=========================
+
+Keep the existing 60 market-session tests.
+
+Add tests for the missing architecture:
+
+1. Options Flow requests a ticker, then Watchlist requests it.
+2. Watchlist requests a ticker, then Options Flow requests it.
+3. Watchlist, Options Flow, Portfolio, popup, and Confluence request the same ticker simultaneously.
+4. Same requests occur while a scan is already in flight.
+5. Memory cache expires but durable LKG exists.
+6. Valid LKG is older than seven days.
+7. Small master cache exists with a much larger supplement LKG.
+8. Provider returns a partial scan.
+9. Provider returns a timeout/rate limit.
+10. Closed-market requests occur after restart.
+11. Historical 1D/7D/30D fields are requested.
+12. Last-session Ask/Bid premium is requested after market close.
+13. Early-close trading date is tested before and after actual close.
+
+Required assertions:
+
+* one expiration/chain request set per ticker and scan fingerprint
+* opening another consumer does not add chain calls
+* closed-market provider call count is zero
+* history lookup provider call count is zero
+* both endpoints return identical Vol P/C
+* both endpoints return identical Prem P/C
+* both endpoints return identical score version/source
+* valid LKG older than seven days is still returned
+* partial master data does not suppress broad LKG
+* failed scans do not replace valid LKG
+* last completed Ask/Bid premium remains available after close
+
+==================================================
+FINAL REPORT
+============
+
+Do not repeat the previous summary.
+
+Return only the work completed in this continuation:
+
+1. Early-close implementation and calendar source
+2. Removal of the seven-day availability cutoff
+3. Complete provider call-site matrix
+4. Canonical snapshot selected
+5. Exact caches and durable stores reused
+6. Duplicate-call architecture before and after
+7. Field parity matrix
+8. Vol P/C and Prem P/C definitions
+9. Score formula/source comparison
+10. Confirmation scoring was unchanged
+11. Partial-cache merge fix
+12. Safe-promotion implementation
+13. Ask/Bid prior-session persistence
+14. Files changed
+15. New tests and results
+16. Measured provider calls in simultaneous-consumer tests
+17. Proof that valid data older than seven days remains available
+18. Proof that closed-market requests generate zero Tradier calls
+
+Do not checkpoint as complete merely because the app boots or market-session tests pass.
+
+The continuation is complete only when the canonical snapshot, field parity, call deduplication, durable LKG behavior, and architecture tests all pass.
