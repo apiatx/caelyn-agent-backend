@@ -227,6 +227,41 @@ def _si(v: Any) -> int:
         return 0
 
 
+def normalize_expected_move_pct(v: "float | None", unit: str = "unknown") -> "float | None":
+    """
+    Always returns expected move as **percentage points** (e.g. 4.33 for a 4.33% move).
+
+    Unit contract
+    -------------
+    "pct"      – value is already percentage points (e.g. 4.33).  Return as-is.
+    "fraction" – value is a decimal fraction (e.g. 0.0433 = 4.33%).  Multiply by 100.
+    "unknown"  – heuristic: abs(v) < 1.0 → treat as fraction (×100); else → pct already.
+
+    Examples
+    --------
+      normalize_expected_move_pct(0.0433, "fraction") → 4.33
+      normalize_expected_move_pct(4.33,   "pct")      → 4.33
+      normalize_expected_move_pct(0.0433, "unknown")  → 4.33   (< 1 → fraction)
+      normalize_expected_move_pct(5.42,   "unknown")  → 5.42   (≥ 1 → already pct)
+
+    The frontend always receives percentage points.  Never multiply by 100 again.
+    """
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if unit == "pct":
+        return round(f, 4)
+    if unit == "fraction":
+        return round(f * 100.0, 4)
+    # "unknown" heuristic — values below 1.0 are almost certainly decimal fractions
+    if abs(f) < 1.0:
+        return round(f * 100.0, 4)
+    return round(f, 4)
+
+
 def _classify_signal(
     total_vol: int,
     pc_ratio: float | None,
@@ -283,13 +318,14 @@ def _normalize_master_row(sym: str, row: dict) -> dict:
     iv_raw = oc.get("iv_current") or row.get("avg_call_iv") or row.get("avg_put_iv")
     em_raw = oc.get("expected_move_from_atm_straddle")
     if isinstance(em_raw, dict):
-        em = em_raw.get("value") or em_raw.get("move_pct") or em_raw.get("expected_move")
+        # dict from _estimate_expected_move: {"atm_strike", "expected_move_dollars", "expected_move_pct"}
+        # expected_move_pct is already in percentage points (e.g. 4.33 = 4.33% move)
+        em_display = normalize_expected_move_pct(_sf(em_raw.get("expected_move_pct")), unit="pct")
     else:
-        em = em_raw
+        # float from options_context or legacy store — apply unknown-unit heuristic
+        em_display = normalize_expected_move_pct(_sf(em_raw))
 
     iv_f = _sf(iv_raw)
-    em_f = _sf(em)
-    em_display = round(em_f * 100, 2) if em_f is not None else None
 
     score     = _sf(row.get("final_composite_score") or row.get("composite_score")) or 0.0
     pc        = _sf(row.get("pc_ratio"))
@@ -692,23 +728,25 @@ def _merge_options_sources(
     iv_f   = _sf(iv_raw)
     iv_out = round(iv_f, 4) if iv_f is not None else None
 
-    em_raw = _first_non_null(
+    _em_raw = _first_non_null(
         oc_p.get("expected_move_from_atm_straddle"),
         (_p or {}).get("expected_move"),
         (_l or {}).get("em"),
         (_l or {}).get("expected_move"),
     )
-    if isinstance(em_raw, dict):
-        em_raw = em_raw.get("value") or em_raw.get("move_pct") or em_raw.get("expected_move")
-    em_f = _sf(em_raw)
-    # supplement_v2: expected_move_pct is already in "percent" form (e.g. 4.33 = 4.33%),
-    # matching the LKG em field convention (em=5.42 → display=542 via em_f*100).
-    # Do NOT divide by 100 — supplement_v2 uses the same scale as the LKG em field.
-    if em_f is None:
+    if isinstance(_em_raw, dict):
+        # dict from _estimate_expected_move: {"atm_strike", "expected_move_dollars",
+        # "expected_move_pct"} — extract the pct key which is in percentage-point form.
+        em_out = normalize_expected_move_pct(_sf(_em_raw.get("expected_move_pct")), unit="pct")
+    else:
+        # float from LKG (stored in pct form by scan path) or master screener raw value.
+        # Apply "unknown" heuristic: <1.0 → fraction → ×100; else → already pct.
+        em_out = normalize_expected_move_pct(_sf(_em_raw))
+    # supplement_v2 fallback: expected_move_pct is explicitly percentage-point form
+    if em_out is None:
         _s_em_pct = _sf((_s or {}).get("expected_move_pct"))
         if _s_em_pct is not None:
-            em_f = _s_em_pct  # same scale as LKG em field (percent → ×100 = display)
-    em_out = round(em_f * 100, 2) if em_f is not None else None
+            em_out = normalize_expected_move_pct(_s_em_pct, unit="pct")
 
     # ── Volume ────────────────────────────────────────────────────────────────
     # Precedence: master → LKG (same scan, same scope) → supplement (7-60 DTE)

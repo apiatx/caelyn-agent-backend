@@ -502,6 +502,11 @@ async def lifespan(app):
         except Exception as _cno_seed_err:
             print(f"[STARTUP] confirmed_no_options seed failed (non-fatal): {_cno_seed_err}")
         try:
+            from data.options_theme_supplement import identify_rich_backfill_candidates as _id_rich
+            _id_rich()
+        except Exception as _rich_err:
+            print(f"[STARTUP] Rich backfill identification failed (non-fatal): {_rich_err}")
+        try:
             from data.options_theme_supplement import set_confluence_extra_symbols as _set_extra
             from services.watchlist_service import list_watchlists as _list_wl, load_watchlist as _load_wl
             _foreign_pfx = (
@@ -6336,6 +6341,11 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
         "options_inflight": inflight_data,
         "coalescing": coalescing_data,
         "supplement_loop": supplement_loop_diag,
+        # ── supplement_v2 rich backfill progress ───────────────────────────────
+        "rich_backfill": (lambda _rb: _rb)(
+            __import__("data.options_theme_supplement", fromlist=["get_rich_backfill_diag"])
+            .get_rich_backfill_diag()
+        ),
         # ── Phase 4A: active quote demand ─────────────────────────────────────
         "quote_demand": quote_demand_diag,
         "unmanaged_tradier_paths": {

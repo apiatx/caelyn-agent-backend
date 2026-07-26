@@ -671,6 +671,25 @@ def update_supplement_cache(results: list[dict]) -> None:
                 ticker_data[sym] = _merged
             else:
                 ticker_data[sym] = {**row, "_source": "supplement", "_cached_at": now}
+            # ── Rich backfill tracking ────────────────────────────────────────
+            # After the merge (which may have Guard-3 forward-filled old rich
+            # fields), check if this symbol was a known legacy-partial candidate
+            # and whether the scan has now completed enrichment.
+            if sym in _RICH_BACKFILL_CANDIDATES:
+                if _row_is_rich(ticker_data[sym]):
+                    _RICH_BACKFILL_CANDIDATES.discard(sym)
+                    _RICH_BACKFILL_STATE["rich_backfill_completed"] += 1
+                    _RICH_BACKFILL_STATE["rich_backfill_remaining"] = len(_RICH_BACKFILL_CANDIDATES)
+                    _RICH_BACKFILL_STATE["enriched_supplement_rows"] = (
+                        _RICH_BACKFILL_STATE.get("enriched_supplement_rows") or 0
+                    ) + 1
+                    _RICH_BACKFILL_STATE["legacy_partial_rows"] = max(
+                        0, (_RICH_BACKFILL_STATE.get("legacy_partial_rows") or 1) - 1
+                    )
+                else:
+                    # Scanned but still missing rich fields — Guard 3 could not
+                    # forward-fill (prior row was also None).  Will retry next cycle.
+                    _RICH_BACKFILL_STATE["rich_backfill_failed"] += 1
         cache.set(
             _SUPPLEMENT_CACHE_KEY,
             {"ticker_data": ticker_data, "cached_at": now, "last_scan_at": now},
@@ -1279,6 +1298,43 @@ _HIGH_PRIORITY_SYMBOLS: dict[str, float] = {}
 
 _PRIORITY_FILE = _pathlib.Path(__file__).resolve().parent / "options_priority_symbols.json"
 
+# ── Rich backfill tracking ─────────────────────────────────────────────────────
+# supplement_v2 added OI/IV/EM/score/signal to the chain summarizer output.
+# Legacy LKG rows (scanned before supplement_v2) have premium/vol but lack these
+# rich fields.  identify_rich_backfill_candidates() scans the LKG at startup,
+# queues legacy-partial rows at the front of the priority queue, and tracks
+# progress via _RICH_BACKFILL_STATE so /api/rate-status can report enrichment.
+#
+# Five required fields: options_score, options_signal, combined_iv,
+#                       expected_move_pct, total_oi
+#
+# Lifecycle:
+#   startup → identify_rich_backfill_candidates()     → candidates queued
+#   session → supplement loop scans them              → update_supplement_cache() called
+#             update_supplement_cache()               → marks completed / failed
+#   expose  → get_rich_backfill_diag()                → read by rate-status endpoint
+# ──────────────────────────────────────────────────────────────────────────────
+_RICH_FIELDS_REQUIRED: tuple[str, ...] = (
+    "options_score", "options_signal", "combined_iv", "expected_move_pct", "total_oi",
+)
+
+_RICH_BACKFILL_STATE: dict = {
+    "rich_backfill_candidates": 0,   # identified at startup
+    "rich_backfill_queued":     0,   # added to priority queue
+    "rich_backfill_completed":  0,   # successfully enriched this session
+    "rich_backfill_failed":     0,   # scanned but still missing rich fields
+    "rich_backfill_remaining":  0,   # candidates not yet completed
+    "enriched_supplement_rows": 0,   # LKG rows with all required fields
+    "legacy_partial_rows":      0,   # LKG rows missing ≥1 required field
+    "identified_at":            None,
+}
+_RICH_BACKFILL_CANDIDATES: set[str] = set()
+
+
+def _row_is_rich(row: dict) -> bool:
+    """Return True if the row has all five required supplement_v2 rich fields."""
+    return all(row.get(f) is not None for f in _RICH_FIELDS_REQUIRED)
+
 
 def _load_priority_disk() -> None:
     """Load persisted high-priority symbols from disk at startup."""
@@ -1496,3 +1552,84 @@ def _lkg_has_real_data(row: dict) -> bool:
     if prem > 0 and cpct is not None and ppct is not None:
         return True
     return False
+
+
+def identify_rich_backfill_candidates() -> int:
+    """
+    Scan the in-memory supplement LKG for rows that have real scan data but
+    are missing one or more supplement_v2 rich fields (options_score,
+    options_signal, combined_iv, expected_move_pct, total_oi).
+
+    Queues identified symbols at the front of the priority queue so the first
+    regular-session supplement scan enriches them.  Only the existing
+    supplement loop runs those scans — this function just identifies and queues.
+
+    Returns the number of legacy-partial candidates queued.
+
+    Safe to call from any sync context at startup.
+    """
+    global _RICH_BACKFILL_CANDIDATES
+    try:
+        from data.cache import cache as _c
+        lkg_snap = _c.get(_SUPPLEMENT_LKG_CACHE_KEY) or {}
+        lkg_td: dict = lkg_snap.get("ticker_data", {})
+    except Exception as _e:
+        print(f"[RICH_BACKFILL] LKG read failed: {_e}")
+        lkg_td = {}
+
+    candidates: list[str] = []
+    enriched   = 0
+    legacy     = 0
+
+    for sym, row in lkg_td.items():
+        if not _lkg_has_real_data(row):
+            continue   # placeholder / deferred — not a backfill candidate
+        if _row_is_rich(row):
+            enriched += 1
+        else:
+            legacy += 1
+            candidates.append(sym)
+
+    _RICH_BACKFILL_CANDIDATES = set(candidates)
+    _RICH_BACKFILL_STATE["rich_backfill_candidates"] = len(candidates)
+    _RICH_BACKFILL_STATE["rich_backfill_queued"]     = 0
+    _RICH_BACKFILL_STATE["rich_backfill_completed"]  = 0
+    _RICH_BACKFILL_STATE["rich_backfill_failed"]     = 0
+    _RICH_BACKFILL_STATE["rich_backfill_remaining"]  = len(candidates)
+    _RICH_BACKFILL_STATE["enriched_supplement_rows"] = enriched
+    _RICH_BACKFILL_STATE["legacy_partial_rows"]      = legacy
+    _RICH_BACKFILL_STATE["identified_at"]            = time.time()
+
+    if candidates:
+        add_high_priority_symbols(candidates)
+        _RICH_BACKFILL_STATE["rich_backfill_queued"] = len(candidates)
+        print(
+            f"[RICH_BACKFILL] {len(candidates)} legacy-partial supplement rows queued "
+            f"(enriched={enriched}, missing rich fields={legacy}) — "
+            f"will be scanned at next regular session"
+        )
+    else:
+        print(
+            f"[RICH_BACKFILL] All {enriched} supplement rows already enriched "
+            f"(supplement_v2) — no backfill needed"
+        )
+
+    return len(candidates)
+
+
+def get_rich_backfill_diag() -> dict:
+    """
+    Return a copy of the current rich-backfill progress counters for the
+    /api/rate-status endpoint.
+
+    Fields:
+      rich_backfill_candidates  — total legacy-partial rows identified at startup
+      rich_backfill_queued      — how many were added to the priority queue
+      rich_backfill_completed   — enriched successfully this session
+      rich_backfill_failed      — scan attempts that still lacked rich fields
+      rich_backfill_remaining   — candidates not yet completed (still queued)
+      enriched_supplement_rows  — LKG rows with all 5 required fields
+      legacy_partial_rows       — LKG rows missing ≥1 required field
+      identified_at             — epoch timestamp of the last identification run
+    """
+    return dict(_RICH_BACKFILL_STATE)

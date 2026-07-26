@@ -1,0 +1,103 @@
+FINAL BACKEND CORRECTION — FIX EXPECTED MOVE UNITS AND PROVE THE RICH BACKFILL
+
+Do not modify the frontend.
+Do not change the options architecture.
+Do not change scoring formulas.
+Do not create new provider calls.
+
+The supplement_v2 architecture is implemented, but two final requirements remain.
+
+1. FIX EXPECTED MOVE UNIT HANDLING
+
+The current implementation documents:
+
+expected_move_pct = 4.33 meaning 4.33%
+
+but _merge_options_sources() subsequently multiplies that value by 100, which would return 433 to the frontend.
+
+Use an explicit unit contract:
+
+- expected_move_dollars = dollar straddle value
+- expected_move_fraction = decimal fraction, e.g. 0.0433
+- expected_move_pct = percentage points, e.g. 4.33
+- options_expected_move returned to the Watchlist frontend = percentage points, e.g. 4.33
+
+Do not multiply expected_move_pct by 100.
+
+Only multiply expected_move_fraction by 100.
+
+Normalize legacy fields carefully:
+
+- master nested move_pct: inspect its actual unit
+- existing portfolio LKG em: inspect its actual stored unit
+- supplement_v2 expected_move_pct: already percentage points
+
+Add a single helper such as normalize_expected_move_pct(value, unit) rather than scattered arithmetic.
+
+Tests:
+
+- 0.0433 fraction → 4.33
+- 4.33 percentage points → 4.33
+- $4.33 dollar expected move must not be mistaken for 4.33%
+- final endpoint value displays as 4.33, never 433
+
+2. PROVE THE NEXT-SESSION RICH BACKFILL IS ACTUALLY WIRED
+
+The current legacy supplement LKG rows remain partial until rescanned.
+
+Verify that current Watchlist symbols missing any of:
+
+- options_score
+- options_signal
+- combined_iv
+- expected_move_pct
+- total_oi
+
+are prioritized ahead of the rest of the 794-ticker supplement universe during the next regular options session.
+
+Confirm:
+
+- candidates are automatically identified
+- they enter the existing high-priority supplement queue
+- successful rows are persisted immediately ticker-by-ticker
+- endpoint reads the new enriched rows without restart
+- failures remain queued for a later permitted retry
+- no scans occur outside the regular options session
+- no duplicate chain calls are introduced
+
+Expose real diagnostics:
+
+- rich_backfill_candidates
+- rich_backfill_queued
+- rich_backfill_completed
+- rich_backfill_failed
+- rich_backfill_remaining
+- enriched_supplement_rows
+- legacy_partial_rows
+
+3. DO NOT CLAIM COMPLETE YET
+
+Completion requires a real regular-session run.
+
+During the next session, report endpoint coverage before and after for the actual Watchlist:
+
+- rows with Score
+- Signal
+- Vol P/C
+- Prem P/C
+- IV
+- Expected Move
+- OI
+- Net Premium
+- Net 1D
+- Net 7D
+- Net 30D
+
+Show five previously partial tickers becoming complete from supplement_v2.
+
+Also confirm:
+
+- Expected Move values are realistic percentage values, not 100× inflated
+- one expiry and one chain workload per scan fingerprint
+- zero frontend changes
+- score weights unchanged
