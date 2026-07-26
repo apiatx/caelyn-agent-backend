@@ -269,19 +269,38 @@ async def summarize_ticker_chain(
     sym: str,
     tradier,
     expiry_cache: dict,
+    *,
+    underlying_price: Optional[float] = None,
 ) -> dict:
     """
     Fetch expirations + primary chain for *sym*, then summarize ALL contracts.
 
     Returns a dict containing:
 
-    Cumulative session metrics (unchanged from original design):
+    Cumulative session metrics:
       call_premium, put_premium, net_premium, call_volume, put_volume,
-      total_volume, put_call_ratio — estimated dollar premium and contract
-      counts summed over all contracts with volume > 0 in the selected expiry.
-      These are cumulative/session metrics and are NOT modified by this change.
+      total_volume — estimated dollar premium and contract counts summed
+      over all contracts with volume > 0 in the selected expiry.
 
-    Incremental interval trade-side metrics (new, volume-delta based):
+    Explicit P/C fields (supplement_v2+):
+      premium_put_call_ratio — put_prem / call_prem  (dollar flow ratio)
+      volume_put_call_ratio  — put_vol  / call_vol   (contract count ratio)
+      put_call_ratio         — alias for premium_put_call_ratio (backward compat)
+
+    Open interest (supplement_v2+):
+      call_oi, put_oi, total_oi — summed across ALL contracts in expiry
+                                   (not filtered by today's volume)
+
+    IV (supplement_v2+):
+      call_iv, put_iv, combined_iv, iv_skew — mean IV across active contracts
+
+    Expected move (supplement_v2+, requires underlying_price):
+      expected_move_dollars, expected_move_pct, expected_move_atm_strike
+
+    Chain score (supplement_v2+, requires underlying_price):
+      options_score, options_signal, score_components, score_method
+
+    Incremental interval trade-side metrics (volume-delta based):
       interval_ask_premium, interval_bid_premium,
       interval_midpoint_unknown_premium, interval_total_premium,
       interval_new_contract_volume — estimated dollar premium and contract
@@ -460,6 +479,12 @@ async def summarize_ticker_chain(
     call_vol  = 0
     put_vol   = 0
 
+    # ── supplement_v2: OI and IV accumulators ─────────────────────────────────
+    call_oi: int = 0
+    put_oi:  int = 0
+    call_iv_vals: list = []
+    put_iv_vals:  list = []
+
     # Interval (incremental delta) accumulators.
     int_ask     = 0.0   # delta premium traded at/near the ask
     int_bid     = 0.0   # delta premium traded at/near the bid
@@ -472,6 +497,16 @@ async def summarize_ticker_chain(
 
     for c in calls:
         vol = _si(c.get("volume"))
+
+        # OI: sum across ALL call contracts (not filtered by today's volume)
+        call_oi += _si(c.get("openInterest"))
+
+        # IV: collect from contracts with any volume (active market)
+        if vol > 0:
+            _iv = _sf(c.get("iv"))
+            if _iv is not None and _iv > 0:
+                call_iv_vals.append(_iv)
+
         if vol <= 0:
             continue
         b, a, l = _sf(c.get("bid")), _sf(c.get("ask")), _sf(c.get("last"))
@@ -515,6 +550,16 @@ async def summarize_ticker_chain(
 
     for p in puts:
         vol = _si(p.get("volume"))
+
+        # OI: sum across ALL put contracts (not filtered by today's volume)
+        put_oi += _si(p.get("openInterest"))
+
+        # IV: collect from contracts with any volume (active market)
+        if vol > 0:
+            _iv = _sf(p.get("iv"))
+            if _iv is not None and _iv > 0:
+                put_iv_vals.append(_iv)
+
         if vol <= 0:
             continue
         b, a, l = _sf(p.get("bid")), _sf(p.get("ask")), _sf(p.get("last"))
@@ -556,7 +601,69 @@ async def summarize_ticker_chain(
 
     total_vol = call_vol + put_vol
     net_prem  = call_prem - put_prem
-    pcr       = round(put_prem / call_prem, 3) if call_prem > 0 else None
+
+    # ── supplement_v2: explicit P/C ratios ────────────────────────────────────
+    # premium_put_call_ratio = put_prem / call_prem  (dollar flow direction)
+    # volume_put_call_ratio  = put_vol  / call_vol   (contract count direction)
+    # put_call_ratio is preserved as a backward-compat alias = premium P/C
+    premium_pcr = round(put_prem / call_prem, 3) if call_prem > 0 else None
+    volume_pcr  = round(put_vol  / call_vol,  3) if call_vol  > 0 else None
+    pcr = premium_pcr  # backward-compat alias (keep existing field name)
+
+    # ── supplement_v2: IV ────────────────────────────────────────────────────
+    call_iv   = round(sum(call_iv_vals) / len(call_iv_vals), 4) if call_iv_vals else None
+    put_iv    = round(sum(put_iv_vals)  / len(put_iv_vals),  4) if put_iv_vals  else None
+    if call_iv is not None and put_iv is not None:
+        combined_iv = round((call_iv + put_iv) / 2.0, 4)
+        iv_skew     = round(put_iv - call_iv, 4)
+    elif call_iv is not None:
+        combined_iv, iv_skew = call_iv, None
+    elif put_iv is not None:
+        combined_iv, iv_skew = put_iv, None
+    else:
+        combined_iv = iv_skew = None
+
+    # ── supplement_v2: underlying price (cache-first, no API call) ───────────
+    spot = underlying_price
+    if spot is None:
+        try:
+            from data.cache import cache as _mc2
+            _ms = _mc2.get("options_master_screener_v1") or _mc2.get("options_master_lkg_v1")
+            if _ms:
+                for _mr in (_ms.get("tickers") or []):
+                    if (_mr.get("ticker") or "").upper() == sym:
+                        spot = _sf(_mr.get("underlying_price") or _mr.get("price"))
+                        break
+        except Exception:
+            pass
+
+    # ── supplement_v2: expected move (ATM straddle) ───────────────────────────
+    em_dict: Optional[dict] = None
+    if spot and spot > 0:
+        try:
+            from data.chain_score_helper import estimate_expected_move as _em
+            em_dict = _em(spot, calls, puts)
+        except Exception:
+            pass
+
+    em_dollars = em_dict.get("expected_move_dollars") if em_dict else None
+    em_pct     = em_dict.get("expected_move_pct")     if em_dict else None
+    em_strike  = em_dict.get("atm_strike")            if em_dict else None
+
+    # ── supplement_v2: chain scoring ─────────────────────────────────────────
+    _score_result: dict = {}
+    if spot and spot > 0:
+        try:
+            from data.chain_score_helper import score_chain_summary as _scs
+            _score_result = _scs(sym, spot, calls, puts, expiration=primary_exp)
+        except Exception:
+            pass
+
+    options_score      = _score_result.get("options_score")
+    options_signal     = _score_result.get("options_signal")
+    score_components   = _score_result.get("score_components") or {}
+    score_method       = _score_result.get("score_method") or "chain_summary_v1"
+    contracts_scored   = _score_result.get("contracts_scored") or 0
 
     # ── Interval trade-side percentages ───────────────────────────────────────
     # Derived from summed delta dollars only — never per-contract averages.
@@ -588,7 +695,35 @@ async def summarize_ticker_chain(
         "call_volume":      call_vol,
         "put_volume":       put_vol,
         "total_volume":     total_vol,
-        "put_call_ratio":   pcr,
+        # ── P/C ratios — explicit, unambiguous (supplement_v2) ─────────────────
+        # premium_put_call_ratio: put dollar flow / call dollar flow
+        # volume_put_call_ratio:  put contract count / call contract count
+        # put_call_ratio:         backward-compat alias = premium_put_call_ratio
+        "premium_put_call_ratio": premium_pcr,
+        "volume_put_call_ratio":  volume_pcr,
+        "put_call_ratio":         pcr,
+        # ── Open interest (supplement_v2) ──────────────────────────────────────
+        "call_oi":          call_oi,
+        "put_oi":           put_oi,
+        "total_oi":         call_oi + put_oi,
+        # ── IV (supplement_v2) ─────────────────────────────────────────────────
+        "call_iv":          call_iv,
+        "put_iv":           put_iv,
+        "combined_iv":      combined_iv,
+        "iv_skew":          iv_skew,
+        # ── Expected move (supplement_v2, requires underlying_price) ───────────
+        "expected_move_dollars":  em_dollars,
+        "expected_move_pct":      em_pct,
+        "expected_move_atm_strike": em_strike,
+        "underlying_price":       spot,
+        # ── Chain score (supplement_v2, requires underlying_price) ─────────────
+        "options_score":     options_score,
+        "options_signal":    options_signal,
+        "score_components":  score_components,
+        "score_method":      score_method,
+        "contracts_scored":  contracts_scored,
+        # schema version — downstream consumers can gate on this
+        "supplement_schema_version": "supplement_v2",
         # ── Incremental interval trade-side classification ─────────────────────
         # Based on volume_delta = current_snapshot_volume − prior_snapshot_volume.
         # Only NEW contracts observed since the last scan cycle are classified.

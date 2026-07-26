@@ -647,7 +647,30 @@ def update_supplement_cache(results: list[dict]) -> None:
                     if existing_prem > 0 or cur.get("call_premium") or cur.get("put_premium"):
                         continue   # keep the existing row with real flow data
 
-            ticker_data[sym] = {**row, "_source": "supplement", "_cached_at": now}
+            # ── Guard 3: non-destructive merge — preserve existing rich fields ──────
+            # A new supplement_v2 row carries OI/IV/EM/score.  However a re-scan
+            # during off-peak can return None for these (e.g. spot price lookup
+            # missed) while the existing LKG row has good values.  Never overwrite
+            # a populated rich field with None.
+            # Rich fields added by supplement_v2: call_oi, put_oi, total_oi,
+            # call_iv, put_iv, combined_iv, iv_skew, expected_move_dollars,
+            # expected_move_pct, options_score, options_signal, underlying_price.
+            _RICH_FIELDS = (
+                "call_oi", "put_oi", "total_oi",
+                "call_iv", "put_iv", "combined_iv", "iv_skew",
+                "expected_move_dollars", "expected_move_pct",
+                "options_score", "options_signal",
+                "underlying_price",
+            )
+            _existing = ticker_data.get(sym) or _lkg_td.get(sym)
+            if _existing:
+                _merged = {**row, "_source": "supplement", "_cached_at": now}
+                for _rf in _RICH_FIELDS:
+                    if _merged.get(_rf) is None and _existing.get(_rf) is not None:
+                        _merged[_rf] = _existing[_rf]
+                ticker_data[sym] = _merged
+            else:
+                ticker_data[sym] = {**row, "_source": "supplement", "_cached_at": now}
         cache.set(
             _SUPPLEMENT_CACHE_KEY,
             {"ticker_data": ticker_data, "cached_at": now, "last_scan_at": now},

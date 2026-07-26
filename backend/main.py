@@ -13646,13 +13646,36 @@ async def _sectors_fast_backfill_loop():
                     "call_volume":     r.get("call_volume",  0),
                     "put_volume":      r.get("put_volume",   0),
                     "total_volume":    r.get("total_volume", 0),
-                    "put_call_ratio":  r.get("put_call_ratio"),
+                    # P/C ratios — explicit supplement_v2 fields
+                    "put_call_ratio":         r.get("put_call_ratio"),        # compat alias = premium P/C
+                    "premium_put_call_ratio":  r.get("premium_put_call_ratio"),
+                    "volume_put_call_ratio":   r.get("volume_put_call_ratio"),
                     # premium = total dollar flow (backward-compat field)
                     "premium":         (r.get("call_premium") or 0.0) + (r.get("put_premium") or 0.0),
                     "scan_result":     scan_result,
                     "expiration_used": r.get("expiration_used"),
                     "scanned_at":      _scan_ts,   # explicit audit timestamp
                     "updated_at":      _scan_ts,
+                    # ── supplement_v2: OI, IV, EM, Score ──────────────────────
+                    # Direct pass-through from enriched summarize_ticker_chain().
+                    # These fields are None for legacy supplement_v1 rows.
+                    "call_oi":                   r.get("call_oi"),
+                    "put_oi":                    r.get("put_oi"),
+                    "total_oi":                  r.get("total_oi"),
+                    "call_iv":                   r.get("call_iv"),
+                    "put_iv":                    r.get("put_iv"),
+                    "combined_iv":               r.get("combined_iv"),
+                    "iv_skew":                   r.get("iv_skew"),
+                    "expected_move_dollars":     r.get("expected_move_dollars"),
+                    "expected_move_pct":         r.get("expected_move_pct"),
+                    "expected_move_atm_strike":  r.get("expected_move_atm_strike"),
+                    "underlying_price":          r.get("underlying_price"),
+                    "options_score":             r.get("options_score"),
+                    "options_signal":            r.get("options_signal"),
+                    "score_components":          r.get("score_components"),
+                    "score_method":              r.get("score_method"),
+                    "contracts_scored":          r.get("contracts_scored"),
+                    "supplement_schema_version": r.get("supplement_schema_version"),
                     # ── Interval trade-side classification pass-through ────────
                     # Direct copy from summarize_ticker_chain() — no recomputation.
                     # _build_ticker_node() strips these to None for stale LKG rows

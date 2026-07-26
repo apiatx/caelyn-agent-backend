@@ -636,6 +636,9 @@ def _merge_options_sources(
         (_l or {}).get("score"),
         (_l or {}).get("options_score"),
         (_l or {}).get("final_composite_score"),
+        # supplement_v2: chain-scored rows from sectors_chain_summarizer
+        (_s or {}).get("options_score"),
+        (_s or {}).get("composite_score"),
     )
     score_f   = _sf(raw_score)
     score_val = round(float(score_f), 1) if score_f is not None else None
@@ -665,6 +668,8 @@ def _merge_options_sources(
         (_p or {}).get("primary_signal"),
         (_l or {}).get("signal"),
         (_l or {}).get("options_signal"),
+        # supplement_v2: chain-scored rows from sectors_chain_summarizer
+        (_s or {}).get("options_signal"),
     )
     raw_signal_str = (raw_signal or "").lower().replace(" ", "_")
     signal_display = (
@@ -679,6 +684,10 @@ def _merge_options_sources(
         (_p or {}).get("avg_put_iv"),
         (_l or {}).get("iv"),
         oc_l.get("iv_current"),
+        # supplement_v2: IV from chain_score_helper
+        (_s or {}).get("combined_iv"),
+        (_s or {}).get("call_iv"),
+        (_s or {}).get("put_iv"),
     )
     iv_f   = _sf(iv_raw)
     iv_out = round(iv_f, 4) if iv_f is not None else None
@@ -691,7 +700,14 @@ def _merge_options_sources(
     )
     if isinstance(em_raw, dict):
         em_raw = em_raw.get("value") or em_raw.get("move_pct") or em_raw.get("expected_move")
-    em_f   = _sf(em_raw)
+    em_f = _sf(em_raw)
+    # supplement_v2: expected_move_pct is already in "percent" form (e.g. 4.33 = 4.33%),
+    # matching the LKG em field convention (em=5.42 → display=542 via em_f*100).
+    # Do NOT divide by 100 — supplement_v2 uses the same scale as the LKG em field.
+    if em_f is None:
+        _s_em_pct = _sf((_s or {}).get("expected_move_pct"))
+        if _s_em_pct is not None:
+            em_f = _s_em_pct  # same scale as LKG em field (percent → ×100 = display)
     em_out = round(em_f * 100, 2) if em_f is not None else None
 
     # ── Volume ────────────────────────────────────────────────────────────────
@@ -762,6 +778,8 @@ def _merge_options_sources(
         (_l or {}).get("call_open_interest"),
         (_l or {}).get("call_oi"),
         oc_l.get("call_open_interest"),
+        # supplement_v2: OI from sectors_chain_summarizer
+        (_s or {}).get("call_oi"),
     ))
     put_oi = _si_n(_first_non_null(
         oc_p.get("put_open_interest"),
@@ -769,10 +787,14 @@ def _merge_options_sources(
         (_l or {}).get("put_open_interest"),
         (_l or {}).get("put_oi"),
         oc_l.get("put_open_interest"),
+        # supplement_v2: OI from sectors_chain_summarizer
+        (_s or {}).get("put_oi"),
     ))
     total_oi = _si_n(_first_non_null(
         (_p or {}).get("open_interest"),
         (_l or {}).get("open_interest"),
+        # supplement_v2: OI from sectors_chain_summarizer
+        (_s or {}).get("total_oi"),
     ))
 
     # ── Premium fields ────────────────────────────────────────────────────────

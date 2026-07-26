@@ -1,3 +1,4 @@
+- [chain_score_helper + supplement_v2 architecture](chain-score-helper-arch.md) — singleton OptionsFlowEngine.__new__() scorer; supplement_v2 adds OI/IV/EM/score to chain summarizer; Guard 3 non-destructive merge; EM in percent form (×100 for display)
 - [Watchlist options multi-source join](watchlist-options-join.md) — supplement rows have no data_available; LKG has score/IV/OI but no premium $; join required _merge_options_sources + batch history in scan_watchlist_options step 2.5/2.6
 - [Fundamentals quality audit corrections](fundamentals-quality-audit.md) — EPS Growth=fiscal-exact-YoY-diluted; IC=strict-TTM-EBIT/IE; NetDebt/EBITDA=post-BS; overlay=pure-fn-never-stored; backfill-universe=cache-table not tickers field
 - [Social refresh httpx timeout bypass](social-refresh-httpx-timeout-bypass.md) — httpx per-chunk timeout bypassed by grok-4.3 streaming chunks; asyncio.wait_for(135s) required around Phase-1 gather and Phase-2 call

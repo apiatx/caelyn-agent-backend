@@ -1,0 +1,442 @@
+BACKEND ONLY — ELIMINATE THE REMAINING PARTIAL WATCHLIST OPTIONS ROWS
+
+Do not modify the frontend.
+
+The frontend is now working. Some Watchlist rows display Premium P/C, Net Premium, and Opt Volume, while other columns remain blank.
+
+The current multi-source join exposed the true remaining problem:
+
+- Supplement LKG covers roughly 794 tickers.
+- Portfolio/master LKG covers only roughly 238 rich rows.
+- Supplement rows contain premium and volume but do not persist the complete chain metrics.
+- `_merge_options_sources()` cannot display Score, Signal, Vol P/C, IV, EM, or OI when no rich master/LKG row exists.
+
+Do not add more frontend aliases.
+Do not create another scanner.
+Do not make duplicate Tradier calls.
+Do not change the Options Score weights.
+Do not fabricate historical data.
+
+Fix the broad supplement chain source so every successfully scanned optionable ticker persists all metrics available from the chain it already fetched.
+
+==================================================
+1. AUDIT THE CURRENTLY BLANK ROWS
+==================================================
+
+Use the actual large Watchlist and identify:
+
+- 5 rows that are fully populated
+- 5 rows that are still partially blank
+- 5 rows that are completely unavailable
+
+For each ticker inspect:
+
+- current supplement row
+- current master row
+- Portfolio LKG row
+- history row
+- final `/api/watchlist/{id}/options-signals` row
+
+For every blank field, state whether the problem is:
+
+- field exists but was not mapped
+- field existed but was overwritten
+- source did not persist the field
+- chain was never successfully scanned
+- ticker has no options
+- historical baseline does not exist
+
+Do not edit anything until this matrix is printed.
+
+==================================================
+2. ENRICH THE EXISTING SUPPLEMENT CHAIN SUMMARIZER
+==================================================
+
+The existing `sectors_chain_summarizer.summarize_ticker_chain()` already fetches:
+
+- the selected expiration
+- the complete calls array
+- the complete puts array
+
+Use those exact arrays.
+
+Do not make another expiration call.
+Do not make another chain call.
+Do not fetch each metric separately.
+
+While iterating over the existing calls and puts, persist:
+
+VOLUME:
+
+- call_volume
+- put_volume
+- total_volume
+- `volume_put_call_ratio = put_volume / call_volume`
+
+PREMIUM:
+
+- call_premium
+- put_premium
+- net_premium
+- `premium_put_call_ratio = put_premium / call_premium`
+
+OPEN INTEREST:
+
+- call_open_interest
+- put_open_interest
+- total_open_interest
+
+IV:
+
+- average call IV
+- average put IV
+- combined IV
+- IV methodology
+- number of contracts contributing to IV
+
+EXPECTED MOVE:
+
+Use the existing underlying price already available in the shared quote/watchlist cache.
+
+Do not make a new quote request.
+
+Find the closest valid ATM call and put for the selected expiration and calculate Expected Move using the same established ATM-straddle definition used by Options Flow.
+
+Persist:
+
+- expected_move
+- expected_move_pct
+- expected_move_method
+- ATM strike used
+- underlying price used
+
+METADATA:
+
+- expiration_used
+- DTE
+- expiration_scope
+- scan fingerprint
+- scan timestamp
+- regular-session date
+- data-quality flags
+- chain contract count
+- valid call count
+- valid put count
+
+==================================================
+3. FIX THE AMBIGUOUS P/C FIELD
+==================================================
+
+The supplement summarizer currently calculates:
+
+`put_premium / call_premium`
+
+and stores it under the ambiguous name:
+
+`put_call_ratio`
+
+That must not continue as the authoritative meaning.
+
+Add explicit fields:
+
+- `volume_put_call_ratio`
+- `premium_put_call_ratio`
+
+Preserve `put_call_ratio` only as a compatibility alias, but document exactly what it represents.
+
+For the Watchlist and all new consumers:
+
+- Vol P/C must use `volume_put_call_ratio`
+- Prem P/C must use `premium_put_call_ratio`
+
+Never derive one from the other.
+
+Add a test where:
+
+- volume P/C is 0.50
+- premium P/C is 2.00
+
+Assert they remain separate through persistence, reload, merge, endpoint, and frontend response.
+
+==================================================
+4. SCORE AND SIGNAL EVERY SUCCESSFULLY SCANNED CHAIN
+==================================================
+
+Do not create a separate Watchlist score formula.
+
+Reuse the existing canonical Tradier Flow scoring implementation on the chain data already fetched by the supplement scanner.
+
+First look for an existing shared pure scoring helper.
+
+If scoring is currently trapped inside `TradierFlowEngine`, extract only the reusable chain-normalization and scoring logic into a shared helper used by both:
+
+- master Options Flow scanner
+- supplement chain summarizer
+
+Do not copy and maintain two formulas.
+
+The shared scoring input should accept:
+
+- symbol
+- underlying price
+- expiration
+- calls
+- puts
+- existing cached stock/technical context
+- data-quality metadata
+
+It must return:
+
+- options_score
+- options_score_version
+- options_score_source
+- options_score_components
+- options_signal
+- options_confidence
+- IV
+- Expected Move
+- call/put/total OI
+- call/put/total volume
+- volume P/C
+- data-quality flags
+
+Use the existing `tradier_flow_v1` weights unchanged.
+
+==================================================
+5. HANDLE NEUTRAL CHAINS HONESTLY
+==================================================
+
+A ticker should not remain blank merely because its chain contained no unusual contracts.
+
+When:
+
+- the chain was fetched successfully
+- valid contracts existed
+- no contracts passed the unusual-flow filter
+
+Return an honest neutral result:
+
+- `options_score = 0.0`
+- `options_signal = "NO UNUSUAL FLOW"` or the existing canonical neutral label
+- `options_score_status = "neutral_chain_scanned"`
+- `options_score_version = "tradier_flow_v1"`
+- `options_data_available = true`
+
+The core chain metrics must still be populated:
+
+- Vol P/C
+- IV
+- EM
+- Opt Volume
+- OI
+- premium metrics
+
+Only use null Score/Signal when:
+
+- no chain was fetched
+- provider work failed
+- ticker is not optionable
+- chain contained no valid contracts
+
+Do not convert provider failures into zero scores.
+
+==================================================
+6. PRESERVE THE COMPLETE SUPPLEMENT ROW
+==================================================
+
+Update the supplement in-memory cache and durable LKG schema so all new metrics survive:
+
+- server restart
+- market close
+- weekends
+- partial refreshes
+- sparse updates
+
+Increment the supplement schema version.
+
+When loading old LKG rows:
+
+- preserve their existing premium data
+- mark missing rich metrics as `legacy_partial_snapshot`
+- do not reject them
+- replace them ticker-by-ticker after a successful enriched scan
+
+A sparse new row must never overwrite populated older fields with null.
+
+==================================================
+7. REPAIR THE MULTI-SOURCE JOIN PRECEDENCE
+==================================================
+
+After the supplement rows become rich, update `_merge_options_sources()` so field ownership is:
+
+CURRENT MASTER ROW:
+
+- preferred score and signal
+- preferred IV/EM/OI
+- preferred master expiration scope
+
+ENRICHED SUPPLEMENT ROW:
+
+- fallback score and signal when master is absent
+- fallback IV/EM/OI
+- volume P/C
+- all premium fields
+- Ask/Bid/Mid fields
+- primary-expiration metrics
+
+PORTFOLIO LKG:
+
+- legacy fallback only
+
+HISTORY STORE:
+
+- Net 1D/7D/30D only
+
+Use field-level selection.
+
+Never select one whole row and discard valid fields from another.
+
+Expose source metadata per major field group:
+
+- score_source
+- core_metrics_source
+- premium_source
+- history_source
+
+==================================================
+8. BACKFILL EXISTING BLANK WATCHLIST TICKERS
+==================================================
+
+Existing supplement LKG rows do not contain IV/OI/EM/Score, so joining them again will not fix those blanks.
+
+During the next regular options session:
+
+1. Prioritize current Watchlist symbols that have premium data but lack rich metrics.
+2. Process them through the existing supplement scan queue.
+3. Use the existing rate limiter and scan budget.
+4. Persist each successful enriched row immediately.
+5. Continue across batches until all eligible Watchlist symbols are covered.
+6. Do not wait for an entire 794-ticker universe pass before saving progress.
+
+Do not make Tradier calls outside the regular options session.
+
+Before waiting for a new scan, search existing master snapshots, durable screener caches, and Neon history for already available rich rows and use those to backfill immediately without provider calls.
+
+Add diagnostics:
+
+- rich_backfill_candidates
+- rich_backfill_queued
+- rich_backfill_completed
+- rich_backfill_failed
+- rich_backfill_remaining
+- legacy_partial_rows
+- enriched_supplement_rows
+
+==================================================
+9. FINAL WATCHLIST RESPONSE
+==================================================
+
+For every successfully scanned optionable ticker, return:
+
+- options_score
+- options_score_version
+- options_score_source
+- options_score_status
+- options_signal
+- options_confidence
+- volume_put_call_ratio
+- premium_put_call_ratio
+- options_call_premium
+- options_put_premium
+- options_net_premium
+- net_premium_change_1d
+- net_premium_change_7d
+- net_premium_change_30d
+- options_iv
+- options_expected_move
+- options_volume
+- options_call_volume
+- options_put_volume
+- options_open_interest
+- options_call_open_interest
+- options_put_open_interest
+- snapshot_status
+- snapshot_source
+- snapshot_as_of
+- expiration_used
+- expiration_scope
+- options_data_available
+
+Net 30D may remain null only when the database honestly lacks a 30-day baseline.
+
+Return an explicit history status instead of pretending it exists.
+
+==================================================
+10. TESTS
+==================================================
+
+Add tests for:
+
+A. Supplement chain produces Vol P/C and Prem P/C separately.
+
+B. OI is summed from the already fetched calls/puts without another provider request.
+
+C. IV is calculated and persisted from valid chain IV values.
+
+D. Expected Move uses the existing cached underlying price with zero extra provider calls.
+
+E. Master and supplement use the same shared score implementation.
+
+F. A neutral successfully scanned chain returns Score 0 and `NO UNUSUAL FLOW`, while retaining core metrics.
+
+G. A failed chain returns null score and an honest failure status.
+
+H. Enriched supplement fields survive disk save and restart.
+
+I. A sparse refresh cannot erase rich fields.
+
+J. Watchlist endpoint returns complete rows for supplement-only tickers.
+
+K. Provider-call count remains one expiration workload and one chain workload per scan fingerprint.
+
+==================================================
+11. LIVE PROOF — REQUIRED
+==================================================
+
+After implementation, use the actual current Watchlist endpoint.
+
+Show:
+
+- 5 previously partial rows now complete
+- 5 master-covered rows still complete
+- 5 truly unavailable/no-options rows with honest reasons
+
+For the full Watchlist report:
+
+- rows with Score
+- rows with Signal
+- rows with Vol P/C
+- rows with Prem P/C
+- rows with Net Premium
+- rows with IV
+- rows with EM
+- rows with OI
+- rows with Net 1D
+- rows with Net 7D
+- rows with Net 30D
+- pending rows
+- confirmed no-options rows
+- provider failures
+- foreign/OTC rows
+
+Also prove:
+
+- zero new frontend changes
+- zero duplicate provider calls
+- zero after-hours provider calls
+- Options Flow remains unchanged
+- score formula weights remain unchanged
+
+Do not claim completion merely because the endpoint join works.
+
+Completion requires the broad supplement source itself to persist the rich metrics needed to eliminate partial rows.
