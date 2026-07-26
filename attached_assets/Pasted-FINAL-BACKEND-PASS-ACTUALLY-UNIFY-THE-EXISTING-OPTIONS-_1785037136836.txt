@@ -1,0 +1,489 @@
+FINAL BACKEND PASS — ACTUALLY UNIFY THE EXISTING OPTIONS DATA PATHS
+
+Continue from the current checkpoint.
+
+Do not touch the frontend.
+Do not redo market-session or early-close work.
+Do not add more standalone metadata without connecting the real production paths.
+Do not create a third options scanner, cache, or scoring formula.
+Do not change scoring weights.
+
+The current continuation is still incomplete.
+
+Your own report confirms:
+
+* Portfolio/Watchlist still use `portfolio_composite_v1`
+* Options Flow still uses a different score
+* `premium_put_call_ratio` is `None` in the Portfolio/Watchlist scan path
+* premium values remain populated by `tradier_flow_engine`, a different path
+* tests only prove shared Vol P/C, not shared Prem P/C
+* no canonical snapshot was named
+* no production endpoint field-parity matrix was provided
+* no complete provider call-site matrix was provided
+* no safe whole-universe promotion implementation was reported
+* no actual prior-session Ask/Bid capture and persistence implementation was reported
+
+This pass is only about closing those remaining gaps.
+
+==================================================
+
+1. SELECT THE EXISTING CANONICAL SNAPSHOT
+   ==================================================
+
+Identify which existing snapshot already contains the richest normalized Tradier result and make it authoritative.
+
+Prefer the existing master/supplement Options Flow ticker snapshot if it already contains:
+
+* premium flow
+* volume
+* OI
+* IV
+* Expected Move
+* score inputs
+* expiration metadata
+
+Do not invent another parallel snapshot.
+
+State explicitly:
+
+* canonical snapshot name
+* cache key
+* durable storage
+* writer
+* readers
+* schema version
+* lifecycle/status fields
+
+All of these consumers must read it:
+
+* Options Flow
+* Watchlist
+* Portfolio
+* ticker popup
+* Confluence
+* sectors/themes
+* net-premium history
+
+A consumer may project/rename fields, but may not independently fetch or recalculate a reduced replacement snapshot.
+
+==================================================
+2. REMOVE THE SEPARATE WATCHLIST/PORTFOLIO CHAIN RESULT
+=======================================================
+
+The Portfolio/Watchlist service currently produces a reduced scan row where:
+
+* Premium P/C is `None`
+* premium fields are absent
+* score semantics differ
+
+Repair this in place.
+
+Required behavior:
+
+1. Look for the canonical ticker snapshot.
+2. If present, normalize that complete snapshot for Watchlist/Portfolio.
+3. Do not run a separate scoped chain scan.
+4. During an allowed regular-session refresh, delegate missing-ticker scanning to the same canonical scanner/work unit used by Options Flow.
+5. Read the resulting canonical snapshot after the shared work completes.
+6. During closed markets, return canonical LKG immediately.
+
+Remove or disable any independent Portfolio/Watchlist expiration-and-chain provider path that duplicates the canonical scanner.
+
+Do not remove the public service function or endpoint. Preserve its path and response compatibility while changing its source underneath.
+
+==================================================
+3. ONE REAL SCAN FINGERPRINT
+============================
+
+The current in-flight lock alone is insufficient unless every actual scanner uses the same identity.
+
+Use one provider-work fingerprint based on the existing canonical scan scope:
+
+* ticker
+* regular-session date
+* expiration scope
+* selected expiration set
+* schema version
+
+Do not include:
+
+* requesting page
+* Watchlist
+* Portfolio
+* Options Flow
+* popup
+* Confluence
+* sectors
+
+All real provider call paths must claim this fingerprint before:
+
+* quote calls used by the options scan
+* expiration calls
+* chain calls
+
+A blocked/coalesced consumer must later read the completed canonical snapshot.
+
+It must not merely skip the scan and return an empty/reduced row.
+
+==================================================
+4. WIRE DIAGNOSTICS INTO REAL PROVIDER CALLS
+============================================
+
+`record_provider_call()` existing as a helper is not proof.
+
+Wire it immediately around every actual Tradier options provider call.
+
+Required dimensions:
+
+* call type
+* ticker
+* scan fingerprint
+* originating scanner/work unit
+* requesting consumer when available
+
+Audit and instrument all real call sites in:
+
+* Tradier Flow master scanner
+* supplement scanner
+* sectors summarizer/backfill
+* Portfolio/Watchlist service
+* retries
+* deferred drains
+* stale-LKG refresh
+* manual/admin refresh
+* popup or Confluence hydration if any
+
+Return the complete call-site matrix.
+
+After the fix, there should not be an independent Portfolio/Watchlist chain call site.
+
+==================================================
+5. BUILD THE COMPLETE CANONICAL ROW FROM ONE NORMALIZED CHAIN
+=============================================================
+
+The canonical per-ticker row must contain, when available:
+
+Core:
+
+* ticker
+* options_score
+* options_signal
+* options_confidence
+* IV
+* Expected Move
+* total options volume
+* call volume
+* put volume
+* `volume_put_call_ratio`
+* total OI
+* call OI
+* put OI
+* Vol/OI metrics already calculated
+
+Premium:
+
+* call premium
+* put premium
+* net premium
+* `premium_put_call_ratio`
+* raw/effective Premium P/C where already supported
+* one-sided flow classification
+* ask premium
+* bid premium
+* midpoint/unclassified premium
+* ask percentage
+* bid percentage
+* classified percentage
+* premium per contract
+
+History:
+
+* net premium change 1D
+* net premium change 7D
+* net premium change 30D
+* history availability/status fields
+
+Metadata:
+
+* scan fingerprint
+* schema version
+* score version
+* score source
+* score components
+* snapshot status
+* source
+* options as-of
+* regular-session date
+* last successful scan time
+* expiration scope
+* expirations used
+* DTE scope
+* premium scope ID
+* premium calculation method
+
+All core and premium metrics must be calculated from the same normalized chain result and expiration scope.
+
+History must be injected from the existing database without a provider call.
+
+==================================================
+6. COMPLETE BOTH ENDPOINT PROJECTIONS
+=====================================
+
+WATCHLIST/PORTFOLIO OUTPUT MUST INCLUDE:
+
+* options_score
+* options_signal
+* IV
+* Expected Move
+* total volume
+* call volume
+* put volume
+* total OI
+* call OI
+* put OI
+* `volume_put_call_ratio`
+* `premium_put_call_ratio`
+* call premium
+* put premium
+* net premium
+* ask premium
+* bid premium
+* midpoint/unclassified premium
+* net premium change 1D
+* net premium change 7D
+* net premium change 30D
+* score version/source/components
+* snapshot source/status/as-of
+* expiration and premium methodology metadata
+
+OPTIONS FLOW TICKER NODE OUTPUT MUST INCLUDE:
+
+* canonical options_score
+* options_signal
+* options_confidence
+* IV
+* Expected Move
+* total OI
+* call OI
+* put OI
+* `volume_put_call_ratio`
+* `premium_put_call_ratio`
+* all existing premium fields
+* history fields
+* score version/source/components
+* lifecycle/methodology metadata
+
+Do not remove compatibility aliases.
+
+Both projections must read the same canonical ticker row.
+
+==================================================
+7. HANDLE SCORE SEMANTICS CORRECTLY
+===================================
+
+Do not change either formula in this pass.
+
+However, one ticker must not display different score recipes merely because a different page requested it.
+
+Required behavior:
+
+* Canonical/master score wins when present.
+* Watchlist, Portfolio, popup, Confluence, and Options Flow display that same canonical score and score version.
+* The old Portfolio fallback formula may remain only for a genuine legacy snapshot that lacks the canonical score.
+* Any fallback row must explicitly expose:
+
+  * fallback score source
+  * fallback score version
+  * `score_comparable_across_rows = false`
+* Do not perform a fresh Portfolio fallback chain scan solely to calculate that fallback score.
+
+==================================================
+8. IMPLEMENT REAL PRIOR-SESSION ASK/BID PERSISTENCE
+===================================================
+
+Do not only pass through fields that happen to exist in a mocked row.
+
+At the end of each completed regular-session interval/session, persist:
+
+* last completed Ask Premium
+* last completed Bid Premium
+* last completed midpoint/unclassified premium
+* interval start
+* interval end
+* session date
+* as-of timestamp
+* source/status
+
+Store these in the existing canonical durable snapshot.
+
+After close, return:
+
+* live interval fields as unavailable when appropriate
+* last-completed-session fields populated
+* status `lkg_market_closed` or stale equivalent
+* honest prior-session timestamp
+
+Prove this through the real writer → durable store → restart/load → endpoint path.
+
+==================================================
+9. FIX OLD-LKG LOSS DURING SAVE
+===============================
+
+Loading an old snapshot indefinitely is not enough if the next partial save discards its baseline.
+
+Audit every disk/Neon save function.
+
+An old valid baseline must not be excluded from the merge merely because its `saved_at` age exceeds seven days.
+
+Required save behavior:
+
+1. Load the prior structurally valid baseline regardless of age.
+2. Merge valid new per-ticker rows onto it.
+3. Preserve untouched symbols.
+4. Reject invalid/sparse replacement rows.
+5. Write atomically.
+6. Only replace the whole promoted universe after coverage validation.
+
+Age may change status, never eligibility.
+
+==================================================
+10. SAFE PROMOTION
+==================
+
+Implement the missing distinction between:
+
+* accumulating working rows
+* promoted canonical whole-universe LKG
+
+Do not checkpoint a partial batch as a new complete universe.
+
+Promotion validation must include:
+
+* regular options session
+* expected universe count known
+* schema-valid rows
+* successful scan completion
+* coverage ratio versus expected universe
+* coverage ratio versus previous promoted snapshot
+* provider error/rate-limit counts
+* suspicious-collapse threshold
+* meaningful-field threshold
+
+If validation fails:
+
+* keep the previous promoted LKG
+* retain valid per-ticker working updates separately or merge them safely
+* record the rejected-promotion reason
+
+Reuse existing storage; do not invent a competing database.
+
+==================================================
+11. REAL INTEGRATION TESTS, NOT HELPER-ONLY TESTS
+=================================================
+
+The existing tests mostly exercise helpers and handcrafted rows.
+
+Add integration-style tests through the real service/projection functions.
+
+TEST A — Options Flow then Watchlist
+
+* request ticker through real Options Flow service path
+* request same ticker through real Watchlist service path
+* assert one expiration work set
+* assert one chain work set
+* assert identical scan fingerprint
+* assert identical Vol P/C
+* assert identical Prem P/C
+* assert identical score and score version
+
+TEST B — Watchlist then Options Flow
+
+Same assertions in reverse order.
+
+TEST C — Five simultaneous real consumers
+
+Use actual service entry points for:
+
+* Options Flow
+* Watchlist
+* Portfolio
+* popup
+* Confluence
+
+Assert:
+
+* one provider work owner
+* other requests coalesce/read cache
+* one canonical row
+* no consumer returns an empty placeholder after being blocked
+* identical metric values and metadata
+
+TEST D — Premium parity
+
+Use a fixture with nonzero call and put premium.
+
+Assert:
+
+* Watchlist Premium P/C is not `None`
+* Options Flow Premium P/C is not `None`
+* values are identical
+* call/put/net premiums are identical
+
+TEST E — History parity
+
+Seed existing history storage.
+
+Assert both endpoint projections return identical 1D/7D/30D fields and provider counters remain unchanged.
+
+TEST F — Prior-session persistence
+
+Write a completed-session snapshot, restart/reload the durable layer, then call both endpoints after close.
+
+Assert last-session Ask/Bid/midpoint values are present and marked prior-session.
+
+TEST G — 10-day-old baseline plus partial save
+
+Seed 100 valid rows with a saved timestamp 10 days old.
+
+Save a valid 3-row update.
+
+Assert all 100 symbols remain and the 3 rows are updated.
+
+TEST H — Failed promotion
+
+Seed broad promoted LKG, then produce a sparse/failed working scan.
+
+Assert promoted LKG is unchanged and rejection reason is recorded.
+
+==================================================
+FINAL RESPONSE REQUIRED
+=======================
+
+Return:
+
+1. Canonical snapshot selected
+2. Production readers and writers
+3. Provider call-site matrix before and after
+4. Independent Portfolio/Watchlist provider calls removed or delegated
+5. Real fingerprint implementation
+6. Endpoint parity matrix
+7. Non-null Premium P/C proof
+8. Score/version parity proof
+9. Prior-session Ask/Bid persistence proof
+10. Old-baseline partial-save proof
+11. Safe-promotion proof
+12. Actual provider counts from both request orders
+13. Actual provider counts from five simultaneous real consumers
+14. Exact files changed
+15. Integration test results
+
+Do not report helper-level lock tests as endpoint/service deduplication proof.
+
+Do not mark complete while:
+
+* Portfolio/Watchlist Premium P/C is `None`
+* score/version differs by page
+* two scanners can fetch the same ticker
+* either endpoint lacks the complete canonical fields
+* an old baseline can be dropped during a partial save
+* Ask/Bid prior-session values are not persisted through restart

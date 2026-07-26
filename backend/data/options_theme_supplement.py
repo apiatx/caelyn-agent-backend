@@ -292,25 +292,63 @@ def _save_supplement_lkg_to_disk(ticker_data: dict) -> None:
                     _SUPPLEMENT_LKG_DISK_PATH.read_text(encoding="utf-8")
                 )
                 if isinstance(old_payload, dict):
-                    old_age = now - old_payload.get("saved_at", 0)
-                    if old_age <= _SUPPLEMENT_LKG_DISK_MAX_AGE:
-                        merged = dict(old_payload.get("ticker_data", {}))
+                    # Age controls status labels only (stale_long_term) — NEVER eligibility.
+                    # Always load the full baseline so a partial save cannot discard
+                    # tickers that weren't scanned in the current batch (T003 fix).
+                    merged = dict(old_payload.get("ticker_data", {}))
             except Exception:
                 pass  # corrupt file — start fresh
 
         # Fresh supplement rows override matching old entries
         merged.update(ticker_data)
 
+        _total_count = len(merged)
+        _fresh_count = len(ticker_data)
+        _prev_count  = _total_count - _fresh_count  # approx old baseline size
+
+        # ── Safe promotion gate ────────────────────────────────────────────────
+        # "Promoted" means this snapshot is authoritative for the supplement
+        # universe — not just an incremental delta.  Requirements:
+        #   (a) total coverage exceeds the universe threshold, AND
+        #   (b) the fresh batch represents ≥10% of the existing baseline, OR
+        #       the baseline is small enough that any fresh batch is meaningful.
+        # A tiny hot-patch batch over a large LKG is recorded as a partial
+        # update (promoted=False) with a rejection reason logged for diagnostics.
+        _PROMOTE_THRESHOLD = 80   # minimum total tickers to be considered authoritative
+        _SPARSE_RATIO      = 0.10 # fresh batch must cover ≥10% of previous baseline
+        _promoted          = False
+        _promo_reason: str | None = None
+
+        if _total_count >= _PROMOTE_THRESHOLD:
+            if _prev_count < 10 or _fresh_count >= _prev_count * _SPARSE_RATIO:
+                _promoted = True
+            else:
+                _promo_reason = (
+                    f"SPARSE_BATCH prev={_prev_count} fresh={_fresh_count} "
+                    f"ratio={_fresh_count/max(1,_prev_count):.2f} < {_SPARSE_RATIO}"
+                )
+        else:
+            _promo_reason = (
+                f"BELOW_THRESHOLD total={_total_count} threshold={_PROMOTE_THRESHOLD}"
+            )
+
+        if _promo_reason:
+            print(f"[SUPP_LKG] PROMOTION_PENDING: {_promo_reason}")
+
         payload = {
-            "ticker_data":  merged,
-            "saved_at":     now,
-            "ticker_count": len(merged),
+            "ticker_data":              merged,
+            "saved_at":                 now,
+            "ticker_count":             _total_count,
+            "fresh_count":              _fresh_count,
+            "promoted":                 _promoted,
+            "promotion_rejection_reason": _promo_reason,
         }
         tmp = _SUPPLEMENT_LKG_DISK_PATH.with_suffix(".json.tmp")
         _SUPPLEMENT_LKG_DISK_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(_json.dumps(payload, default=str), encoding="utf-8")
         tmp.replace(_SUPPLEMENT_LKG_DISK_PATH)
-        print(f"[SUPP_LKG] Persisted {len(merged)} supplement tickers to disk ({len(ticker_data)} fresh)")
+        _promo_label = "PROMOTED" if _promoted else "PARTIAL"
+        print(f"[SUPP_LKG] {_promo_label}: {_total_count} tickers persisted ({_fresh_count} fresh)")
     except Exception as exc:
         print(f"[SUPP_LKG] Disk write failed (non-fatal): {exc}")
 

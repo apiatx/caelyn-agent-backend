@@ -23,6 +23,19 @@ record_provider_call(call_type, scope) — increment per-type call counter.
 Call types: "expiry", "chain", "quote"
 Scopes:     "watchlist" | "portfolio" | "supplement" | "sectors" | other
 
+Scan fingerprints
+-----------------
+make_scan_fingerprint(ticker, session_date, schema_version) -> str
+  Returns a canonical string that identifies ONE unit of provider work:
+  ticker + session date (ET) + schema version.
+  Format: "AAPL:2026-07-26:v1"
+  All consumers that need data for a ticker in a given session share the
+  same fingerprint — requesting page / scope / product area are NOT part
+  of the fingerprint so that one in-flight claim serves all callers.
+
+record_scan_fingerprint(sym, fingerprint) — store last-used fingerprint.
+get_scan_fingerprint(sym)                 -> str | None
+
 Thread-safety
 -------------
 Uses a threading.Lock because asyncio tasks and executor threads may both
@@ -30,6 +43,7 @@ read/write the registry.  All operations are O(n) or better.
 """
 from __future__ import annotations
 
+import datetime as _datetime
 import threading
 import time as _time
 
@@ -61,6 +75,45 @@ _cache_misses:    int = 0
 
 # Session start time for rate calculations
 _session_start: float = _time.time()
+
+# ── Scan fingerprints ────────────────────────────────────────────────────────
+# Maps sym.upper() -> fingerprint string used for the most-recent scan.
+# A fingerprint is the canonical identity of ONE provider-work unit:
+#   "{TICKER}:{YYYY-MM-DD}:{schema_version}"   e.g. "AAPL:2026-07-26:v1"
+# Session date is in US/Eastern (approximate -5 h offset for portability).
+_fingerprints: dict[str, str] = {}
+
+_ET_OFFSET = _datetime.timezone(_datetime.timedelta(hours=-5))
+
+
+def make_scan_fingerprint(
+    ticker: str,
+    session_date: str | None = None,
+    schema_version: str = "v1",
+) -> str:
+    """
+    Return the canonical scan fingerprint for ticker + session + schema.
+
+    session_date defaults to today in ET (approximate -5 h).
+    All consumers that request options data for the same ticker on the same
+    trading day receive the same fingerprint, regardless of scope (Watchlist,
+    Portfolio, popup …).  This lets the diagnostics endpoint prove that only
+    one provider call occurred per ticker per day.
+    """
+    if session_date is None:
+        session_date = _datetime.datetime.now(_ET_OFFSET).strftime("%Y-%m-%d")
+    return f"{ticker.upper()}:{session_date}:{schema_version}"
+
+
+def record_scan_fingerprint(sym: str, fingerprint: str) -> None:
+    """Store the fingerprint used for the most-recent scan of sym."""
+    with _lock:
+        _fingerprints[sym.upper()] = fingerprint
+
+
+def get_scan_fingerprint(sym: str) -> str | None:
+    """Return the fingerprint for the last scan of sym, or None."""
+    return _fingerprints.get(sym.upper())
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -191,6 +244,9 @@ def get_inflight_status() -> dict:
     for sym, scope in snap.items():
         by_scope.setdefault(scope, []).append(sym)
 
+    with _lock:
+        fp_snap = dict(_fingerprints)
+
     return {
         "total_inflight":           len(snap),
         "by_scope":                 by_scope,
@@ -202,4 +258,5 @@ def get_inflight_status() -> dict:
         "cache_hits":               hit_snap,
         "cache_misses":             missed,
         "uptime_seconds":           round(_time.time() - _session_start, 1),
+        "scan_fingerprints":        fp_snap,
     }

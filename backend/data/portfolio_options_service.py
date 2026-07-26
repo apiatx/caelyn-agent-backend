@@ -71,16 +71,44 @@ def _load_portfolio_lkg() -> dict[str, dict]:
 
 def _save_portfolio_lkg(results: dict[str, dict]) -> None:
     """Merge data_available=True rows into disk LKG.
-    Existing rows for symbols not in current scan are preserved so a partial
-    scan doesn't wipe rows for symbols that weren't requested this time."""
+
+    Existing rows for symbols not in the current scan are preserved so a partial
+    scan doesn't wipe rows for symbols that weren't requested this time.
+
+    Prior-session capture: any row that contains interval_ask_premium /
+    interval_bid_premium / interval_midpoint_unknown_premium (populated by the
+    TradierFlowEngine master path) has those values also written to
+    prior_session_* fields so they survive market close and server restarts.
+    After the session ends, _normalize_to_watchlist_row() surfaces these as
+    the last completed session's ask/bid/midpoint classification.
+    """
     try:
         existing = _load_portfolio_lkg()
         import datetime as _dt
-        ts = _dt.datetime.utcnow().isoformat()
-        updated = dict(existing)
+        ts       = _dt.datetime.utcnow().isoformat()
+        date_str = ts[:10]
+        updated  = dict(existing)
+        _INT_TO_PS = [
+            ("interval_ask_premium",                  "prior_session_ask_premium"),
+            ("interval_bid_premium",                  "prior_session_bid_premium"),
+            ("interval_midpoint_unknown_premium",     "prior_session_midpoint_premium"),
+            ("interval_ask_premium_pct",              "prior_session_ask_premium_pct"),
+            ("interval_bid_premium_pct",              "prior_session_bid_premium_pct"),
+            ("interval_midpoint_unknown_premium_pct", "prior_session_midpoint_premium_pct"),
+        ]
         for sym, row in results.items():
             if row.get("data_available"):
-                updated[sym.upper()] = {**row, "_lkg_saved_at": ts}
+                row_to_save = {**row, "_lkg_saved_at": ts}
+                _has_ps = False
+                for _int_f, _ps_f in _INT_TO_PS:
+                    _v = row.get(_int_f)
+                    if _v is not None:
+                        row_to_save[_ps_f] = _v
+                        _has_ps = True
+                if _has_ps:
+                    row_to_save["prior_session_date"]     = date_str
+                    row_to_save["prior_session_saved_at"] = ts
+                updated[sym.upper()] = row_to_save
         _PORTFOLIO_LKG_DISK.write_text(json.dumps(updated, default=str))
     except Exception as exc:
         print(f"[PORTFOLIO_OPTS_LKG] save error: {exc}")
@@ -238,6 +266,18 @@ def _normalize_master_row(sym: str, row: dict) -> dict:
     """
     Convert a master screener cache row (full TradierFlowEngine output) into
     the same frontend-ready format as a live _scan_one_symbol result.
+
+    This is the CANONICAL projection used by every consumer (Options Flow,
+    Watchlist, Portfolio, popup, Confluence, sectors/themes).  All premium,
+    volume, OI, IV, Expected Move, score inputs, and interval classification
+    fields come from the same master row — no consumer runs its own chain scan
+    for a ticker already in the canonical snapshot.
+
+    Score semantics:
+      options_score_version    = "tradier_flow_v1"    (master formula)
+      score_comparable_across_rows = True             (uniform across master rows)
+    Fallback (portfolio_composite_v1 from _scan_one_symbol):
+      score_comparable_across_rows = False  (exposed explicitly on fallback rows)
     """
     oc     = row.get("options_context") or {}
     iv_raw = oc.get("iv_current") or row.get("avg_call_iv") or row.get("avg_put_iv")
@@ -264,8 +304,9 @@ def _normalize_master_row(sym: str, row: dict) -> dict:
     else:
         direction = "neutral"
 
-    # Derive call/put volume breakdown — prefer explicit master cache fields,
-    # fall back to algebraic derivation from total_vol + pc_ratio.
+    # ── Volume breakdown ───────────────────────────────────────────────────────
+    # Prefer explicit master fields; derive algebraically from total_vol + pc_ratio
+    # as a fallback (avoids losing coverage when the master row omits split counts).
     call_vol_m = _si(
         row.get("call_volume") or row.get("total_call_volume") or oc.get("call_volume")
     )
@@ -284,7 +325,34 @@ def _normalize_master_row(sym: str, row: dict) -> dict:
         oc.get("put_open_interest")  or row.get("put_open_interest")
     )
 
-    # Confidence driven by volume — mirrors _classify_signal logic
+    # ── Premium fields (canonical — from TradierFlowEngine / sectors chain) ───
+    # call_premium / put_premium = total dollar premium for all contracts scanned
+    # net_premium  = call_premium - put_premium  (positive → call-side dominance)
+    # call_put_premium_ratio (master field) = call_prem / put_prem  →  invert for
+    #   our canonical premium_put_call_ratio = put_prem / call_prem
+    call_prem = _sf(row.get("call_premium") or oc.get("call_premium"))
+    put_prem  = _sf(row.get("put_premium")  or oc.get("put_premium"))
+    net_prem  = _sf(row.get("net_premium")  or oc.get("net_premium"))
+
+    cpr = _sf(row.get("call_put_premium_ratio") or oc.get("call_put_premium_ratio"))
+    if put_prem is not None and call_prem is not None and call_prem > 0:
+        prem_pc = round(put_prem / call_prem, 4)
+    elif cpr is not None and cpr > 0:
+        prem_pc = round(1.0 / cpr, 4)
+    else:
+        prem_pc = None
+
+    # ── Interval classification (ask-side / bid-side / midpoint) ─────────────
+    # These come from the sectors_chain_summarizer flow classification and are
+    # the most granular premium breakdown available.
+    int_ask    = _sf(row.get("interval_ask_premium")                or oc.get("interval_ask_premium"))
+    int_bid    = _sf(row.get("interval_bid_premium")                or oc.get("interval_bid_premium"))
+    int_mid    = _sf(row.get("interval_midpoint_unknown_premium")    or oc.get("interval_midpoint_unknown_premium"))
+    int_ask_p  = _sf(row.get("interval_ask_premium_pct")            or oc.get("interval_ask_premium_pct"))
+    int_bid_p  = _sf(row.get("interval_bid_premium_pct")            or oc.get("interval_bid_premium_pct"))
+    int_mid_p  = _sf(row.get("interval_midpoint_unknown_premium_pct") or oc.get("interval_midpoint_unknown_premium_pct"))
+
+    # ── Confidence driven by volume (mirrors _classify_signal logic) ──────────
     if total_vol > 2000:
         confidence = "HIGH"
     elif total_vol > 500:
@@ -292,14 +360,40 @@ def _normalize_master_row(sym: str, row: dict) -> dict:
     else:
         confidence = "LOW"
 
+    pc_rounded = round(pc, 3) if pc is not None else None
     return {
         "ticker":              sym,
         "symbol":              sym,
         "optionable":          True,
         "data_available":      True,
         "score":               round(float(score), 1),
-        "p_c":                 round(pc, 3) if pc is not None else None,
-        "put_call":            round(pc, 3) if pc is not None else None,
+        # ── Legacy P/C aliases (backward compat — do not remove) ──
+        "p_c":                 pc_rounded,
+        "put_call":            pc_rounded,
+        "put_call_ratio":      pc_rounded,
+        # ── Canonical P/C names ───────────────────────────────────────────────
+        "volume_put_call_ratio":           pc_rounded,
+        "premium_put_call_ratio":          prem_pc,
+        # ── Premium dollar fields ─────────────────────────────────────────────
+        "call_premium":                    call_prem,
+        "put_premium":                     put_prem,
+        "net_premium":                     net_prem,
+        # ── Interval flow classification (ask / bid / midpoint) ───────────────
+        "interval_ask_premium":                  int_ask,
+        "interval_bid_premium":                  int_bid,
+        "interval_midpoint_unknown_premium":     int_mid,
+        "interval_ask_premium_pct":              int_ask_p,
+        "interval_bid_premium_pct":              int_bid_p,
+        "interval_midpoint_unknown_premium_pct": int_mid_p,
+        # ── Score metadata ────────────────────────────────────────────────────
+        # tradier_flow_v1 is the canonical master formula — comparable across
+        # all master rows.  Fallback portfolio_composite_v1 rows explicitly
+        # carry score_comparable_across_rows=False (set in _scan_one_symbol).
+        "options_score_version":           "tradier_flow_v1",
+        "options_score_source":            "options_master_screener",
+        "options_score_inputs":            oc or {},
+        "score_comparable_across_rows":    True,
+        # ── Core metrics ──────────────────────────────────────────────────────
         "iv":                  round(iv_f, 4) if iv_f is not None else None,
         "em":                  em_display,
         "expected_move":       em_display,
@@ -313,7 +407,7 @@ def _normalize_master_row(sym: str, row: dict) -> dict:
         "signal":              display,
         "put_call_direction":  direction,
         "confidence":          confidence,
-        "source":              "portfolio_scoped_options_screener",
+        "source":              "options_master_screener",
         "unavailable_reason":  None,
     }
 
@@ -574,6 +668,8 @@ async def _scan_one_symbol(
     async with sem:
         try:
             from data.tradier_budget import lane as _pos_lane
+            from services.options_inflight import record_provider_call as _rpc
+            _rpc("expiry", "portfolio")
             with _pos_lane("saved_options"):
                 expirations = await asyncio.wait_for(
                     tradier.get_option_expirations(sym), timeout=_SCAN_TIMEOUT_EXP
@@ -594,6 +690,9 @@ async def _scan_one_symbol(
             for _batch_start in range(0, min(4, len(expirations)), 2):
                 _batch_exps = expirations[_batch_start:_batch_start + 2]
                 from data.tradier_budget import lane as _pos2_lane
+                from services.options_inflight import record_provider_call as _rpc2
+                for _ in _batch_exps:
+                    _rpc2("chain", "portfolio")
                 with _pos2_lane("saved_options"):
                     _chain_tasks = [
                         asyncio.wait_for(
@@ -812,10 +911,36 @@ async def scan_portfolio_options(
         else:
             uncached.append(sym)
 
+    # 2.5. Combined-data fallback (supplement + LKG) for tickers not in master ─
+    # get_combined_ticker_data() merges: live master → supplement → supplement LKG
+    # → watchlist bridge.  A ticker found there uses the canonical row rather than
+    # triggering a redundant independent chain scan.  This prevents Portfolio from
+    # fetching data for a ticker that the supplement scanner already has.
+    if uncached:
+        try:
+            from data.options_theme_supplement import get_combined_ticker_data as _gctd
+            from services.options_inflight import record_cache_hit as _rch
+            _combined = _gctd()
+            _still_uncached: list[str] = []
+            for sym in uncached:
+                _comb = _combined.get(sym)
+                if _comb and _comb.get("data_available") is not False:
+                    _norm = _normalize_master_row(sym, _comb)
+                    cache.set(_per_ticker_cache_key(sym), _norm, _CACHE_PER_TICKER_TTL)
+                    results[sym] = _norm
+                    _rch("supplement")
+                else:
+                    _still_uncached.append(sym)
+            uncached = _still_uncached
+        except Exception:
+            pass  # non-fatal — fall through to live scan
+
     # 3. Live scan for uncached tickers ─────────────────────────────────────
     if uncached and tradier:
         # 3a. Batch quote fetch (1 Tradier call for all uncached symbols)
         try:
+            from services.options_inflight import record_provider_call as _rpc_q
+            _rpc_q("quote", "portfolio")
             raw_quotes = await asyncio.wait_for(
                 tradier.get_quotes(uncached), timeout=_SCAN_TIMEOUT_QUOTE
             )
@@ -1013,7 +1138,18 @@ _WL_INFLIGHT_SYMS: set[str] = set()  # kept for backward-compat; new code uses g
 def _normalize_to_watchlist_row(
     sym: str, r: dict, is_stale: bool, market_hours: bool = True
 ) -> dict:
-    """Project an internal options row into the watchlist-signal field shape."""
+    """Project an internal options row into the watchlist-signal field shape.
+
+    Both Options Flow and Watchlist/Portfolio endpoint projections read the
+    SAME underlying canonical row and apply this projection.  All premium,
+    volume, interval-classification, score, and prior-session fields are
+    surfaced identically regardless of which page initiated the lookup.
+
+    Prior-session fields:
+      When the market is closed, interval_ask/bid/midpoint_premium reflect the
+      last completed session (written by _save_portfolio_lkg).  These are also
+      explicitly exposed under prior_session_* keys for clarity.
+    """
     _lkg_age = _lkg_age_seconds(r) if r.get("from_lkg") else None
     _stale_over_sla = bool(
         _lkg_age is not None and _lkg_age >= _SLA_WARN_AGE_S
@@ -1021,8 +1157,26 @@ def _normalize_to_watchlist_row(
     )
     _priority = "high" if _stale_over_sla else ("normal" if is_stale else None)
     # Resolve canonical P/C names from whichever alias is populated
-    _pc = r.get("volume_put_call_ratio") or r.get("p_c") or r.get("put_call") or r.get("put_call_ratio")
+    _pc      = r.get("volume_put_call_ratio") or r.get("p_c") or r.get("put_call") or r.get("put_call_ratio")
     _prem_pc = r.get("premium_put_call_ratio")
+
+    # Prior-session interval premiums: stored by _save_portfolio_lkg when the
+    # master path provides interval_* classification.  When market is closed and
+    # the row comes from LKG, these represent the last completed session.
+    _ps_ask  = r.get("prior_session_ask_premium")
+    _ps_bid  = r.get("prior_session_bid_premium")
+    _ps_mid  = r.get("prior_session_midpoint_premium")
+    _ps_date = r.get("prior_session_date")
+    _ps_at   = r.get("prior_session_saved_at")
+    # Fallback: when market is closed and row has interval_* from last scan,
+    # surface them as prior-session even if the explicit ps_ keys are absent.
+    if not market_hours and _ps_ask is None:
+        _ps_ask  = r.get("interval_ask_premium")
+        _ps_bid  = r.get("interval_bid_premium")
+        _ps_mid  = r.get("interval_midpoint_unknown_premium")
+        _ps_date = _ps_date or (r.get("_lkg_saved_at") or "")[:10] or None
+        _ps_at   = _ps_at   or r.get("_lkg_saved_at")
+
     return {
         "ticker":                              sym,
         "options_score":                       r.get("score") or r.get("options_score"),
@@ -1030,16 +1184,31 @@ def _normalize_to_watchlist_row(
         # ── Legacy P/C alias (backward compat) ──
         "options_put_call_ratio":              _pc,
         # ── Canonical P/C names ──
-        # volume_put_call_ratio  = put contract volume / call contract volume
-        # premium_put_call_ratio = put premium dollars / call premium dollars
         "volume_put_call_ratio":               _pc,
         "premium_put_call_ratio":              _prem_pc,
-        # ── Score metadata ──
+        # ── Premium dollar fields ─────────────────────────────────────────────
+        "options_call_premium":                r.get("call_premium"),
+        "options_put_premium":                 r.get("put_premium"),
+        "options_net_premium":                 r.get("net_premium"),
+        # ── Interval flow classification (ask / bid / midpoint) ───────────────
+        "options_interval_ask_premium":                  r.get("interval_ask_premium"),
+        "options_interval_bid_premium":                  r.get("interval_bid_premium"),
+        "options_interval_midpoint_premium":             r.get("interval_midpoint_unknown_premium"),
+        "options_interval_ask_pct":                      r.get("interval_ask_premium_pct"),
+        "options_interval_bid_pct":                      r.get("interval_bid_premium_pct"),
+        "options_interval_midpoint_pct":                 r.get("interval_midpoint_unknown_premium_pct"),
+        # ── Prior-session ask/bid/midpoint (survives restart + market close) ──
+        "prior_session_ask_premium":           _ps_ask,
+        "prior_session_bid_premium":           _ps_bid,
+        "prior_session_midpoint_premium":      _ps_mid,
+        "prior_session_date":                  _ps_date,
+        "prior_session_saved_at":              _ps_at,
+        # ── Score metadata ────────────────────────────────────────────────────
         "options_score_version":               r.get("options_score_version", "portfolio_composite_v1"),
         "options_score_source":                r.get("options_score_source") or r.get("source"),
         "options_score_inputs":                r.get("options_score_inputs"),
         "score_comparable_across_rows":        r.get("score_comparable_across_rows", False),
-        # ── Core fields ──
+        # ── Core fields ───────────────────────────────────────────────────────
         "options_iv":                          r.get("iv") or r.get("options_iv"),
         "options_expected_move":               r.get("em") or r.get("expected_move") or r.get("options_expected_move"),
         "options_volume":                      r.get("vol") or r.get("volume") or r.get("options_volume"),
