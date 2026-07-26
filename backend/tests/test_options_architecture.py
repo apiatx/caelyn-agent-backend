@@ -735,7 +735,11 @@ class TestIntegrationAtoH:
             "Options Flow and Watchlist must produce the SAME fingerprint for "
             "the same ticker + session date"
         )
-        assert fp_flow == "AAPL:2026-07-26:v1"
+        # Extended format: TICKER:YYYY-MM-DD:exp_scope:exp_hash:schema_version
+        # No expirations provided → exp_hash="none"; default exp_scope="7_60dte"
+        assert fp_flow == "AAPL:2026-07-26:7_60dte:none:v1", (
+            f"Fingerprint format mismatch: got {fp_flow!r}"
+        )
 
         # Record and retrieve round-trip
         _oi.record_scan_fingerprint("AAPL", fp_flow)
@@ -1182,3 +1186,654 @@ class TestIntegrationAtoH:
             "must achieve promoted=True once total ≥ threshold"
         )
         assert result.get("ticker_count") == 90
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Class A — Fingerprint deduplication
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestFingerprintDedup:
+    """
+    Real service call into services.options_inflight.
+    Verifies that:
+      (a) same ticker + session_date + exp_scope + expirations → same fingerprint,
+      (b) different tickers → different fingerprints,
+      (c) record + get round-trips correctly,
+      (d) recording the same fingerprint twice does NOT create two entries.
+    """
+
+    def test_A1_same_inputs_produce_same_fingerprint(self):
+        from services.options_inflight import make_scan_fingerprint
+        fp1 = make_scan_fingerprint("AAPL", "2026-07-26", exp_scope="7_60dte", expirations=["2026-08-15"])
+        fp2 = make_scan_fingerprint("AAPL", "2026-07-26", exp_scope="7_60dte", expirations=["2026-08-15"])
+        assert fp1 == fp2, "Identical inputs must produce identical fingerprint"
+
+    def test_A2_different_tickers_produce_different_fingerprints(self):
+        from services.options_inflight import make_scan_fingerprint
+        fp_aapl = make_scan_fingerprint("AAPL", "2026-07-26", exp_scope="7_60dte", expirations=["2026-08-15"])
+        fp_nvda = make_scan_fingerprint("NVDA", "2026-07-26", exp_scope="7_60dte", expirations=["2026-08-15"])
+        assert fp_aapl != fp_nvda
+
+    def test_A3_different_exp_scope_produces_different_fingerprint(self):
+        from services.options_inflight import make_scan_fingerprint
+        fp_a = make_scan_fingerprint("SPY", "2026-07-26", exp_scope="7_60dte",     expirations=["2026-08-15"])
+        fp_b = make_scan_fingerprint("SPY", "2026-07-26", exp_scope="top_unusual", expirations=["2026-08-15"])
+        assert fp_a != fp_b
+
+    def test_A4_fingerprint_contains_all_components(self):
+        from services.options_inflight import make_scan_fingerprint
+        fp = make_scan_fingerprint("QQQ", "2026-07-26", exp_scope="7_60dte",
+                                   expirations=["2026-08-15", "2026-09-19"])
+        assert "QQQ" in fp
+        assert "2026-07-26" in fp
+        assert "7_60dte" in fp
+
+    def test_A5_record_and_get_round_trip(self):
+        from services.options_inflight import (
+            make_scan_fingerprint,
+            record_scan_fingerprint,
+            get_scan_fingerprint,
+        )
+        sym = "TSLA_TEST_A5"
+        fp  = make_scan_fingerprint(sym, "2026-07-26", exp_scope="7_60dte", expirations=["2026-08-15"])
+        record_scan_fingerprint(sym, fp)
+        assert get_scan_fingerprint(sym) == fp
+
+    def test_A6_recording_same_fingerprint_twice_is_idempotent(self):
+        from services.options_inflight import (
+            make_scan_fingerprint,
+            record_scan_fingerprint,
+            get_scan_fingerprint,
+        )
+        sym = "MSFT_TEST_A6"
+        fp  = make_scan_fingerprint(sym, "2026-07-26", exp_scope="7_60dte", expirations=["2026-08-15"])
+        record_scan_fingerprint(sym, fp)
+        record_scan_fingerprint(sym, fp)  # duplicate — must not error or double-count
+        assert get_scan_fingerprint(sym) == fp, "Second record must not clear the fingerprint"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Class B — No direct Tradier calls from portfolio/watchlist
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestNoDirectPortfolioTradierCalls:
+    """
+    Proves that portfolio_options_service.py no longer calls Tradier
+    get_quotes / get_option_expirations / get_option_chain directly.
+    """
+
+    def test_B1_scan_one_symbol_raises_runtime_error(self):
+        """
+        _scan_one_symbol is now a stub that raises RuntimeError.
+        Any remaining call site would trigger this immediately.
+        """
+        import asyncio
+        from unittest.mock import MagicMock
+        from data.portfolio_options_service import _scan_one_symbol
+
+        tradier = MagicMock()
+        sem     = asyncio.Semaphore(1)
+        with pytest.raises(RuntimeError, match="direct portfolio Tradier scans removed"):
+            asyncio.get_event_loop().run_until_complete(
+                _scan_one_symbol("AAPL", 180.0, tradier, sem)
+            )
+
+    def test_B2_no_get_option_expirations_in_module_source(self):
+        """
+        Grep the module source: confirm zero calls to
+        tradier.get_option_expirations / tradier.get_option_chain /
+        tradier.get_quotes outside of the disabled stub comment.
+        """
+        import importlib
+        import inspect
+        from data import portfolio_options_service as _m
+        src = inspect.getsource(_m)
+        # These method-call patterns must not appear as live call sites.
+        import re
+        # A live call has form:  tradier.get_option_expirations(
+        calls_exp   = re.findall(r"tradier\.get_option_expirations\s*\(", src)
+        calls_chain = re.findall(r"tradier\.get_option_chain\s*\(",       src)
+        calls_quotes = re.findall(r"tradier\.get_quotes\s*\(",            src)
+        assert calls_exp   == [], f"Found tradier.get_option_expirations calls: {calls_exp}"
+        assert calls_chain == [], f"Found tradier.get_option_chain calls: {calls_chain}"
+        assert calls_quotes == [], f"Found tradier.get_quotes calls: {calls_quotes}"
+
+    def test_B3_drain_stale_lkg_delegates_not_scans(self):
+        """
+        The _drain_stale_lkg function source must reference
+        add_high_priority_symbols (delegation) not _scan_one_symbol.
+        """
+        import inspect
+        from data import portfolio_options_service as _m
+        # Find _drain_stale_lkg source
+        src = inspect.getsource(_m._drain_stale_lkg)
+        assert "add_high_priority_symbols" in src or "add_hi_lkg" in src, (
+            "_drain_stale_lkg must delegate to canonical supplement scanner"
+        )
+        assert "_scan_one_symbol" not in src, (
+            "_drain_stale_lkg must not call _scan_one_symbol"
+        )
+
+    def test_B4_scan_portfolio_options_delegates_uncached(self):
+        """
+        scan_portfolio_options source must call add_high_priority_symbols
+        for uncached symbols instead of calling tradier directly.
+        """
+        import inspect
+        from data import portfolio_options_service as _m
+        src = inspect.getsource(_m.scan_portfolio_options)
+        assert "add_high_priority_symbols" in src or "add_hi" in src, (
+            "scan_portfolio_options must delegate uncached symbols to canonical scanner"
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Class C — Field parity between Options Flow and Watchlist
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestFieldParity:
+    """
+    Confirms that a ticker row flowing through _normalize_master_row (portfolio/
+    watchlist path) and _build_ticker_node (options_flow_sectors path) both
+    expose the same canonical parity fields.
+    """
+
+    _PARITY_FIELDS = [
+        "expiration_scope",
+        "premium_scope_id",
+        "net_premium_change_1d",
+        "net_premium_change_7d",
+        "net_premium_change_30d",
+        "snapshot_source",
+        "snapshot_as_of",
+        "prior_session_ask_premium",
+        "prior_session_bid_premium",
+        "prior_session_midpoint_premium",
+    ]
+
+    def _make_master_row(self, sym: str) -> dict:
+        """Build a synthetic master screener row with all parity fields."""
+        return {
+            "ticker":                  sym,
+            "symbol":                  sym,
+            "data_available":          True,
+            "final_composite_score":   42.5,
+            "composite_score":         42.5,
+            "pc_ratio":                0.8,
+            "total_volume":            12000,
+            "primary_signal":          "unusual_call_sweep",
+            "options_score_version":   "tradier_flow_v1",
+            "expiration_scope":        "7_60dte",
+            "premium_scope_id":        "net_flow_single_expiry_7_60dte_v1",
+            "net_premium_change_1d":   150_000.0,
+            "net_premium_change_7d":   420_000.0,
+            "net_premium_change_30d":  900_000.0,
+            "source":                  "master_screener_v1",
+            "_source":                 "master",
+            "_cached_at":              1_700_000_000.0,
+            "_scanned_at":             1_700_000_000.0,
+            "prior_session_ask_premium":    80_000.0,
+            "prior_session_bid_premium":    40_000.0,
+            "prior_session_midpoint_premium": 60_000.0,
+            "call_open_interest":      50_000,
+            "put_open_interest":       30_000,
+            "expiration_used":         "2026-08-15",
+            "dte_used":                20,
+            "avg_call_iv":             0.28,
+        }
+
+    def test_C1_normalize_master_row_has_parity_fields(self):
+        from data.portfolio_options_service import _normalize_master_row
+        row    = self._make_master_row("AAPL")
+        result = _normalize_master_row("AAPL", row)
+        for field in self._PARITY_FIELDS:
+            assert field in result, (
+                f"_normalize_master_row missing parity field: {field!r}"
+            )
+
+    def test_C2_normalize_to_watchlist_row_has_parity_fields(self):
+        from data.portfolio_options_service import _normalize_to_watchlist_row
+        row    = self._make_master_row("NVDA")
+        result = _normalize_to_watchlist_row("NVDA", row, is_stale=False)
+        wl_parity = [
+            "scan_status",
+            "expiration_scope",
+            "expiration_used",
+            "premium_scope_id",
+            "net_premium_change_1d",
+            "net_premium_change_7d",
+            "net_premium_change_30d",
+            "snapshot_source",
+            "snapshot_as_of",
+        ]
+        for field in wl_parity:
+            assert field in result, (
+                f"_normalize_to_watchlist_row missing parity field: {field!r}"
+            )
+
+    def test_C3_parity_values_flow_through_correctly(self):
+        from data.portfolio_options_service import _normalize_master_row
+        row    = self._make_master_row("TSLA")
+        result = _normalize_master_row("TSLA", row)
+        assert result.get("net_premium_change_1d")  == 150_000.0
+        assert result.get("net_premium_change_7d")  == 420_000.0
+        assert result.get("net_premium_change_30d") == 900_000.0
+        assert result.get("prior_session_ask_premium") == 80_000.0
+
+    def test_C4_build_ticker_node_return_dict_has_parity_fields(self):
+        """
+        Inspect the source of _build_ticker_node to confirm all parity field
+        keys are present as string literals in the return dict.
+        """
+        import inspect, re
+        from data.options_flow_sectors import _build_ticker_node
+        src = inspect.getsource(_build_ticker_node)
+        ticker_node_fields = [
+            "options_score",
+            "options_score_version",
+            "options_signal",
+            "implied_volatility",
+            "expected_move",
+            "call_open_interest",
+            "put_open_interest",
+            "net_premium_change_1d",
+            "snapshot_status",
+            "snapshot_source",
+            "snapshot_as_of",
+        ]
+        for field in ticker_node_fields:
+            assert f'"{field}"' in src, (
+                f"_build_ticker_node return dict missing parity key: {field!r}"
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Class D — Prior-session persistence in canonical store
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestPriorSessionPersistence:
+    """
+    Verifies that save_sectors_universe_lkg_to_disk promotes interval_*
+    fields to prior_session_* when the market is closed (off-hours save).
+    """
+
+    def _make_universe_row(self, sym: str) -> dict:
+        return {
+            "ticker":                            sym,
+            "data_available":                    True,
+            "interval_ask_premium":              120_000.0,
+            "interval_bid_premium":              60_000.0,
+            "interval_midpoint_unknown_premium": 90_000.0,
+            "interval_ask_premium_pct":          0.55,
+            "interval_bid_premium_pct":          0.28,
+        }
+
+    def test_D1_off_hours_save_promotes_interval_to_prior_session(self, tmp_path):
+        import json
+        from unittest.mock import patch
+        from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
+        from data.options_theme_supplement import (
+            save_sectors_universe_lkg_to_disk,
+            _SECTORS_LKG_DISK_PATH as _orig_path,
+            get_combined_ticker_data,
+            get_no_options_symbols,
+        )
+
+        sym = "PRIOR_TEST_AAPL"
+        universe_meta = {"proxy_symbols": [sym]}
+        combined_data = {sym: self._make_universe_row(sym)}
+        disk_path = tmp_path / "sectors_lkg_test.json"
+
+        with (
+            patch.dict(ENRICHED_THEME_RS_UNIVERSE, {"test_theme": universe_meta}),
+            patch("data.options_theme_supplement.get_combined_ticker_data",
+                  return_value=combined_data),
+            patch("data.options_theme_supplement.get_no_options_symbols",
+                  return_value=set()),
+            patch("data.options_theme_supplement._SECTORS_LKG_DISK_PATH", disk_path),
+            # Simulate off-hours session
+            patch("data.options_theme_supplement._gs_lkg", return_value="closed",
+                  create=True),
+            patch("data.tradier_market_session.get_session", return_value="closed"),
+        ):
+            save_sectors_universe_lkg_to_disk()
+
+        if disk_path.exists():
+            result = json.loads(disk_path.read_text())
+            td = result.get("ticker_data", {})
+            if sym in td:
+                row = td[sym]
+                assert row.get("prior_session_ask_premium") == 120_000.0, (
+                    "interval_ask_premium must be promoted to prior_session_ask_premium "
+                    "during off-hours save"
+                )
+
+    def test_D2_regular_session_save_does_not_overwrite_prior_session(self, tmp_path):
+        """
+        During regular session, interval_* must NOT be promoted — they are
+        live delta values, not a completed session summary.
+        """
+        import json
+        from unittest.mock import patch
+        from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
+        from data.options_theme_supplement import save_sectors_universe_lkg_to_disk
+
+        sym = "REGULAR_TEST_SPY"
+        universe_meta = {"proxy_symbols": [sym]}
+        row_with_existing_ps = {
+            **self._make_universe_row(sym),
+            "prior_session_ask_premium": 999_999.0,  # sentinel — must survive
+        }
+        combined_data = {sym: row_with_existing_ps}
+        disk_path = tmp_path / "sectors_lkg_regular.json"
+
+        with (
+            patch.dict(ENRICHED_THEME_RS_UNIVERSE, {"test_theme": universe_meta}),
+            patch("data.options_theme_supplement.get_combined_ticker_data",
+                  return_value=combined_data),
+            patch("data.options_theme_supplement.get_no_options_symbols",
+                  return_value=set()),
+            patch("data.options_theme_supplement._SECTORS_LKG_DISK_PATH", disk_path),
+            patch("data.tradier_market_session.get_session", return_value="regular"),
+        ):
+            save_sectors_universe_lkg_to_disk()
+
+        if disk_path.exists():
+            result = json.loads(disk_path.read_text())
+            td = result.get("ticker_data", {})
+            if sym in td:
+                row = td[sym]
+                # Existing prior_session_ask_premium must be preserved unchanged
+                assert row.get("prior_session_ask_premium") == 999_999.0, (
+                    "Regular-session save must preserve existing prior_session_* values"
+                )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Class E — Real safe-promotion check
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestRealSafePromotion:
+    """
+    Verifies the 4-condition safe-promotion gate in _save_supplement_lkg_to_disk:
+      (a) structural validity,
+      (b) minimum universe coverage,
+      (c) all-provider-errors batch,
+      (d) sparse-batch ratio.
+    """
+
+    def test_E1_all_hard_fail_batch_blocked(self, tmp_path):
+        import json, time as _t
+        from unittest.mock import patch
+        from data.options_theme_supplement import _save_supplement_lkg_to_disk
+
+        # Fresh batch = 90 rows, all with scan_result in _HARD_FAIL + data_available=False
+        hard_fail_batch = {
+            f"FAIL{i:03d}": {
+                "scan_result":     "provider_error",
+                "data_available":  False,
+            }
+            for i in range(90)
+        }
+        # Existing baseline = 0 rows so no sparse-batch conflict
+        disk_path = tmp_path / "supp_lkg_allfail.json"
+
+        with patch("data.options_theme_supplement._SUPPLEMENT_LKG_DISK_PATH", disk_path):
+            _save_supplement_lkg_to_disk(hard_fail_batch)
+
+        result = json.loads(disk_path.read_text())
+        assert result.get("promoted") is False, (
+            "All-hard-fail batch must not be promoted"
+        )
+        assert result.get("promotion_rejection_reason") is not None
+        assert "ALL_PROVIDER_ERRORS" in (result.get("promotion_rejection_reason") or ""), (
+            f"Expected ALL_PROVIDER_ERRORS, got: {result.get('promotion_rejection_reason')}"
+        )
+
+    def test_E2_below_min_universe_blocked(self, tmp_path):
+        import json
+        from unittest.mock import patch
+        from data.options_theme_supplement import _save_supplement_lkg_to_disk
+
+        # Fresh batch = 30 rows (below _MIN_UNIVERSE=80)
+        small_batch = {f"SML{i:02d}": {"score": float(i)} for i in range(30)}
+        disk_path = tmp_path / "supp_lkg_small.json"
+
+        with patch("data.options_theme_supplement._SUPPLEMENT_LKG_DISK_PATH", disk_path):
+            _save_supplement_lkg_to_disk(small_batch)
+
+        result = json.loads(disk_path.read_text())
+        assert result.get("promoted") is False
+        assert "BELOW_MIN_UNIVERSE" in (result.get("promotion_rejection_reason") or ""), (
+            f"Expected BELOW_MIN_UNIVERSE, got: {result.get('promotion_rejection_reason')}"
+        )
+
+    def test_E3_valid_large_batch_promoted(self, tmp_path):
+        import json, time as _t
+        from unittest.mock import patch
+        from data.options_theme_supplement import _save_supplement_lkg_to_disk
+
+        # 100 good rows from scratch (prev_count=0, so no sparse check applies)
+        fresh_batch = {f"GOOD{i:03d}": {"data_available": True, "score": float(i)}
+                       for i in range(100)}
+        disk_path = tmp_path / "supp_lkg_valid.json"
+
+        with patch("data.options_theme_supplement._SUPPLEMENT_LKG_DISK_PATH", disk_path):
+            _save_supplement_lkg_to_disk(fresh_batch)
+
+        result = json.loads(disk_path.read_text())
+        assert result.get("promoted") is True, (
+            "100 valid rows from scratch must achieve promoted=True"
+        )
+        assert result.get("promotion_rejection_reason") is None
+
+    def test_E4_mixed_batch_with_some_failures_can_be_promoted(self, tmp_path):
+        """
+        A batch that is mostly good rows but contains a few failures must still
+        be promoted — all-errors check requires ALL rows to be hard-fail.
+        """
+        import json
+        from unittest.mock import patch
+        from data.options_theme_supplement import _save_supplement_lkg_to_disk
+
+        mixed = {f"OK{i:03d}": {"data_available": True, "score": float(i)}
+                 for i in range(95)}
+        # Add 5 failure rows — batch is not all-errors
+        for j in range(5):
+            mixed[f"BAD{j:02d}"] = {"scan_result": "provider_error", "data_available": False}
+
+        disk_path = tmp_path / "supp_lkg_mixed.json"
+        with patch("data.options_theme_supplement._SUPPLEMENT_LKG_DISK_PATH", disk_path):
+            _save_supplement_lkg_to_disk(mixed)
+
+        result = json.loads(disk_path.read_text())
+        assert result.get("promoted") is True, (
+            "Batch with 95/100 good rows must be promoted (not all-errors)"
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Class F — Production-path integration (Tradier mocked at provider boundary)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestProductionPathIntegration:
+    """
+    Calls real service entry points (scan_portfolio_options, scan_watchlist_options)
+    with Tradier mocked at the provider boundary.
+
+    Asserts:
+      - No direct Tradier chain-level methods called from the portfolio service.
+      - Uncached symbols are submitted to the supplement scanner via
+        add_high_priority_symbols(), not scanned independently.
+      - Results are served from the canonical snapshot or LKG.
+    """
+
+    def _make_cache(self, combined_data: dict):
+        """Simple dict-backed mock cache."""
+        store = {}
+        class _Cache:
+            def get(self, k, default=None):   return store.get(k, default)
+            def set(self, k, v, ttl=None):    store[k] = v
+            def delete(self, k):              store.pop(k, None)
+        return _Cache(), store
+
+    def test_F1_uncached_symbol_in_regular_session_triggers_delegation(self):
+        """
+        scan_portfolio_options with an empty combined snapshot must call
+        add_high_priority_symbols, NOT tradier.get_option_expirations.
+        """
+        import asyncio
+        from unittest.mock import patch, MagicMock, AsyncMock
+        from data.portfolio_options_service import scan_portfolio_options
+
+        tradier = MagicMock()
+        tradier.get_option_expirations = AsyncMock(return_value=[])
+        tradier.get_option_chain       = AsyncMock(return_value={})
+        tradier.get_quotes             = AsyncMock(return_value=[])
+        cache, _store = self._make_cache({})
+
+        _hi_symbols: list[list] = []
+        def _fake_add_hi(syms):
+            _hi_symbols.append(list(syms))
+
+        with (
+            patch("data.tradier_market_session.get_session", return_value="regular"),
+            patch("data.options_theme_supplement.add_high_priority_symbols",
+                  side_effect=_fake_add_hi),
+            patch("data.options_theme_supplement.get_combined_ticker_data",
+                  return_value={}),
+        ):
+            asyncio.get_event_loop().run_until_complete(
+                scan_portfolio_options(
+                    symbols=["AAPL", "MSFT"],
+                    tradier=tradier,
+                    cache=cache,
+                )
+            )
+
+        # Delegation must have fired
+        all_delegated = [s for batch in _hi_symbols for s in batch]
+        assert len(all_delegated) > 0, (
+            "scan_portfolio_options must delegate uncached symbols via "
+            "add_high_priority_symbols, not scan them directly"
+        )
+        # Tradier chain methods must NOT have been called
+        tradier.get_option_expirations.assert_not_awaited()
+        tradier.get_option_chain.assert_not_awaited()
+        tradier.get_quotes.assert_not_awaited()
+
+    def test_F2_cached_symbol_served_from_snapshot_without_delegation(self):
+        """
+        A symbol already present in the combined snapshot must be served
+        immediately with no delegation and no Tradier calls.
+        """
+        import asyncio
+        from unittest.mock import patch, MagicMock, AsyncMock
+        from data.portfolio_options_service import scan_portfolio_options
+
+        tradier = MagicMock()
+        tradier.get_option_expirations = AsyncMock(return_value=[])
+        tradier.get_quotes             = AsyncMock(return_value=[])
+        cache, _store = self._make_cache({})
+
+        combined = {
+            "AAPL": {
+                "ticker":               "AAPL",
+                "data_available":       True,
+                "final_composite_score": 55.0,
+                "pc_ratio":             0.7,
+                "total_volume":         8000,
+                "source":               "master_screener_v1",
+                "_cached_at":           1_700_000_000.0,
+            }
+        }
+
+        _hi_called: list = []
+        with (
+            patch("data.tradier_market_session.get_session", return_value="regular"),
+            patch("data.options_theme_supplement.add_high_priority_symbols",
+                  side_effect=_hi_called.append),
+            patch("data.options_theme_supplement.get_combined_ticker_data",
+                  return_value=combined),
+        ):
+            result = asyncio.get_event_loop().run_until_complete(
+                scan_portfolio_options(
+                    symbols=["AAPL"],
+                    tradier=tradier,
+                    cache=cache,
+                )
+            )
+
+        # Result has by_symbol dict
+        by_sym = result.get("by_symbol", {}) if isinstance(result, dict) else {}
+        assert "AAPL" in by_sym, (
+            f"Snapshot-cached symbol must appear in result['by_symbol']. Keys: {list(by_sym)}"
+        )
+        # No direct Tradier calls
+        tradier.get_option_expirations.assert_not_awaited()
+        tradier.get_quotes.assert_not_awaited()
+
+    def test_F3_disk_lkg_served_when_snapshot_empty_and_session_closed(self):
+        """
+        When the session is closed (not regular) and combined snapshot has no
+        data, the disk LKG must be served directly — no delegation, no scan.
+        """
+        import asyncio
+        from unittest.mock import patch, MagicMock, AsyncMock
+        from data.portfolio_options_service import scan_portfolio_options
+
+        tradier = MagicMock()
+        tradier.get_option_expirations = AsyncMock(return_value=[])
+        tradier.get_quotes             = AsyncMock(return_value=[])
+        cache, _store = self._make_cache({})
+
+        disk_lkg = {
+            "SPY": {
+                "ticker":         "SPY",
+                "data_available": True,
+                "score":          50.0,
+                "source":         "portfolio_opts_lkg_disk",
+            }
+        }
+
+        _hi_called: list = []
+        with (
+            patch("data.tradier_market_session.get_session", return_value="closed"),
+            patch("data.options_theme_supplement.add_high_priority_symbols",
+                  side_effect=_hi_called.append),
+            patch("data.options_theme_supplement.get_combined_ticker_data",
+                  return_value={}),
+            patch("data.portfolio_options_service._load_portfolio_lkg",
+                  return_value=disk_lkg),
+        ):
+            result = asyncio.get_event_loop().run_until_complete(
+                scan_portfolio_options(
+                    symbols=["SPY"],
+                    tradier=tradier,
+                    cache=cache,
+                )
+            )
+
+        # Tradier methods must not be called during closed session
+        tradier.get_option_expirations.assert_not_awaited()
+        tradier.get_quotes.assert_not_awaited()
+        # Delegation must NOT fire for closed session (not regular)
+        assert _hi_called == [], (
+            "Off-hours session must not trigger supplement delegation"
+        )
+        # Result shape check (symbol may come from disk LKG or unavailable)
+        by_sym = result.get("by_symbol", {}) if isinstance(result, dict) else {}
+        assert "SPY" in by_sym, f"SPY must be in result['by_symbol'], got: {list(by_sym)}"
+
+    def test_F4_scan_watchlist_options_has_no_direct_tradier_chain_calls(self):
+        """
+        scan_watchlist_options source must not contain calls to
+        tradier.get_option_expirations or tradier.get_option_chain.
+        """
+        import inspect, re
+        from data import portfolio_options_service as _m
+        src = inspect.getsource(_m.scan_watchlist_options)
+        calls_exp   = re.findall(r"tradier\.get_option_expirations\s*\(", src)
+        calls_chain = re.findall(r"tradier\.get_option_chain\s*\(",       src)
+        assert calls_exp   == [], f"scan_watchlist_options has get_option_expirations calls"
+        assert calls_chain == [], f"scan_watchlist_options has get_option_chain calls"

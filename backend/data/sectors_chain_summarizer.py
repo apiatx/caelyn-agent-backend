@@ -389,6 +389,28 @@ async def summarize_ticker_chain(
     # ── 2. Select primary expiration ──────────────────────────────────────────
     primary_exp = _select_primary_exp(expirations) or expirations[0]
 
+    # ── 2a. Record canonical scan fingerprint ─────────────────────────────────
+    # Fingerprint = ticker:session_date:exp_scope:exp_set_hash:schema_version
+    # Used by the inflight diagnostics to prove one chain fetch per workload.
+    try:
+        import datetime as _dt
+        from services.options_inflight import (
+            make_scan_fingerprint as _mkfp,
+            record_scan_fingerprint as _recfp,
+        )
+        _session_date = _dt.datetime.now(
+            _dt.timezone(_dt.timedelta(hours=-5))
+        ).strftime("%Y-%m-%d")
+        _fp = _mkfp(
+            sym,
+            _session_date,
+            exp_scope="7_60dte",
+            expirations=[str(primary_exp)],
+        )
+        _recfp(sym, _fp)
+    except Exception:
+        pass
+
     # ── 3. Fetch chain (with budget pre-check) ────────────────────────────────
     if not _budget_ok():
         return {

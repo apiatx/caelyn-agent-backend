@@ -90,19 +90,36 @@ def make_scan_fingerprint(
     ticker: str,
     session_date: str | None = None,
     schema_version: str = "v1",
+    *,
+    exp_scope: str = "7_60dte",
+    expirations: "list[str] | None" = None,
 ) -> str:
     """
-    Return the canonical scan fingerprint for ticker + session + schema.
+    Return the canonical scan fingerprint for ticker + session + workload.
 
-    session_date defaults to today in ET (approximate -5 h).
-    All consumers that request options data for the same ticker on the same
-    trading day receive the same fingerprint, regardless of scope (Watchlist,
-    Portfolio, popup …).  This lets the diagnostics endpoint prove that only
-    one provider call occurred per ticker per day.
+    Format: "{TICKER}:{YYYY-MM-DD}:{exp_scope}:{exp_hash}:{schema_version}"
+    Example: "AAPL:2026-07-26:7_60dte:a1b2c3d4:v1"
+
+    exp_scope   — the expiration selection strategy used by the scanner
+                  ("7_60dte", "all", "top_unusual", …)
+    expirations — the actual expiration dates selected; their sorted join is
+                  hashed to a short hex string so fingerprints are stable
+                  across callers that used identical workloads.
+    exp_hash    — "none" when expirations is empty/None (scan not yet done)
+
+    All consumers requesting data for the same ticker + session + workload
+    receive the same fingerprint so the diagnostics endpoint can confirm that
+    only one provider chain-fetch occurred per unique workload per day.
     """
+    import hashlib as _hl
     if session_date is None:
         session_date = _datetime.datetime.now(_ET_OFFSET).strftime("%Y-%m-%d")
-    return f"{ticker.upper()}:{session_date}:{schema_version}"
+    if expirations:
+        key = "|".join(sorted(str(e) for e in expirations))
+        exp_hash = _hl.sha256(key.encode()).hexdigest()[:8]
+    else:
+        exp_hash = "none"
+    return f"{ticker.upper()}:{session_date}:{exp_scope}:{exp_hash}:{schema_version}"
 
 
 def record_scan_fingerprint(sym: str, fingerprint: str) -> None:

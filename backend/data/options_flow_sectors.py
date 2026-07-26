@@ -1032,6 +1032,28 @@ def _build_ticker_node(
             "interval_seconds":                      _ifield_int("interval_seconds"),
             "interval_started_at":                   _ifield("interval_started_at"),
             "interval_ended_at":                     _ifield("interval_ended_at"),
+            # ── Canonical parity fields (watchlist/portfolio alignment) ────────
+            # These ensure Options Flow, Watchlist, and Portfolio surfaces expose
+            # the same provenance and scoring keys for each ticker row.
+            "options_score":              row.get("final_composite_score") or row.get("composite_score") or row.get("options_score"),
+            "options_score_version":      row.get("options_score_version", "tradier_flow_v1"),
+            "options_signal":             row.get("primary_signal") or row.get("signal"),
+            "implied_volatility":         row.get("avg_call_iv") or row.get("avg_put_iv") or row.get("iv"),
+            "expected_move":              row.get("expected_move") or row.get("em"),
+            "call_open_interest":         row.get("call_open_interest") or row.get("call_oi"),
+            "put_open_interest":          row.get("put_open_interest") or row.get("put_oi"),
+            "total_open_interest":        (row.get("call_open_interest") or 0) + (row.get("put_open_interest") or 0) or row.get("open_interest"),
+            "net_premium_change_1d":      row.get("net_premium_change_1d"),
+            "net_premium_change_7d":      row.get("net_premium_change_7d"),
+            "net_premium_change_30d":     row.get("net_premium_change_30d"),
+            "prior_session_ask_premium":  row.get("prior_session_ask_premium") or _ifield("interval_ask_premium"),
+            "prior_session_bid_premium":  row.get("prior_session_bid_premium") or _ifield("interval_bid_premium"),
+            "prior_session_midpoint_premium": row.get("prior_session_midpoint_premium") or _ifield("interval_midpoint_unknown_premium"),
+            "prior_session_date":         row.get("prior_session_date"),
+            "prior_session_saved_at":     row.get("prior_session_saved_at"),
+            "snapshot_status":            row.get("scan_status") or row.get("_source") or "live",
+            "snapshot_source":            row.get("source") or row.get("_source"),
+            "snapshot_as_of":             row.get("_scanned_at") or row.get("_cached_at"),
         }
 
     _itype_fallback = (instrument_type_by_sym or {}).get(sym, "unknown")

@@ -306,31 +306,63 @@ def _save_supplement_lkg_to_disk(ticker_data: dict) -> None:
         _fresh_count = len(ticker_data)
         _prev_count  = _total_count - _fresh_count  # approx old baseline size
 
-        # ── Safe promotion gate ────────────────────────────────────────────────
+        # ── Real safe-promotion gate ───────────────────────────────────────────
         # "Promoted" means this snapshot is authoritative for the supplement
-        # universe — not just an incremental delta.  Requirements:
-        #   (a) total coverage exceeds the universe threshold, AND
-        #   (b) the fresh batch represents ≥10% of the existing baseline, OR
-        #       the baseline is small enough that any fresh batch is meaningful.
-        # A tiny hot-patch batch over a large LKG is recorded as a partial
-        # update (promoted=False) with a rejection reason logged for diagnostics.
-        _PROMOTE_THRESHOLD = 80   # minimum total tickers to be considered authoritative
-        _SPARSE_RATIO      = 0.10 # fresh batch must cover ≥10% of previous baseline
-        _promoted          = False
+        # universe — not just an incremental delta.  The check is based on:
+        #   (a) structural validity: every row must have a ticker key,
+        #   (b) minimum universe coverage vs. the expected supplement universe,
+        #   (c) provider health: fresh batch must not be all-failures,
+        #   (d) coverage vs. prior snapshot: fresh batch covers ≥10% of baseline
+        #       OR the baseline is small (no rollover from a nearly empty state).
+        # A snapshot failing any check is recorded as PARTIAL (promoted=False)
+        # with the precise rejection reason logged for diagnostics.
+
+        # (a) Structural validity — every merged entry must have a ticker key
+        _struct_ok = all(isinstance(k, str) and k for k in merged)
+
+        # (b) Universe coverage — compare vs. a reasonable expected size.
+        # Supplement universe target: at least 80 distinct tickers total.
+        _MIN_UNIVERSE = 80
+
+        # (c) Provider health — reject promotion if fresh batch is all-error rows.
+        # A row is an "error" if scan_result is one of the hard-fail sentinels AND
+        # data_available is explicitly False.
+        _HARD_FAIL = frozenset({
+            "provider_error", "budget_pre_check_chain", "deferred_retry",
+        })
+        _all_errors = _fresh_count > 0 and all(
+            v.get("scan_result") in _HARD_FAIL and v.get("data_available") is False
+            for v in ticker_data.values()
+        )
+
+        # (d) Coverage vs. prior snapshot (sparse-batch guard)
+        _SPARSE_RATIO = 0.10
+        _sparse = (
+            _prev_count >= 10
+            and _fresh_count < _prev_count * _SPARSE_RATIO
+        )
+
+        _promoted      = False
         _promo_reason: str | None = None
 
-        if _total_count >= _PROMOTE_THRESHOLD:
-            if _prev_count < 10 or _fresh_count >= _prev_count * _SPARSE_RATIO:
-                _promoted = True
-            else:
-                _promo_reason = (
-                    f"SPARSE_BATCH prev={_prev_count} fresh={_fresh_count} "
-                    f"ratio={_fresh_count/max(1,_prev_count):.2f} < {_SPARSE_RATIO}"
-                )
-        else:
+        if not _struct_ok:
+            _promo_reason = "INVALID_STRUCTURE: one or more rows missing ticker key"
+        elif _all_errors:
             _promo_reason = (
-                f"BELOW_THRESHOLD total={_total_count} threshold={_PROMOTE_THRESHOLD}"
+                f"ALL_PROVIDER_ERRORS: {_fresh_count} fresh rows all hard-fail — "
+                "provider likely down, preserving prior LKG"
             )
+        elif _total_count < _MIN_UNIVERSE:
+            _promo_reason = (
+                f"BELOW_MIN_UNIVERSE total={_total_count} min={_MIN_UNIVERSE}"
+            )
+        elif _sparse:
+            _promo_reason = (
+                f"SPARSE_BATCH prev={_prev_count} fresh={_fresh_count} "
+                f"ratio={_fresh_count/max(1,_prev_count):.2f} < {_SPARSE_RATIO}"
+            )
+        else:
+            _promoted = True
 
         if _promo_reason:
             print(f"[SUPP_LKG] PROMOTION_PENDING: {_promo_reason}")
@@ -1081,11 +1113,46 @@ def save_sectors_universe_lkg_to_disk() -> int:
     now      = time.time()
     snapshot: dict[str, dict] = {}
 
+    # ── Prior-session promotion (off-hours save) ──────────────────────────────
+    # After the regular session ends, promote interval_* fields (delta since
+    # last snapshot) to prior_session_* so they survive restarts and are shown
+    # as "last session" data.  Only promotes when session is NOT "regular" and
+    # prior_session_* fields not already present.
+    _should_promote_ps = False
+    try:
+        from data.tradier_market_session import get_session as _gs_lkg
+        _should_promote_ps = _gs_lkg() not in ("regular",)
+    except Exception:
+        pass
+
+    _INT_TO_PS = [
+        ("interval_ask_premium",                   "prior_session_ask_premium"),
+        ("interval_bid_premium",                   "prior_session_bid_premium"),
+        ("interval_midpoint_unknown_premium",       "prior_session_midpoint_premium"),
+        ("interval_ask_premium_pct",               "prior_session_ask_premium_pct"),
+        ("interval_bid_premium_pct",               "prior_session_bid_premium_pct"),
+        ("interval_midpoint_unknown_premium_pct",  "prior_session_midpoint_premium_pct"),
+    ]
+
+    import datetime as _dt_lkg
+    _today_str = _dt_lkg.datetime.utcfromtimestamp(now).strftime("%Y-%m-%d")
+
     for sym in all_theme_syms:
         row = combined.get(sym)
         if row:
-            # Re-tag as supplement so the row loads as supplement_lkg (stale) on restart
-            snapshot[sym] = {**row, "_source": "supplement", "_sectors_lkg_at": now}
+            _out = {**row, "_source": "supplement", "_sectors_lkg_at": now}
+            if _should_promote_ps:
+                for _ik, _pk in _INT_TO_PS:
+                    _v = row.get(_ik)
+                    if _v is not None and _out.get(_pk) is None:
+                        _out[_pk] = _v
+                if _out.get("prior_session_date") is None:
+                    _out["prior_session_date"] = (
+                        row.get("prior_session_date") or _today_str
+                    )
+                if _out.get("prior_session_saved_at") is None:
+                    _out["prior_session_saved_at"] = now
+            snapshot[sym] = _out
         elif sym in no_opts:
             snapshot[sym] = {
                 "ticker":          sym,

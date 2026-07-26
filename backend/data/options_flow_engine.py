@@ -1015,6 +1015,24 @@ class OptionsFlowEngine:
         if not valid_expirations:
             return None
 
+        # ── Record canonical scan fingerprint (exp_scope=top_unusual) ─────────
+        try:
+            import datetime as _dte
+            from services.options_inflight import (
+                make_scan_fingerprint as _mkfp_e,
+                record_scan_fingerprint as _recfp_e,
+            )
+            _sd_e = _dte.datetime.now(
+                _dte.timezone(_dte.timedelta(hours=-5))
+            ).strftime("%Y-%m-%d")
+            _recfp_e(symbol, _mkfp_e(
+                symbol, _sd_e,
+                exp_scope="top_unusual",
+                expirations=[str(e) for e in valid_expirations],
+            ))
+        except Exception:
+            pass
+
         chain_list = await asyncio.gather(
             *[_chain_api.get_full_chain_with_greeks(symbol, exp) for exp in valid_expirations],
             return_exceptions=True,

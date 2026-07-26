@@ -409,6 +409,21 @@ def _normalize_master_row(sym: str, row: dict) -> dict:
         "confidence":          confidence,
         "source":              "options_master_screener",
         "unavailable_reason":  None,
+        # ── Canonical parity fields (alignment with options_flow_sectors) ──────
+        "expiration_scope":              row.get("expiration_scope"),
+        "expiration_used":               row.get("expiration_used"),
+        "dte_used":                      row.get("dte_used"),
+        "premium_scope_id":              row.get("premium_scope_id"),
+        "net_premium_change_1d":         row.get("net_premium_change_1d"),
+        "net_premium_change_7d":         row.get("net_premium_change_7d"),
+        "net_premium_change_30d":        row.get("net_premium_change_30d"),
+        "prior_session_ask_premium":     row.get("prior_session_ask_premium"),
+        "prior_session_bid_premium":     row.get("prior_session_bid_premium"),
+        "prior_session_midpoint_premium": row.get("prior_session_midpoint_premium"),
+        "prior_session_date":            row.get("prior_session_date"),
+        "prior_session_saved_at":        row.get("prior_session_saved_at"),
+        "snapshot_source":               row.get("source") or row.get("_source"),
+        "snapshot_as_of":                row.get("_cached_at") or row.get("_updated_at"),
     }
 
 
@@ -665,156 +680,15 @@ async def _scan_one_symbol(
     /api/portfolio/options (main.py).  Returns a full frontend-ready row dict
     or a sentinel dict with _reason set.
     """
-    async with sem:
-        try:
-            from data.tradier_budget import lane as _pos_lane
-            from services.options_inflight import record_provider_call as _rpc
-            _rpc("expiry", "portfolio")
-            with _pos_lane("saved_options"):
-                expirations = await asyncio.wait_for(
-                    tradier.get_option_expirations(sym), timeout=_SCAN_TIMEOUT_EXP
-                )
-            if not expirations:
-                # Tradier returned no expirations → confirmed no options chain
-                return {"_sym": sym, "_reason": "no_expirations"}
-
-            # Try first 2 expirations; if both empty, try next 2 before giving up.
-            # Near-term expirations can be thin/empty on some names — trying up to
-            # 4 avoids false no_chain_returned for legit US optionable stocks.
-            calls_all, puts_all = [], []
-            oi_total = 0
-            call_oi  = 0
-            put_oi   = 0
-            first_chain = {}
-
-            for _batch_start in range(0, min(4, len(expirations)), 2):
-                _batch_exps = expirations[_batch_start:_batch_start + 2]
-                from data.tradier_budget import lane as _pos2_lane
-                from services.options_inflight import record_provider_call as _rpc2
-                for _ in _batch_exps:
-                    _rpc2("chain", "portfolio")
-                with _pos2_lane("saved_options"):
-                    _chain_tasks = [
-                        asyncio.wait_for(
-                            tradier.get_option_chain(sym, exp), timeout=_SCAN_TIMEOUT_CHAIN
-                        )
-                        for exp in _batch_exps
-                    ]
-                    _chains = await asyncio.gather(*_chain_tasks, return_exceptions=True)
-
-                for ch in _chains:
-                    if isinstance(ch, Exception) or not isinstance(ch, dict):
-                        continue
-                    _ch_calls = ch.get("calls", [])
-                    _ch_puts  = ch.get("puts",  [])
-                    if not first_chain and (_ch_calls or _ch_puts):
-                        first_chain = ch
-                    for c in _ch_calls:
-                        calls_all.append(c)
-                        _c_oi = _si(c.get("open_interest") or c.get("openInterest"))
-                        oi_total += _c_oi
-                        call_oi  += _c_oi
-                    for p in _ch_puts:
-                        puts_all.append(p)
-                        _p_oi = _si(p.get("open_interest") or p.get("openInterest"))
-                        oi_total += _p_oi
-                        put_oi   += _p_oi
-
-                if calls_all or puts_all:
-                    break  # found contracts — no need to try more expirations
-
-            if not calls_all and not puts_all:
-                _exp_count   = len(expirations)
-                _tried_count = min(4, _exp_count)
-                _exps_tried  = expirations[:_tried_count]
-                print(
-                    f"[OPTS_SCAN_DEBUG] {sym}: no_chain_returned | "
-                    f"exp_total={_exp_count} tried={_tried_count} "
-                    f"exps_tried={_exps_tried} price={price}"
-                )
-                return {"_sym": sym, "_reason": "no_chain_returned"}
-
-            call_vol  = sum(_si(c.get("volume")) for c in calls_all)
-            put_vol   = sum(_si(c.get("volume")) for c in puts_all)
-            total_vol = call_vol + put_vol
-            pc_ratio  = round(put_vol / call_vol, 3) if call_vol else None
-
-            # IV: prefer smv_vol (smoothed from ORATS), fall back to iv field
-            iv_vals = []
-            for c in (calls_all + puts_all)[:20]:
-                iv = c.get("smv_vol") or c.get("iv")
-                if iv:
-                    iv_vals.append(float(iv))
-            iv_current = round(sum(iv_vals) / len(iv_vals), 4) if iv_vals else None
-
-            # ATM straddle expected move (front expiration only)
-            # first_chain is set in the expiration-retry loop above to the first chain with contracts
-            expected_move_raw = None
-            fc_calls = first_chain.get("calls", []) if isinstance(first_chain, dict) else []
-            fc_puts  = first_chain.get("puts",  []) if isinstance(first_chain, dict) else []
-            atm_c = min(fc_calls, key=lambda c: abs((c.get("strike") or 0) - price), default=None) if fc_calls else None
-            atm_p = min(fc_puts,  key=lambda c: abs((c.get("strike") or 0) - price), default=None) if fc_puts  else None
-            if atm_c and atm_p and price > 0:
-                c_mid = ((atm_c.get("bid") or 0) + (atm_c.get("ask") or 0)) / 2
-                p_mid = ((atm_p.get("bid") or 0) + (atm_p.get("ask") or 0)) / 2
-                if c_mid + p_mid > 0:
-                    expected_move_raw = (c_mid + p_mid) / price
-
-            _, display, direction, confidence = _classify_signal(total_vol, pc_ratio, iv_current)
-            score = _composite_score(total_vol, iv_current, pc_ratio)
-
-            # em expressed as percentage (e.g. 4.0 = 4% expected move)
-            em_display = round(expected_move_raw * 100, 2) if expected_move_raw is not None else None
-
-            return {
-                "ticker":                 sym,
-                "symbol":                 sym,
-                "optionable":             True,
-                "data_available":         True,
-                "score":                  score,
-                # ── Legacy aliases (backward compat — do not change) ──
-                "p_c":                    pc_ratio,
-                "put_call":               pc_ratio,
-                "put_call_ratio":         pc_ratio,
-                # ── Canonical P/C names ───────────────────────────────
-                # volume_put_call_ratio  = put contract volume / call contract volume
-                # premium_put_call_ratio = put premium dollars / call premium dollars
-                # (premium_put_call_ratio omitted here — portfolio scanner does not
-                #  compute premium dollars; populated by tradier_flow_engine path)
-                "volume_put_call_ratio":  pc_ratio,
-                "premium_put_call_ratio": None,
-                # ── Score metadata ────────────────────────────────────
-                # Formula: vol_score(35) + iv_score(20) + dir_score(20), max ~75
-                "options_score_version":  "portfolio_composite_v1",
-                "options_score_source":   "portfolio_scoped_options_screener",
-                "options_score_inputs":   {
-                    "vol_score":  round(min(35, (total_vol / 10000) * 20), 1) if total_vol else 0,
-                    "iv_score":   round(min(20, (iv_current or 0) * 40), 1),
-                    "dir_score":  round(min(20, abs((pc_ratio or 1.0) - 1.0) * 15), 1) if pc_ratio else 0,
-                },
-                "score_comparable_across_rows": False,  # different formula from tradier_flow_v1
-                # ─────────────────────────────────────────────────────
-                "iv":                     iv_current,
-                "em":                     em_display,
-                "expected_move":          em_display,
-                "vol":                    total_vol or None,
-                "volume":                 total_vol or None,
-                "call_volume":            call_vol or None,
-                "put_volume":             put_vol or None,
-                "open_interest":          oi_total or None,
-                "call_open_interest":     call_oi or None,
-                "put_open_interest":      put_oi or None,
-                "signal":                 display,
-                "put_call_direction":     direction,
-                "confidence":             confidence,
-                "source":                 "portfolio_scoped_options_screener",
-                "unavailable_reason":     None,
-            }
-
-        except asyncio.TimeoutError:
-            return {"_sym": sym, "_reason": "provider_rate_limited"}
-        except Exception as exc:
-            return {"_sym": sym, "_reason": f"unknown_provider_error:{type(exc).__name__}"}
+    # DISABLED — Portfolio/Watchlist no longer call Tradier directly.
+    # All options data flows from the canonical master/supplement snapshot.
+    # Direct Tradier method calls (get_quotes / get_option_expirations /
+    # get_option_chain) have been fully removed from this file.
+    # Any remaining call here is a programming error — raise clearly.
+    raise RuntimeError(
+        f"_scan_one_symbol({sym!r}): direct portfolio Tradier scans removed. "
+        "Delegate via add_high_priority_symbols() in options_theme_supplement."
+    )
 
 
 # ── Main entry point ───────────────────────────────────────────────────────
@@ -935,74 +809,60 @@ async def scan_portfolio_options(
         except Exception:
             pass  # non-fatal — fall through to live scan
 
-    # 3. Live scan for uncached tickers ─────────────────────────────────────
-    if uncached and tradier:
-        # 3a. Batch quote fetch (1 Tradier call for all uncached symbols)
+    # 3. Delegate uncached symbols to the canonical supplement scanner ────────
+    # Portfolio/Watchlist MUST NOT call Tradier directly.  All options data
+    # must come from the canonical master/supplement snapshot or durable LKG.
+    # During regular session: submit missing symbols to the canonical
+    # high-priority queue; the supplement scanner picks them up within 6-10 min.
+    # A brief 2 s yield lets a running supplement iteration complete first.
+    if uncached:
+        _sess_now = "unknown"
         try:
-            from services.options_inflight import record_provider_call as _rpc_q
-            _rpc_q("quote", "portfolio")
-            raw_quotes = await asyncio.wait_for(
-                tradier.get_quotes(uncached), timeout=_SCAN_TIMEOUT_QUOTE
-            )
-            provider_calls += 1
-        except Exception as qe:
-            print(f"[PORTFOLIO_OPTIONS_SVC] batch quote error: {qe}")
-            raw_quotes = []
+            from data.tradier_market_session import get_session as _get_sess
+            _sess_now = _get_sess()
+        except Exception:
+            pass
+        if _sess_now == "regular" and uncached:
+            try:
+                from data.options_theme_supplement import (
+                    add_high_priority_symbols as _add_hi,
+                    get_combined_ticker_data  as _gctd_3,
+                )
+                _us_uncached = [s for s in uncached if ":" not in s]
+                if _us_uncached:
+                    _add_hi(_us_uncached)
+                    print(
+                        f"[PORTFOLIO_OPTIONS_SVC] delegated {len(_us_uncached)} "
+                        f"symbol(s) to canonical supplement scanner"
+                    )
+                await asyncio.sleep(2.0)
+                _comb3 = _gctd_3()
+                _remaining3: list[str] = []
+                for _s3 in uncached:
+                    _c3 = _comb3.get(_s3)
+                    if _c3 and _c3.get("data_available") is not False:
+                        _n3 = _normalize_master_row(_s3, _c3)
+                        cache.set(_per_ticker_cache_key(_s3), _n3, _CACHE_PER_TICKER_TTL)
+                        results[_s3] = _n3
+                    else:
+                        _remaining3.append(_s3)
+                uncached = _remaining3
+            except Exception as _delg_err:
+                print(f"[PORTFOLIO_OPTIONS_SVC] supplement delegation error: {_delg_err}")
 
-        quote_map: dict[str, dict] = {}
-        for q in (raw_quotes or []):
-            s = (q.get("symbol") or "").upper()
-            if s:
-                quote_map[s] = q
-
-        # 3b. Concurrent chain scans (semaphore-gated)
-        sem = asyncio.Semaphore(_SCAN_SEM)
-
-        async def _do_scan(sym: str) -> tuple[str, dict]:
-            nonlocal provider_calls
-            q     = quote_map.get(sym, {})
-            price = float(q.get("last") or 0)
-            if price <= 0:
-                if _is_otc_or_foreign(sym):
-                    return sym, {"_sym": sym, "_reason": "otc_or_foreign_unsupported"}
-                # Standard US ticker — quote missing from batch (possible burst partial miss).
-                # Scan the options chain anyway: IV, volume, put/call ratio are all
-                # quote-independent. ATM expected-move is skipped when price=0.
-                res = await _scan_one_symbol(sym, 0.0, tradier, sem)
-                provider_calls += 3
-                if res.get("data_available"):
-                    return sym, {**res, "quote_price_missing": True}
-                _chain_reason = res.get("_reason") or ""
-                # Preserve definitive chain-level outcomes; only ambiguous misses get partial marker
-                if _chain_reason in ("no_expirations", "no_chain_returned", "provider_rate_limited"):
-                    return sym, {"_sym": sym, "_reason": _chain_reason}
-                return sym, {"_sym": sym, "_reason": "quote_batch_partial_or_missing"}
-            res = await _scan_one_symbol(sym, price, tradier, sem)
-            provider_calls += 3  # ~1 expirations + 2 chains per ticker
-            return sym, res
-
-        scan_results = await asyncio.gather(
-            *[_do_scan(s) for s in uncached], return_exceptions=True
-        )
-
-        for item in scan_results:
-            if isinstance(item, Exception):
-                continue
-            sym, res = item
-            if res.get("data_available"):
-                # Full successful row
-                cache.set(_per_ticker_cache_key(sym), res, _CACHE_PER_TICKER_TTL)
-                results[sym] = res
-            else:
-                reason = res.get("_reason") or res.get("unavailable_reason") or "unknown_provider_error"
-                otc = _is_otc_or_foreign(sym) or "otc" in reason or "not_in_tradier" in reason
-                row = _unavail_row(sym, reason, optionable=None if otc else False)
-                results[sym] = row
-
-    elif uncached:
-        # tradier unavailable — mark all uncached tickers
-        for sym in uncached:
-            results[sym] = _unavail_row(sym, "options_provider_unavailable")
+    # 3.5. Still-uncached: serve from disk LKG or unavailable placeholder ────
+    # No Tradier calls — stale LKG is always better than an independent scan.
+    for sym in list(uncached):
+        _dlkg = disk_lkg.get(sym, {})
+        if _dlkg.get("data_available"):
+            _lkg_row = {**_dlkg, "source": "portfolio_opts_lkg_disk", "from_lkg": True}
+            cache.set(_per_ticker_cache_key(sym), _lkg_row, _CACHE_PER_TICKER_TTL)
+            results[sym] = _lkg_row
+        elif _dlkg:
+            results[sym] = {**_dlkg, "source": "portfolio_opts_lkg_disk", "from_lkg": True}
+        else:
+            results[sym] = _unavail_row(sym, "delegated_pending_canonical_scan")
+    uncached = []  # all handled — no further scan path
 
     # 4. Ensure every requested sym has an entry ───────────────────────────
     for sym in syms:
@@ -1233,6 +1093,18 @@ def _normalize_to_watchlist_row(
         "retry_pending":                       r.get("retry_pending"),
         "refresh_queued":                      bool(r.get("retry_pending") or r.get("from_lkg")),
         "refresh_priority":                    _priority,
+        # ── Canonical scanner provenance (parity with options_flow_sectors) ──
+        "scan_status":                         r.get("scan_status") or r.get("_source") or "unknown",
+        "ticker_state":                        r.get("ticker_state"),
+        "expiration_scope":                    r.get("expiration_scope"),
+        "expiration_used":                     r.get("expiration_used"),
+        "dte_used":                            r.get("dte_used"),
+        "premium_scope_id":                    r.get("premium_scope_id"),
+        "net_premium_change_1d":               r.get("net_premium_change_1d"),
+        "net_premium_change_7d":               r.get("net_premium_change_7d"),
+        "net_premium_change_30d":              r.get("net_premium_change_30d"),
+        "snapshot_source":                     r.get("source") or r.get("_source"),
+        "snapshot_as_of":                      r.get("_cached_at") or r.get("_updated_at"),
     }
 
 
@@ -1372,102 +1244,41 @@ async def _drain_stale_lkg(
             continue
 
         try:
-            # Evict memory cache so the next scan_watchlist_options call won't
-            # see the old from_lkg=True row.
-            for _s in claimed:
-                try:
-                    cache.delete(_per_ticker_cache_key(_s))
-                except Exception:
-                    pass
-
-            # ── Direct live scan (bypasses cache + disk LKG fallback) ──────────
+            # ── Delegate to canonical supplement scanner (no direct Tradier) ───
+            # Stale LKG refresh submits symbols to the high-priority queue and
+            # reads back any results the supplement loop already produced.
+            # No get_quotes / get_option_expirations / get_option_chain calls.
             try:
-                _raw_quotes = await _aio.wait_for(
-                    tradier.get_quotes(claimed), timeout=_SCAN_TIMEOUT_QUOTE
+                from data.options_theme_supplement import (
+                    add_high_priority_symbols as _add_hi_lkg,
+                    get_combined_ticker_data  as _gctd_lkg,
                 )
-            except Exception:
-                _raw_quotes = []
-
-            _quote_map: dict[str, dict] = {}
-            for _q in (_raw_quotes or []):
-                _qs = (_q.get("symbol") or "").upper()
-                if _qs:
-                    _quote_map[_qs] = _q
-
-            _sem = _aio.Semaphore(_SCAN_SEM)
-
-            async def _do_lkg_scan(_sym: str) -> tuple[str, dict]:
-                _q  = _quote_map.get(_sym, {})
-                _px = float(_q.get("last") or 0)
-                if _px <= 0:
-                    if _is_otc_or_foreign(_sym):
-                        return _sym, {"_sym": _sym, "_reason": "otc_or_foreign_unsupported"}
-                    # Standard US ticker — scan chain anyway with price=0
-                    _res = await _scan_one_symbol(_sym, 0.0, tradier, _sem)
-                    if _res.get("data_available"):
-                        return _sym, {**_res, "quote_price_missing": True}
-                    _cr = _res.get("_reason") or ""
-                    if _cr in ("no_expirations", "no_chain_returned", "provider_rate_limited"):
-                        return _sym, {"_sym": _sym, "_reason": _cr}
-                    return _sym, {"_sym": _sym, "_reason": "quote_batch_partial_or_missing"}
-                _res = await _scan_one_symbol(_sym, _px, tradier, _sem)
-                return _sym, _res
-
-            _scan_items = await _aio.gather(
-                *[_do_lkg_scan(s) for s in claimed], return_exceptions=True
-            )
-
-            _fresh_available: dict[str, dict] = {}
-            for _item in _scan_items:
-                if isinstance(_item, Exception):
-                    continue
-                _sym, _res = _item
-                _pk = _per_ticker_cache_key(_sym)
-                if _res.get("data_available"):
-                    # Use 2× TTL so drain-written entries outlast typical API
-                    # call intervals (drain takes 2-3 min; 300s may expire first).
-                    cache.set(_pk, _res, _CACHE_PER_TICKER_TTL * 2)
-                    _fresh_available[_sym] = _res
-                else:
-                    _reason = (_res.get("_reason") or
-                               _res.get("unavailable_reason") or
-                               "unknown_provider_error")
-                    _otc = _is_otc_or_foreign(_sym) or "otc" in _reason
-                    # Stale-while-revalidate: transient failures must never blank a row
-                    # that has prior good disk LKG data — restore it instead.
-                    _is_transient_fail = _reason in (
-                        "provider_rate_limited", "no_chain_returned",
-                        "quote_batch_partial_or_missing"
-                    ) and not _otc
-                    if _is_transient_fail:
-                        _prior_lkg = _load_portfolio_lkg().get(_sym, {})
-                        if _prior_lkg.get("data_available"):
-                            cache.set(_pk, {
-                                **_prior_lkg,
-                                "source":        "portfolio_opts_lkg_disk",
-                                "from_lkg":      True,
-                                "retry_pending": True,
-                                "retry_reason":  _reason,
-                            }, _CACHE_PER_TICKER_TTL * 2)
-                            continue
-                    _row = _unavail_row(_sym, _reason, optionable=None if _otc else False)
-                    _ttl = (
-                        _UNAVAIL_TTL_CONFIRMED
-                        if _reason in ("no_options", "no_expirations",
-                                       "otc_or_foreign_unsupported")
-                        else _UNAVAIL_TTL_PARTIAL
-                        if _reason == "quote_batch_partial_or_missing"
-                        else _UNAVAIL_TTL_TRANSIENT
+                _us_claimed = [s for s in claimed if ":" not in s]
+                if _us_claimed:
+                    _add_hi_lkg(_us_claimed)
+                    print(
+                        f"[WATCHLIST_LKG_REFRESH] delegated {len(_us_claimed)} "
+                        f"stale-LKG symbol(s) to canonical supplement scanner"
                     )
-                    cache.set(_pk, _row, _ttl)
-
-            if _fresh_available:
-                _save_portfolio_lkg(_fresh_available)
-                _WL_LATEST_SUCCESSFUL_REFRESH_AT = _wl_time.time()
-                print(
-                    f"[WATCHLIST_LKG_REFRESH] batch {i // _MAX_SYMBOLS + 1}: "
-                    f"{len(_fresh_available)} fresh / {len(claimed)} scanned"
-                )
+                await _aio.sleep(1.5)
+                _comb_lkg = _gctd_lkg()
+                _fresh_available: dict[str, dict] = {}
+                for _s in claimed:
+                    _c = _comb_lkg.get(_s)
+                    if _c and _c.get("data_available") is not False:
+                        _pk = _per_ticker_cache_key(_s)
+                        _norm = _normalize_master_row(_s, _c)
+                        cache.set(_pk, _norm, _CACHE_PER_TICKER_TTL * 2)
+                        _fresh_available[_s] = _norm
+                if _fresh_available:
+                    _save_portfolio_lkg(_fresh_available)
+                    _WL_LATEST_SUCCESSFUL_REFRESH_AT = _wl_time.time()
+                    print(
+                        f"[WATCHLIST_LKG_REFRESH] batch {i // _MAX_SYMBOLS + 1}: "
+                        f"{len(_fresh_available)} refreshed from canonical snapshot"
+                    )
+            except Exception as _dlg_lkg:
+                print(f"[WATCHLIST_LKG_REFRESH] delegation error: {_dlg_lkg}")
 
         except Exception as _e:
             print(f"[WATCHLIST_LKG_REFRESH] batch {i // _MAX_SYMBOLS + 1} error: {_e}")
@@ -1515,77 +1326,34 @@ async def _drain_quote_retry(
                 await _aio.sleep(5)
             continue
 
+        # ── Delegate to canonical supplement scanner (no direct Tradier) ─────
+        # Quote retry no longer calls Tradier independently.  Submit symbols to
+        # the canonical high-priority queue; the supplement scanner covers them.
         try:
-            _raw_q = await _aio.wait_for(
-                tradier.get_quotes(_still_need), timeout=_SCAN_TIMEOUT_QUOTE
+            from data.options_theme_supplement import (
+                add_high_priority_symbols as _add_hi_qr,
+                get_combined_ticker_data  as _gctd_qr,
             )
-        except Exception:
-            _raw_q = []
-
-        _qmap: dict[str, dict] = {
-            (q.get("symbol") or "").upper(): q
-            for q in (_raw_q or []) if q.get("symbol")
-        }
-
-        _got_quote = [s for s in _still_need if float((_qmap.get(s) or {}).get("last") or 0) > 0]
-        _no_quote  = [s for s in _still_need if s not in _got_quote]
-
-        _WL_QUOTE_RETRY_STATS["attempted"] += len(_still_need)
-        _WL_QUOTE_RETRY_STATS["succeeded"] += len(_got_quote)
-        _WL_QUOTE_RETRY_STATS["failed"]    += len(_no_quote)
-
-        # For symbols that now have a quote: scan options chain with real price
-        if _got_quote:
-            _claimed, _ = _claim_opts_many(_got_quote, "quote_retry")
-            if _claimed:
-                try:
-                    async def _retry_chain(_sym: str) -> None:
-                        _pk  = _per_ticker_cache_key(_sym)
-                        _px  = float((_qmap.get(_sym) or {}).get("last") or 0)
-                        _res = await _scan_one_symbol(_sym, _px, tradier, _sem)
-                        if _res.get("data_available"):
-                            cache.set(_pk, _res, _CACHE_PER_TICKER_TTL)
-                            _save_portfolio_lkg({_sym: _res})
-                        else:
-                            _rr  = _res.get("_reason") or "unknown_provider_error"
-                            # Stale-while-revalidate: never blank a row with prior LKG
-                            _is_transient_rr = _rr in (
-                                "provider_rate_limited", "no_chain_returned",
-                                "quote_batch_partial_or_missing"
-                            )
-                            if _is_transient_rr:
-                                _prior = _load_portfolio_lkg().get(_sym, {})
-                                if _prior.get("data_available"):
-                                    cache.set(_pk, {
-                                        **_prior,
-                                        "source":        "portfolio_opts_lkg_disk",
-                                        "from_lkg":      True,
-                                        "retry_pending": True,
-                                        "retry_reason":  _rr,
-                                    }, _CACHE_PER_TICKER_TTL)
-                                    return
-                            _row = _unavail_row(_sym, _rr, optionable=False)
-                            _ttl = (
-                                _UNAVAIL_TTL_CONFIRMED
-                                if _rr in ("no_options", "no_expirations",
-                                           "otc_or_foreign_unsupported")
-                                else _UNAVAIL_TTL_PARTIAL
-                                if _rr == "quote_batch_partial_or_missing"
-                                else _UNAVAIL_TTL_TRANSIENT
-                            )
-                            cache.set(_pk, _row, _ttl)
-                    await _aio.gather(*[_retry_chain(s) for s in _claimed],
-                                      return_exceptions=True)
-                finally:
-                    _release_opts_many(_claimed, "quote_retry")
-
-        # For symbols still missing quote: refresh the 120s TTL so retry happens soon
-        for s in _no_quote:
-            _WL_QUOTE_RETRY_ATTEMPTS[s] = _WL_QUOTE_RETRY_ATTEMPTS.get(s, 0) + 1
-            _pk = _per_ticker_cache_key(s)
-            if not (cache.get(_pk) or {}).get("data_available"):
-                _row = _unavail_row(s, "quote_batch_partial_or_missing", optionable=False)
-                cache.set(_pk, _row, _UNAVAIL_TTL_PARTIAL)
+            _us_still = [s for s in _still_need if ":" not in s]
+            if _us_still:
+                _add_hi_qr(_us_still)
+            await _aio.sleep(1.5)
+            _comb_qr = _gctd_qr()
+            _WL_QUOTE_RETRY_STATS["attempted"] += len(_still_need)
+            _resolved = 0
+            for _s in _still_need:
+                _c_qr = _comb_qr.get(_s)
+                if _c_qr and _c_qr.get("data_available") is not False:
+                    _pk = _per_ticker_cache_key(_s)
+                    _norm_qr = _normalize_master_row(_s, _c_qr)
+                    cache.set(_pk, _norm_qr, _CACHE_PER_TICKER_TTL)
+                    _save_portfolio_lkg({_s: _norm_qr})
+                    _resolved += 1
+            _WL_QUOTE_RETRY_STATS["succeeded"] += _resolved
+            _WL_QUOTE_RETRY_STATS["failed"]    += len(_still_need) - _resolved
+        except Exception as _qr_err:
+            print(f"[QUOTE_RETRY] delegation error: {_qr_err}")
+            _WL_QUOTE_RETRY_STATS["failed"] += len(_still_need)
 
         if i + _QUOTE_RETRY_BATCH_SZ < len(syms_to_retry):
             await _aio.sleep(_QUOTE_RETRY_SLEEP_SEC)

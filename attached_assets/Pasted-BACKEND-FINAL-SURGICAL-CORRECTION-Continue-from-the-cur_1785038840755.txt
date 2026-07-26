@@ -1,0 +1,165 @@
+BACKEND — FINAL SURGICAL CORRECTION
+
+Continue from the current checkpoint. Do not perform another broad audit and do not rewrite completed market-hours or LKG work.
+
+Your last report still overstates what was implemented.
+
+Only fix and prove the following remaining items.
+
+1. REMOVE THE INDEPENDENT PORTFOLIO/WATCHLIST PROVIDER SCAN
+
+`scan_portfolio_options()` may keep its public path and response contract, but it must not independently call:
+
+* get_quotes for an options scan
+* get_option_expirations
+* get_option_chain
+
+Required behavior:
+
+* read the canonical master/supplement snapshot first
+* read durable canonical LKG second
+* during regular hours, submit/delegate missing symbols to the existing canonical Options Flow/supplement scanner
+* after delegated work completes, read the canonical snapshot
+* during closed markets, return canonical LKG
+* never calculate a separate chain-based Portfolio result
+
+Remove or disable the independent provider-call branch rather than merely putting another cache check before it.
+
+Return grep proof that `portfolio_options_service.py` no longer directly calls Tradier quote, expiration, or chain methods.
+
+2. USE THE REAL FINGERPRINT IN EVERY SCANNER
+
+The current fingerprint:
+
+`ticker:session_date:v1`
+
+is too coarse.
+
+It must distinguish the actual canonical workload using:
+
+* ticker
+* regular-session date
+* expiration scope
+* selected expiration or expiration-set identity
+* schema version
+
+The requesting page must not be part of it.
+
+Use this same fingerprint in the real production paths:
+
+* master Tradier Flow scanner
+* supplement scanner
+* sectors summarizer/backfill
+* delegated Watchlist/Portfolio requests
+
+This requires inspecting and, where necessary, modifying those actual scanner files—not only `options_inflight.py`.
+
+3. COMPLETE REAL ENDPOINT FIELD PARITY
+
+Modify the actual Options Flow ticker-node builder and the actual Watchlist/Portfolio projection.
+
+For the same canonical row, both must return:
+
+* options score
+* score version and source
+* options signal
+* IV
+* Expected Move
+* total/call/put volume
+* total/call/put OI
+* volume put/call ratio
+* call/put/net premium
+* premium put/call ratio
+* ask/bid/midpoint premium
+* net-premium change 1D
+* net-premium change 7D
+* net-premium change 30D
+* snapshot status/source/as-of
+* expiration and premium methodology metadata
+
+Do not prove this by directly comparing `_normalize_master_row()` with `_normalize_to_watchlist_row()`.
+
+Call the actual service functions used by each endpoint and compare their returned ticker rows.
+
+4. PERSIST PRIOR-SESSION PREMIUM IN THE CANONICAL STORE
+
+Do not persist prior-session Ask/Bid data only in `portfolio_opts_lkg_v1.json`.
+
+Persist it in the same durable master/supplement snapshot that Options Flow and all other consumers use.
+
+Only promote live interval values to prior-session values when the interval or regular session is actually complete.
+
+Persist:
+
+* prior-session Ask Premium
+* prior-session Bid Premium
+* prior-session midpoint/unclassified premium
+* interval start
+* interval end
+* session date
+* as-of timestamp
+* completion status
+
+After restart, both actual endpoint service paths must return the same prior-session values.
+
+5. REPLACE THE FAKE SAFE-PROMOTION CHECK
+
+Do not declare a snapshot safely promoted solely because:
+
+* total rows are at least 80
+* fresh rows are at least 10% of baseline
+
+Use information already available in the scan architecture:
+
+* expected universe count
+* completed scan status
+* structurally valid rows
+* provider failures/timeouts/rate limits
+* coverage versus expected universe
+* coverage versus prior promoted snapshot
+* meaningful options-field coverage
+
+A sparse batch may safely merge valid ticker updates, but it must not be labeled a completed promoted universe.
+
+6. ADD REAL PRODUCTION-PATH TESTS
+
+The tests must invoke the real service entry points, with the Tradier client mocked only at the provider boundary.
+
+Required tests:
+
+A. Options Flow service first, then Watchlist service
+B. Watchlist service first, then Options Flow service
+C. Actual Watchlist, Portfolio, popup, Confluence, and Options Flow consumers simultaneously
+D. Closed-market restart with prior-session premium
+E. Actual endpoint history parity
+F. Missing ticker delegated to canonical scanner rather than Portfolio scanner
+
+Assert:
+
+* one expiration workload per real fingerprint
+* one chain workload per real fingerprint
+* no direct Portfolio/Watchlist provider calls
+* blocked consumers receive the completed canonical row, not an empty placeholder
+* identical Vol P/C
+* identical non-null Prem P/C
+* identical score and score version
+* identical premiums
+* identical history
+* identical prior-session values after reload
+
+7. RETURN CONCRETE PROOF
+
+Return only:
+
+* files changed
+* direct Tradier call sites before and after
+* the canonical cache key and durable file/store
+* confirmation that Portfolio/Watchlist direct calls are gone
+* one complete sample ticker row from the real Watchlist service
+* the same ticker row from the real Options Flow service
+* field-by-field comparison
+* provider counters from both request orders
+* provider counters from the five-consumer test
+* test names and results
+
+Do not mark complete based on projection-helper tests, handcrafted rows, or in-flight helper tests alone.
