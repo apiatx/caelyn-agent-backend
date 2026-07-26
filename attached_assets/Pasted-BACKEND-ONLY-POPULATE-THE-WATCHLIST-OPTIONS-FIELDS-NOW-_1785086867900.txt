@@ -1,0 +1,369 @@
+BACKEND ONLY — POPULATE THE WATCHLIST OPTIONS FIELDS NOW FROM SAVED CONTRACT SNAPSHOTS
+
+Do not modify the frontend.
+Do not make any Tradier calls.
+Do not wait until Monday to verify the fix.
+Do not create another options scanner.
+Do not fabricate values.
+
+The previous change only queued 438 supplement rows for the next regular session. It did not populate the current Watchlist today.
+
+Use the existing Neon `options_flow_snapshots` contract-level data to recover every rich metric that can be reconstructed immediately.
+
+The table already stores:
+
+- underlying
+- contract symbol
+- expiration
+- option type
+- strike
+- underlying price
+- bid
+- ask
+- last
+- midpoint
+- volume
+- open interest
+- implied volatility
+- delta
+- gamma
+- theta
+- vega
+- spread
+- premium estimate
+- Expected Move
+- captured timestamp
+
+==================================================
+1. FIRST PROVE THE CURRENT FAILURE
+==================================================
+
+Call the real Watchlist endpoint and print rows for:
+
+- AAOI
+- ABCL
+- ACLS
+- AEHR
+- AEVA
+- AKAM
+
+For each show:
+
+- score
+- score status/source/version
+- signal
+- IV
+- EM
+- OI
+- Vol P/C
+- Prem P/C
+- Net Premium
+- underlying source rows
+
+Confirm whether any displayed `0.0` score is a genuine calculated zero or a missing value converted to zero.
+
+==================================================
+2. REMOVE FAKE ZERO SCORES
+==================================================
+
+Fix every path that converts a missing score into `0.0`.
+
+Known bad pattern:
+
+`_sf(row.get("final_composite_score") or row.get("composite_score")) or 0.0`
+
+Replace it with a zero-safe first-non-null selection.
+
+Rules:
+
+- A genuine calculated zero remains `0.0`.
+- A missing score remains `None`.
+- A failed scan remains `None`.
+- A legacy partial snapshot remains `None`.
+- Only a successfully scored valid chain may return a numeric score.
+
+Also audit IV, Expected Move, OI, ratios, and history for similar missing-to-zero coercion.
+
+Do not show `$0`, `0.0`, or `0` merely because the source field is absent.
+
+==================================================
+3. ADD ONE BATCH NEON RECOVERY QUERY
+==================================================
+
+In `options_history_store.py`, add a batch function such as:
+
+`get_latest_contract_snapshots_bulk(symbols, max_age_days=30)`
+
+It must use one database round-trip for all requested symbols.
+
+For each underlying:
+
+1. Find its latest valid snapshot timestamp or latest coherent snapshot batch.
+2. Select only contracts belonging to that latest scan batch.
+3. Do not combine unrelated scans from different dates.
+4. Prefer a consistent expiration set.
+5. Return the captured timestamp, underlying price, expiration, and contract rows.
+
+Avoid N+1 queries.
+
+A reasonable coherent-batch rule may use:
+
+- the latest `captured_at` for the underlying
+- contracts captured within a narrow window around that latest timestamp
+- the same latest regular-session date
+- the same relevant expiration set
+
+Document the exact selection rule.
+
+==================================================
+4. RECONSTRUCT RAW CHAIN ROWS
+==================================================
+
+Convert the Neon contract rows into the raw contract shape accepted by the existing `chain_score_helper`:
+
+- `symbol`
+- `strike`
+- `bid`
+- `ask`
+- `last`
+- `volume`
+- `openInterest`
+- `iv`
+- `delta`
+- `gamma`
+- `theta`
+- `vega`
+
+Split them into calls and puts using `option_type`.
+
+Use the stored:
+
+- underlying price
+- expiration
+- Expected Move
+- captured timestamp
+
+Do not call Tradier for missing fields.
+
+==================================================
+5. RECOVER THE RICH METRICS NOW
+==================================================
+
+For every legacy partial supplement row, attempt recovery from Neon.
+
+Calculate or recover:
+
+- call OI
+- put OI
+- total OI
+- call IV
+- put IV
+- combined IV
+- IV skew
+- Expected Move dollars
+- Expected Move percentage
+- volume P/C
+- Score
+- Signal
+- score components
+- contracts scored
+- data-quality flags
+
+Use the existing `chain_score_helper`.
+
+However, label the recovered score honestly:
+
+- `options_score_version = "chain_summary_v1"`
+- `options_score_source = "neon_contract_snapshot_recovery"`
+- `options_score_status = "recovered_from_saved_chain"`
+
+Do not label it `tradier_flow_v1`.
+
+The helper is not identical to the master pipeline because:
+
+- it uses a chain-summary path
+- it may use a limited saved contract set
+- it lacks full stock context
+- its Stock Context component is zero
+
+Master `tradier_flow_v1` rows must continue to win when present.
+
+==================================================
+6. EXPECTED MOVE RULES
+==================================================
+
+Use the explicit unit contract already added:
+
+- fraction `0.0433` → `4.33`
+- percentage points `4.33` → `4.33`
+- dollar move remains a separate dollar field
+
+Prefer the saved `expected_move_pct` when it is valid.
+
+Otherwise derive it from:
+
+`expected_move_dollars / underlying_price × 100`
+
+Do not multiply percentage points by 100 again.
+
+Reject implausible outputs such as 433% caused by unit confusion.
+
+==================================================
+7. NON-DESTRUCTIVE RECOVERY MERGE
+==================================================
+
+Merge the recovered fields into the existing supplement LKG ticker-by-ticker.
+
+Preserve current premium data:
+
+- Call Premium
+- Put Premium
+- Net Premium
+- Premium P/C
+- Ask/Bid/Mid
+- volume counts
+- history fields
+
+Only fill currently missing rich fields.
+
+Do not overwrite newer populated values with older recovered values.
+
+Precedence:
+
+1. Current master `tradier_flow_v1`
+2. Existing enriched `supplement_v2`
+3. Neon recovered `chain_summary_v1`
+4. Portfolio LKG
+5. Legacy partial supplement row
+
+Persist the recovered result immediately so it survives restart.
+
+Add:
+
+- `recovered_from_neon = true`
+- `recovery_snapshot_as_of`
+- `recovery_contract_count`
+- `recovery_expiration`
+- `recovery_age_seconds`
+- `recovery_quality_status`
+
+==================================================
+8. RUN THE RECOVERY NOW
+==================================================
+
+Do not merely add a function.
+
+Run the cache-only recovery against the current 438 legacy partial rows immediately.
+
+It may run:
+
+- once during startup
+- or through an internal maintenance function invoked now
+
+It must:
+
+- use zero Tradier calls
+- use one batched Neon fetch
+- update the supplement cache
+- update the durable LKG
+- make the Watchlist endpoint see the result without another deploy
+
+Do not run it repeatedly on every Watchlist request.
+
+==================================================
+9. HONEST HANDLING OF UNRECOVERABLE ROWS
+==================================================
+
+Some tickers may have no saved contract snapshots.
+
+For those rows:
+
+- preserve Premium P/C, Net Premium, and volume
+- keep score/IV/EM/OI null
+- return `options_score_status = "awaiting_regular_session_scan"`
+- return `options_signal = "AWAITING SCAN"` or another concise explicit status
+- return `rich_metrics_unavailable_reason = "no_saved_contract_snapshot"`
+- leave them in the Monday high-priority backfill queue
+
+Do not return fake zero scores.
+
+==================================================
+10. VERIFY THE MONDAY QUEUE IS ACTUALLY CONSUMED
+==================================================
+
+The queue currently reports 438 candidates, but prove the real supplement loop consumes it.
+
+Trace:
+
+- queue insertion
+- batch selection
+- dequeue behavior
+- scan invocation
+- successful cache update
+- durable save
+- completed/remaining counters
+- retry behavior
+
+Add a test using the real queue and supplement loop functions:
+
+1. Insert three partial symbols.
+2. Run one permitted mocked scan batch.
+3. Assert the three symbols are selected before normal universe symbols.
+4. Assert rich fields are persisted.
+5. Assert completed increments.
+6. Assert remaining decrements.
+7. Assert failures remain queued.
+
+==================================================
+11. REAL ENDPOINT VERIFICATION TODAY
+==================================================
+
+After running the Neon recovery, call the actual authenticated Watchlist endpoint.
+
+Show before/after counts for:
+
+- numeric genuine Score
+- Signal
+- Vol P/C
+- Prem P/C
+- Net Premium
+- IV
+- EM
+- OI
+- Net 1D
+- Net 7D
+- Net 30D
+- fake zero scores
+- Neon-recovered rows
+- awaiting-session rows
+
+Return complete endpoint rows for:
+
+- AAOI
+- ABCL
+- ACLS
+- AEHR
+- AEVA
+- AKAM
+
+Then open the actual Watchlist Options toggle and verify those fields visibly render.
+
+Provide a screenshot.
+
+==================================================
+12. COMPLETION STANDARD
+==================================================
+
+Do not say complete because code was added or a queue exists.
+
+Completion today requires:
+
+- Neon recovery actually executed
+- recovered rows persisted
+- endpoint coverage increased
+- fake score zeros removed
+- actual Watchlist UI verified
+- zero Tradier calls
+- no frontend changes
+
+For tickers without recoverable snapshots, report the exact count that must wait for the next regular session.

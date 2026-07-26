@@ -327,7 +327,10 @@ def _normalize_master_row(sym: str, row: dict) -> dict:
 
     iv_f = _sf(iv_raw)
 
-    score     = _sf(row.get("final_composite_score") or row.get("composite_score")) or 0.0
+    _raw_score_m = row.get("final_composite_score")
+    if _raw_score_m is None:
+        _raw_score_m = row.get("composite_score")
+    score = _sf(_raw_score_m)  # None stays None; only 0.0 if chain was actually scored zero
     pc        = _sf(row.get("pc_ratio"))
     total_vol = _si(row.get("total_volume"))
 
@@ -402,7 +405,7 @@ def _normalize_master_row(sym: str, row: dict) -> dict:
         "symbol":              sym,
         "optionable":          True,
         "data_available":      True,
-        "score":               round(float(score), 1),
+        "score":               round(float(score), 1) if score is not None else None,
         # ── Legacy P/C aliases (backward compat — do not remove) ──
         "p_c":                 pc_rounded,
         "put_call":            pc_rounded,

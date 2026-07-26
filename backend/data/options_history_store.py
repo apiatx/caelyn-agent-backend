@@ -432,6 +432,104 @@ def get_contract_flow_history_summary(contract_symbol: str, days: int = 30) -> d
         _put_conn(conn)
 
 
+def get_latest_contract_snapshots_bulk(symbols: list, max_age_days: int = 30) -> dict:
+    """
+    Batch-fetch the latest coherent contract snapshot for each requested symbol.
+    Uses exactly ONE database round-trip for all symbols (no N+1).
+
+    Selection rule (documented):
+        1. Find MAX(captured_at) per underlying within max_age_days.
+        2. Retrieve all contracts captured within a 10-minute window ending at
+           that latest timestamp.  This tolerates multiple sequential writes in the
+           same scan session while never mixing rows from different scan dates.
+        3. Contracts from different scan dates are NEVER combined.
+
+    Returns:
+        {
+            "AAPL": {
+                "underlying_price":  175.50,
+                "captured_at":       "2024-01-15T18:00:00",  # ISO string
+                "captured_at_epoch": 1705341600.0,           # float for age calc
+                "contracts": [                               # Neon row dicts
+                    {"underlying": ..., "contract_symbol": ..., "option_type": "call",
+                     "strike": ..., "bid": ..., ...},
+                    ...
+                ]
+            },
+            ...
+        }
+    Missing symbols (no saved snapshot within max_age_days) are absent from the dict.
+    """
+    if not symbols:
+        return {}
+    conn = _get_conn()
+    if conn is None:
+        return {}
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            WITH latest_ts AS (
+                SELECT underlying, MAX(captured_at) AS latest_at
+                FROM public.options_flow_snapshots
+                WHERE underlying = ANY(%s)
+                  AND captured_at >= NOW() - (%s * INTERVAL '1 day')
+                GROUP BY underlying
+            )
+            SELECT
+                s.underlying, s.contract_symbol, s.expiration, s.option_type, s.strike,
+                s.underlying_price, s.bid, s.ask, s.last, s.midpoint,
+                s.volume, s.open_interest, s.implied_volatility, s.delta, s.gamma,
+                s.theta, s.vega, s.spread_pct, s.premium_traded_estimate, s.expected_move_pct,
+                s.captured_at
+            FROM public.options_flow_snapshots s
+            JOIN latest_ts l ON s.underlying = l.underlying
+            WHERE s.captured_at >= l.latest_at - INTERVAL '10 minutes'
+              AND s.captured_at <= l.latest_at + INTERVAL '1 second'
+            ORDER BY s.underlying, s.expiration, s.option_type, s.strike
+        """, (list(symbols), max_age_days))
+        rows = cur.fetchall()
+        desc = [d[0] for d in cur.description]
+        cur.close()
+
+        result: dict = {}
+        for row in rows:
+            d = dict(zip(desc, row))
+            sym = d["underlying"]
+            if sym not in result:
+                cap_at = d.get("captured_at")
+                result[sym] = {
+                    "underlying_price":  float(d["underlying_price"]) if d.get("underlying_price") else None,
+                    "captured_at":       cap_at.isoformat() if hasattr(cap_at, "isoformat") else str(cap_at or ""),
+                    "captured_at_epoch": cap_at.timestamp() if hasattr(cap_at, "timestamp") else 0.0,
+                    "contracts":         [],
+                }
+            # Normalise Decimal / datetime types for JSON-safety downstream
+            d_clean: dict = {}
+            _str_fields = {"underlying", "contract_symbol", "expiration", "option_type"}
+            for k, v in d.items():
+                if v is None:
+                    d_clean[k] = None
+                elif hasattr(v, "timestamp"):  # datetime.datetime → ISO string
+                    d_clean[k] = v.isoformat()
+                elif k in _str_fields:
+                    # datetime.date objects (e.g. expiration) lack .timestamp() but
+                    # must still be serialised to "YYYY-MM-DD" for _days_to_expiration.
+                    d_clean[k] = v.strftime("%Y-%m-%d") if hasattr(v, "strftime") else str(v) if not isinstance(v, str) else v
+                else:
+                    try:
+                        d_clean[k] = float(v)
+                    except (TypeError, ValueError):
+                        d_clean[k] = v
+            result[sym]["contracts"].append(d_clean)
+
+        return result
+    except Exception as e:
+        print(f"[OPTIONS_STORE] get_latest_contract_snapshots_bulk error: {e}")
+        return {}
+    finally:
+        _put_conn(conn)
+
+
 # ── Fetch Progress Tracking ──────────────────────────────────────────
 def get_fetch_progress(ticker: str = None) -> list[dict] | dict | None:
     """Get fetch progress for one or all tickers."""

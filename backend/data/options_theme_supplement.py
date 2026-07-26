@@ -1633,3 +1633,331 @@ def get_rich_backfill_diag() -> dict:
       identified_at             — epoch timestamp of the last identification run
     """
     return dict(_RICH_BACKFILL_STATE)
+
+
+# ── Neon Contract Snapshot Recovery ──────────────────────────────────────────
+# Runs once at startup (post-yield bootstrap) to immediately enrich legacy
+# partial supplement rows using saved Neon contract-level snapshots.
+# Uses zero Tradier calls and exactly one database round-trip for all symbols.
+
+_NEON_RECOVERY_STATE: dict = {
+    "ran":                 False,
+    "recovered":           0,
+    "no_snapshot":         0,
+    "already_rich":        0,
+    "failed":              0,
+    "total_partial":       0,
+    "symbols_recovered":   [],
+    "symbols_no_snapshot": [],
+    "ran_at":              None,
+}
+
+
+def _neon_contract_to_tradier(c: dict) -> dict:
+    """
+    Convert a Neon options_flow_snapshots row to the Tradier-compatible dict
+    format expected by chain_score_helper (OptionsFlowEngine._normalize_contract).
+
+    Tradier uses camelCase openInterest and lowercase iv.
+    Neon uses snake_case open_interest and implied_volatility.
+    """
+    def _sf2(v):
+        try:
+            return float(v) if v is not None else None
+        except Exception:
+            return None
+
+    bid  = _sf2(c.get("bid"))  or 0.0
+    ask  = _sf2(c.get("ask"))  or 0.0
+    last = _sf2(c.get("last")) or 0.0
+
+    # Weekend / market-closed replay fix:
+    # Neon stores the midpoint computed at scan time (when the market was open
+    # and bid/ask were live).  When replayed after-hours, bid=0 and ask=0 so
+    # _midpoint() would return None → _normalize_contract filters the contract.
+    # Use the stored midpoint as the `last` price fallback so the scorer sees
+    # a valid price (same value it would have computed during the live scan).
+    if not last and not bid and not ask:
+        stored_mp = _sf2(c.get("midpoint"))
+        if stored_mp and stored_mp > 0:
+            last = stored_mp
+
+    return {
+        "symbol":       c.get("contract_symbol") or "",
+        "strike":       _sf2(c.get("strike")) or 0.0,
+        "bid":          bid,
+        "ask":          ask,
+        "last":         last,
+        "volume":       int(c.get("volume") or 0),
+        "openInterest": int(c.get("open_interest") or 0),
+        "iv":           _sf2(c.get("implied_volatility")),
+        "delta":        _sf2(c.get("delta")),
+        "gamma":        _sf2(c.get("gamma")),
+        "theta":        _sf2(c.get("theta")),
+        "vega":         _sf2(c.get("vega")),
+    }
+
+
+def recover_supplement_lkg_from_neon(max_age_days: int = 30) -> dict:
+    """
+    Batch recover rich metrics (score / IV / OI / EM / signal) for partial
+    supplement LKG rows by replaying saved Neon contract snapshots through the
+    existing chain_score_helper pipeline.
+
+    Contract selection rule (one DB round-trip):
+        1. MAX(captured_at) per underlying within max_age_days.
+        2. All contracts captured within 10 min ending at that timestamp
+           (same scan session — multiple sequential flush writes tolerated).
+        3. Contracts from different scan dates are NEVER mixed.
+
+    Recovery provenance labels (honest — never impersonates tradier_flow_v1):
+        options_score_version = "chain_summary_v1"
+        options_score_source  = "neon_contract_snapshot_recovery"
+        options_score_status  = "recovered_from_saved_chain"
+
+    Non-destructive merge:
+        Only fills None fields.  Never overwrites existing populated values.
+        Existing call_premium / put_premium / net_premium / volume are preserved.
+
+    Precedence after recovery:
+        master tradier_flow_v1  >  supplement_v2  >  chain_summary_v1 (this)  >  legacy partial
+    """
+    from data.cache import cache  # lazy import — same pattern as every other fn in this file
+    from data.chain_score_helper import (
+        score_chain_summary,
+        compute_chain_iv,
+        compute_chain_oi,
+        estimate_expected_move,
+    )
+    from data.options_history_store import get_latest_contract_snapshots_bulk
+    from data.portfolio_options_service import normalize_expected_move_pct
+
+    # ── Get current supplement LKG state ────────────────────────────────────
+    lkg_snap = cache.get(_SUPPLEMENT_LKG_CACHE_KEY) or {}
+    lkg_td   = dict(lkg_snap.get("ticker_data", {}))
+
+    # Guard: if the in-memory cache is empty (startup race — _deferred_sync_startup
+    # loads the disk LKG in a background thread that may not have finished by the time
+    # _post_yield_bootstrap step 7 runs), load from disk directly so this one recovery
+    # pass sees the full 438-row LKG set.
+    if not lkg_td:
+        try:
+            _load_supplement_lkg_from_disk()
+            lkg_snap = cache.get(_SUPPLEMENT_LKG_CACHE_KEY) or {}
+            lkg_td   = dict(lkg_snap.get("ticker_data", {}))
+            print(f"[NEON_RECOVERY] Loaded LKG from disk fallback: {len(lkg_td)} rows")
+        except Exception as _disk_err:
+            print(f"[NEON_RECOVERY] Disk fallback load error (non-fatal): {_disk_err}")
+
+    partial_syms = [
+        sym for sym, row in lkg_td.items()
+        if _lkg_has_real_data(row) and not _row_is_rich(row)
+    ]
+    already_rich = sum(1 for row in lkg_td.values() if _row_is_rich(row))
+
+    if not partial_syms:
+        _NEON_RECOVERY_STATE.update({
+            "ran": True, "recovered": 0, "no_snapshot": 0,
+            "already_rich": already_rich, "failed": 0,
+            "total_partial": 0, "symbols_recovered": [],
+            "symbols_no_snapshot": [], "ran_at": time.time(),
+        })
+        print("[NEON_RECOVERY] No partial rows — all supplement rows already rich")
+        return dict(_NEON_RECOVERY_STATE)
+
+    print(f"[NEON_RECOVERY] Checking {len(partial_syms)} partial rows against Neon snapshots...")
+
+    # ── One batch DB fetch ───────────────────────────────────────────────────
+    try:
+        snapshot_map = get_latest_contract_snapshots_bulk(partial_syms, max_age_days=max_age_days)
+    except Exception as _e:
+        print(f"[NEON_RECOVERY] DB batch fetch failed: {_e}")
+        _NEON_RECOVERY_STATE.update({
+            "ran": True, "recovered": 0, "no_snapshot": len(partial_syms),
+            "already_rich": already_rich, "failed": 0,
+            "total_partial": len(partial_syms), "symbols_recovered": [],
+            "symbols_no_snapshot": partial_syms[:50], "ran_at": time.time(),
+        })
+        return dict(_NEON_RECOVERY_STATE)
+
+    print(f"[NEON_RECOVERY] Neon returned snapshots for {len(snapshot_map)}/{len(partial_syms)} symbols")
+
+    recovered_syms:   list = []
+    no_snapshot_syms: list = []
+    failed_count      = 0
+    enriched_td:      dict = {}
+    now_ts = time.time()
+
+    for sym in partial_syms:
+        if sym not in snapshot_map:
+            no_snapshot_syms.append(sym)
+            # Mark honestly as unrecoverable — preserve existing row
+            existing = dict(lkg_td.get(sym, {}))
+            if existing.get("options_score_status") is None:
+                existing["options_score_status"]             = "awaiting_regular_session_scan"
+                existing["options_signal"]                   = existing.get("options_signal") or "AWAITING SCAN"
+                existing["rich_metrics_unavailable_reason"]  = "no_saved_contract_snapshot"
+            enriched_td[sym] = existing
+            continue
+
+        snap         = snapshot_map[sym]
+        contracts    = snap.get("contracts", [])
+        underlying_p = snap.get("underlying_price")
+        captured_at  = snap.get("captured_at")
+        recovery_age = now_ts - snap.get("captured_at_epoch", now_ts)
+
+        if not contracts:
+            print(f"[NEON_RECOVERY] {sym}: skipped — no contracts in snapshot")
+            no_snapshot_syms.append(sym)
+            continue
+        if not underlying_p:
+            print(f"[NEON_RECOVERY] {sym}: skipped — underlying_price is None/zero (contracts={len(contracts)})")
+            no_snapshot_syms.append(sym)
+            continue
+
+        try:
+            # Split by option_type; convert Neon → Tradier format
+            calls_raw = [_neon_contract_to_tradier(c) for c in contracts if c.get("option_type") == "call"]
+            puts_raw  = [_neon_contract_to_tradier(c) for c in contracts if c.get("option_type") == "put"]
+            print(f"[NEON_RECOVERY] {sym}: underlying_p={underlying_p} calls={len(calls_raw)} puts={len(puts_raw)} contracts={len(contracts)}")
+
+            # Dominant expiration (expiry with most contracts)
+            from collections import Counter as _Counter
+            exp_counts   = _Counter(c.get("expiration") for c in contracts if c.get("expiration"))
+            dominant_exp = exp_counts.most_common(1)[0][0] if exp_counts else None
+
+            # Prefer stored expected_move_pct (already in pct form from Neon)
+            stored_em_pcts = [
+                float(c["expected_move_pct"])
+                for c in contracts
+                if c.get("expected_move_pct") is not None
+            ]
+            em_pct = normalize_expected_move_pct(stored_em_pcts[0], unit="pct") if stored_em_pcts else None
+
+            # Chain scoring — non-blocking, pure CPU
+            scored    = score_chain_summary(sym, underlying_p, calls_raw, puts_raw, expiration=dominant_exp)
+            iv_result = compute_chain_iv(calls_raw, puts_raw)
+            oi_result = compute_chain_oi(calls_raw, puts_raw)
+
+            # Derive EM from ATM straddle when not stored
+            if em_pct is None:
+                em_dict = estimate_expected_move(underlying_p, calls_raw, puts_raw)
+                if em_dict:
+                    em_pct = normalize_expected_move_pct(em_dict.get("expected_move_pct"), unit="pct")
+
+            # ── Non-destructive merge ────────────────────────────────────────
+            existing = dict(lkg_td.get(sym, {}))
+
+            def _set_if_missing(key, val):
+                if existing.get(key) is None and val is not None:
+                    existing[key] = val
+
+            _set_if_missing("options_score",     scored.get("options_score"))
+            _set_if_missing("options_signal",    scored.get("options_signal"))
+            _set_if_missing("score_components",  scored.get("score_components"))
+            _set_if_missing("combined_iv",       iv_result.get("combined_iv"))
+            _set_if_missing("call_iv",           iv_result.get("call_iv"))
+            _set_if_missing("put_iv",            iv_result.get("put_iv"))
+            _set_if_missing("iv_skew",           iv_result.get("iv_skew"))
+            _set_if_missing("call_oi",           oi_result.get("call_oi"))
+            _set_if_missing("put_oi",            oi_result.get("put_oi"))
+            _set_if_missing("total_oi",          oi_result.get("total_oi"))
+            _set_if_missing("expected_move_pct", em_pct)
+            _set_if_missing("contracts_scored",  scored.get("contracts_scored"))
+
+            # Provenance metadata — always set for recovered rows
+            existing["options_score_version"]    = "chain_summary_v1"
+            existing["options_score_source"]     = "neon_contract_snapshot_recovery"
+            existing["options_score_status"]     = "recovered_from_saved_chain"
+            existing["recovered_from_neon"]      = True
+            existing["recovery_snapshot_as_of"]  = captured_at
+            existing["recovery_contract_count"]  = len(contracts)
+            existing["recovery_expiration"]      = dominant_exp
+            existing["recovery_age_seconds"]     = round(recovery_age)
+            existing["recovery_quality_status"]  = (
+                "fresh"  if recovery_age < 86400   else
+                "recent" if recovery_age < 604800  else "aged"
+            )
+
+            enriched_td[sym] = existing
+
+            if scored.get("options_score") is not None:
+                recovered_syms.append(sym)
+            else:
+                # chain_empty or no_underlying_price — count as unrecoverable
+                no_snapshot_syms.append(sym)
+
+        except Exception as _err:
+            print(f"[NEON_RECOVERY] {sym} scoring error: {_err}")
+            failed_count += 1
+
+    # ── Merge recovered rows back into live supplement LKG ───────────────────
+    if enriched_td:
+        fresh_snap = cache.get(_SUPPLEMENT_LKG_CACHE_KEY) or {}
+        merged_td  = dict(fresh_snap.get("ticker_data", {}))
+        merged_td.update(enriched_td)
+        cache.set(
+            _SUPPLEMENT_LKG_CACHE_KEY,
+            {"ticker_data": merged_td, "cached_at": now_ts},
+            86400 * 7,
+        )
+        _save_supplement_lkg_to_disk(merged_td)
+        print(
+            f"[NEON_RECOVERY] Merged {len(enriched_td)} rows into supplement LKG "
+            f"(recovered_with_score={len(recovered_syms)} no_snapshot={len(no_snapshot_syms)} "
+            f"failed={failed_count})"
+        )
+
+    # ── Update rich-backfill state counters ──────────────────────────────────
+    global _RICH_BACKFILL_CANDIDATES
+    for sym in recovered_syms:
+        if sym in _RICH_BACKFILL_CANDIDATES:
+            _RICH_BACKFILL_CANDIDATES.discard(sym)
+            _RICH_BACKFILL_STATE["rich_backfill_completed"] += 1
+            _RICH_BACKFILL_STATE["rich_backfill_remaining"] = max(
+                0, _RICH_BACKFILL_STATE["rich_backfill_remaining"] - 1
+            )
+            _RICH_BACKFILL_STATE["enriched_supplement_rows"] = (
+                _RICH_BACKFILL_STATE.get("enriched_supplement_rows", 0) + 1
+            )
+            _RICH_BACKFILL_STATE["legacy_partial_rows"] = max(
+                0, _RICH_BACKFILL_STATE.get("legacy_partial_rows", 0) - 1
+            )
+
+    _NEON_RECOVERY_STATE.update({
+        "ran":                 True,
+        "recovered":           len(recovered_syms),
+        "no_snapshot":         len(no_snapshot_syms),
+        "already_rich":        already_rich,
+        "failed":              failed_count,
+        "total_partial":       len(partial_syms),
+        "symbols_recovered":   recovered_syms,
+        "symbols_no_snapshot": no_snapshot_syms[:50],
+        "ran_at":              now_ts,
+    })
+    return dict(_NEON_RECOVERY_STATE)
+
+
+def get_neon_recovery_diag() -> dict:
+    """Return current Neon recovery state for /api/rate-status."""
+    return dict(_NEON_RECOVERY_STATE)
+
+
+def run_neon_recovery_now() -> None:
+    """
+    Synchronous entry point for the post-yield bootstrap thread.
+    Runs the Neon contract snapshot recovery once at startup.
+    Errors are non-fatal — the supplement loop remains the primary enrichment path.
+    """
+    try:
+        result = recover_supplement_lkg_from_neon()
+        print(
+            f"[NEON_RECOVERY] Startup complete: recovered={result['recovered']} "
+            f"no_snapshot={result['no_snapshot']} "
+            f"already_rich={result['already_rich']} "
+            f"total_partial={result['total_partial']}"
+        )
+    except Exception as _e:
+        import traceback as _tb
+        print(f"[NEON_RECOVERY] Startup recovery failed (non-fatal): {_e}")
+        _tb.print_exc()

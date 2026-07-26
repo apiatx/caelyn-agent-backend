@@ -1136,6 +1136,19 @@ async def lifespan(app):
             print(f"[BOOTSTRAP] Earnings curated precompute init error: {_e}")
             _BOOTSTRAP_STATE["steps"]["earn_snaps"] = {"ok": False, "error": str(_e)}
 
+        # 7. Neon contract snapshot recovery — enrich partial supplement LKG rows
+        #    immediately using saved Neon data. Zero Tradier calls. One DB round-trip.
+        #    Recovers score/IV/OI/EM/signal for ~15-30 symbols that have saved contract
+        #    snapshots; all others remain queued for the next regular-session scan.
+        _t = _bst.monotonic()
+        try:
+            from data.options_theme_supplement import run_neon_recovery_now as _neon_rec
+            _neon_rec()
+            _BOOTSTRAP_STATE["steps"]["neon_recovery"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
+        except Exception as _e:
+            print(f"[BOOTSTRAP] Neon snapshot recovery error (non-fatal): {_e}")
+            _BOOTSTRAP_STATE["steps"]["neon_recovery"] = {"ok": False, "error": str(_e)}
+
         _elapsed = _bst.monotonic() - _bt0
         _BOOTSTRAP_STATE["done"] = True
         _BOOTSTRAP_STATE["elapsed_ms"] = round(_elapsed * 1000)
@@ -6345,6 +6358,10 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
         "rich_backfill": (lambda _rb: _rb)(
             __import__("data.options_theme_supplement", fromlist=["get_rich_backfill_diag"])
             .get_rich_backfill_diag()
+        ),
+        "neon_recovery": (lambda _nr: _nr)(
+            __import__("data.options_theme_supplement", fromlist=["get_neon_recovery_diag"])
+            .get_neon_recovery_diag()
         ),
         # ── Phase 4A: active quote demand ─────────────────────────────────────
         "quote_demand": quote_demand_diag,
