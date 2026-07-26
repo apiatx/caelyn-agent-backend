@@ -456,6 +456,511 @@ def _unavail_row(sym: str, reason: str, optionable: bool | None = None) -> dict:
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# MULTI-SOURCE JOIN HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _first_non_null(*values):
+    """Return first non-None value. Preserves 0, False, and empty string."""
+    for v in values:
+        if v is not None:
+            return v
+    return None
+
+
+def _si_n(v) -> int | None:
+    """Safe int — returns None for None input, int otherwise."""
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _classify_row_family(row: dict | None) -> str:
+    """
+    Detect the schema family of a raw options row.
+
+    master_scored   — full TradierFlowEngine output (score + IV + OI present)
+    premium_summary — sectors_chain_summarizer/supplement (premium+volume, no score)
+    portfolio_lkg   — portfolio disk LKG (score+IV+OI+vol_pc, no premium dollar fields)
+    unavailable     — error / placeholder
+    """
+    if not row:
+        return "unavailable"
+    # Supplement rows from get_combined_ticker_data() do NOT set data_available;
+    # they are identified by the presence of call_premium/net_premium data.
+    _has_prem_data = (
+        row.get("call_premium") is not None
+        or row.get("net_premium") is not None
+        or row.get("call_volume") is not None
+    )
+    if not row.get("data_available") and not _has_prem_data:
+        return "unavailable"
+    oc = row.get("options_context") or {}
+    has_score = (
+        row.get("final_composite_score") is not None
+        or row.get("composite_score") is not None
+        or (row.get("score") is not None and
+            row.get("options_score_version") is not None)
+    )
+    has_iv = (
+        oc.get("iv_current") is not None
+        or row.get("avg_call_iv") is not None
+        or row.get("avg_put_iv") is not None
+        or row.get("iv") is not None
+    )
+    has_call_prem = row.get("call_premium") is not None
+    if has_score and has_iv:
+        return "master_scored"
+    if has_call_prem and not has_score:
+        return "premium_summary"
+    if has_score or has_iv or row.get("call_open_interest") is not None:
+        return "portfolio_lkg"
+    return "unknown"
+
+
+def _build_snapshot_status(
+    row: dict | None,
+    is_stale: bool,
+    market_hours: bool,
+) -> str:
+    """
+    Return an explicit lifecycle status.  Never returns 'unknown'.
+
+    live             — freshly scanned this session
+    prior_session    — from disk LKG, data from last session (market hours)
+    lkg_market_closed — from disk LKG, market currently closed
+    stale_but_usable — supplement LKG or cached but aged
+    stale_long_term  — LKG older than 24 h during market hours
+    pending          — scan queued, no data yet
+    unavailable      — no data, not pending
+    """
+    # Supplement rows don't set data_available — treat them as data-available
+    # if they carry actual premium or volume data.
+    _has_prem_data = (
+        row and (
+            row.get("call_premium") is not None
+            or row.get("net_premium") is not None
+            or row.get("call_volume") is not None
+        )
+    )
+    if not row or (not row.get("data_available") and not _has_prem_data):
+        reason = (row or {}).get("unavailable_reason") or ""
+        if reason in ("scan_pending", "scan_in_progress"):
+            return "pending"
+        return "unavailable"
+
+    snap_status = row.get("_snapshot_status") or row.get("snapshot_status") or ""
+    scan_status = row.get("scan_status") or ""
+    source      = row.get("source") or row.get("_source") or ""
+    from_lkg    = bool(row.get("from_lkg"))
+
+    if snap_status == "available_live" or scan_status == "live":
+        return "live"
+    if snap_status == "lkg_market_closed":
+        return "lkg_market_closed"
+    if from_lkg:
+        lkg_age = _lkg_age_seconds(row)
+        if lkg_age and lkg_age > 86400:
+            return "stale_long_term"
+        return "prior_session" if market_hours else "lkg_market_closed"
+    if "supplement_lkg" in source or "supplement_lkg" in scan_status:
+        return "lkg_market_closed" if not market_hours else "stale_but_usable"
+    if "available_cached" in snap_status:
+        return "stale_but_usable"
+    if not market_hours:
+        return "lkg_market_closed"
+    return "stale_but_usable" if is_stale else "live"
+
+
+def _merge_options_sources(
+    sym: str,
+    primary_row: dict | None,
+    supplement_row: dict | None,
+    lkg_row: dict | None,
+    history_deltas: dict | None,
+    is_stale: bool,
+    market_hours: bool = True,
+) -> dict:
+    """
+    Non-destructive field-aware join across all available options data layers.
+
+    Field ownership (per spec):
+      MASTER (primary_row):
+        score, signal, confidence, IV, Expected Move, OI,
+        volume P/C, expiration scope/DTE, master fingerprint.
+      SUPPLEMENT (supplement_row):
+        call/put/net premium, interval classification, premium P/C,
+        premium scope ID, call/put/total volume counts (7-60 DTE scope).
+      LKG (lkg_row):
+        Fallback for score/IV/OI/signal/volume when primary is absent.
+        LKG rows contain score+IV+OI+vol_pc but no call/put premium fields.
+      HISTORY (history_deltas):
+        net_premium_change_1d/7d/30d — exclusively from DB.
+
+    Rules:
+      • _first_non_null() is used instead of falsy `or` so real 0 is preserved.
+      • Never derive volume P/C from premium values.
+      • Never derive premium P/C from contract volume.
+      • Different-scope volumes are used in order of scope quality.
+    """
+    _p = primary_row if (primary_row and primary_row.get("data_available")) else None
+    # Supplement rows from get_combined_ticker_data() do NOT set data_available;
+    # accept any row that has premium or volume data.
+    _s = supplement_row if supplement_row and (
+        supplement_row.get("data_available")
+        or supplement_row.get("call_premium") is not None
+        or supplement_row.get("net_premium") is not None
+        or supplement_row.get("call_volume") is not None
+    ) else None
+    _l = lkg_row if (lkg_row and lkg_row.get("data_available")) else None
+
+    data_available = bool(_p or _s or _l)
+    if not data_available:
+        return _unavail_row(sym, "scan_pending")
+
+    # Richest available row for provenance metadata
+    _prov = _p or _s or _l
+
+    # ── Row family ────────────────────────────────────────────────────────────
+    master_row_present = _classify_row_family(_p) == "master_scored"
+    oc_p = (_p or {}).get("options_context") or {}
+    oc_l = (_l or {}).get("options_context") or {}
+
+    # ── Score / signal / confidence ───────────────────────────────────────────
+    raw_score = _first_non_null(
+        (_p or {}).get("final_composite_score"),
+        (_p or {}).get("composite_score"),
+        (_l or {}).get("score"),
+        (_l or {}).get("options_score"),
+        (_l or {}).get("final_composite_score"),
+    )
+    score_f   = _sf(raw_score)
+    score_val = round(float(score_f), 1) if score_f is not None else None
+
+    score_version = _first_non_null(
+        (_p or {}).get("options_score_version"),
+        "tradier_flow_v1" if master_row_present else None,
+        (_l or {}).get("options_score_version"),
+    )
+    score_source = _first_non_null(
+        (_p or {}).get("options_score_source"),
+        "options_master_screener" if master_row_present else None,
+        (_l or {}).get("options_score_source"),
+        (_l or {}).get("source"),
+    )
+    score_status = (
+        "master_scored"  if master_row_present
+        else "lkg_fallback" if (_l and _l.get("score") is not None)
+        else "not_scored_by_master"
+    )
+    score_unavail_reason = (
+        None if master_row_present
+        else ("master_row_absent" if not _p else "primary_row_not_scored")
+    )
+
+    raw_signal = _first_non_null(
+        (_p or {}).get("primary_signal"),
+        (_l or {}).get("signal"),
+        (_l or {}).get("options_signal"),
+    )
+    raw_signal_str = (raw_signal or "").lower().replace(" ", "_")
+    signal_display = (
+        _SIGNAL_DISPLAY.get(raw_signal_str, raw_signal_str.upper().replace("_", " "))
+        if raw_signal_str else None
+    )
+
+    # ── IV / Expected Move ────────────────────────────────────────────────────
+    iv_raw = _first_non_null(
+        oc_p.get("iv_current"),
+        (_p or {}).get("avg_call_iv"),
+        (_p or {}).get("avg_put_iv"),
+        (_l or {}).get("iv"),
+        oc_l.get("iv_current"),
+    )
+    iv_f   = _sf(iv_raw)
+    iv_out = round(iv_f, 4) if iv_f is not None else None
+
+    em_raw = _first_non_null(
+        oc_p.get("expected_move_from_atm_straddle"),
+        (_p or {}).get("expected_move"),
+        (_l or {}).get("em"),
+        (_l or {}).get("expected_move"),
+    )
+    if isinstance(em_raw, dict):
+        em_raw = em_raw.get("value") or em_raw.get("move_pct") or em_raw.get("expected_move")
+    em_f   = _sf(em_raw)
+    em_out = round(em_f * 100, 2) if em_f is not None else None
+
+    # ── Volume ────────────────────────────────────────────────────────────────
+    # Precedence: master → LKG (same scan, same scope) → supplement (7-60 DTE)
+    call_vol = _si_n(_first_non_null(
+        (_p or {}).get("call_volume"),
+        (_p or {}).get("total_call_volume"),
+        oc_p.get("call_volume"),
+        (_l or {}).get("call_volume"),
+        (_s or {}).get("call_volume"),
+    ))
+    put_vol = _si_n(_first_non_null(
+        (_p or {}).get("put_volume"),
+        (_p or {}).get("total_put_volume"),
+        oc_p.get("put_volume"),
+        (_l or {}).get("put_volume"),
+        (_s or {}).get("put_volume"),
+    ))
+    total_vol = _si_n(_first_non_null(
+        (_p or {}).get("total_volume"),
+        (_l or {}).get("vol"),
+        (_l or {}).get("volume"),
+        (_s or {}).get("total_volume"),
+    ))
+
+    # Volume P/C: master pc_ratio → LKG p_c/put_call (same scan)
+    # Only derive from call/put volumes when no direct pc_ratio available.
+    raw_pc = _first_non_null(
+        (_p or {}).get("pc_ratio"),
+        (_l or {}).get("p_c"),
+        (_l or {}).get("put_call"),
+        (_l or {}).get("put_call_ratio"),
+        (_l or {}).get("volume_put_call_ratio"),
+    )
+    vol_pc = _sf(raw_pc)
+    if vol_pc is None and call_vol is not None and put_vol is not None and call_vol > 0:
+        vol_pc = round(put_vol / call_vol, 4)
+    elif vol_pc is not None:
+        vol_pc = round(vol_pc, 3)
+
+    # Reconstruct call/put from total + pc when direct counts absent
+    if call_vol is None and put_vol is None and total_vol and vol_pc is not None:
+        denom = 1 + vol_pc
+        call_vol = round(total_vol / denom) if denom > 0 else 0
+        put_vol  = total_vol - call_vol
+
+    # Direction
+    if vol_pc is not None and vol_pc < 0.5:
+        direction = "calls"
+    elif vol_pc is not None and vol_pc > 2.0:
+        direction = "puts"
+    else:
+        direction = "neutral"
+
+    # Confidence driven by volume
+    _conf_vol = total_vol or 0
+    confidence = _first_non_null(
+        "HIGH"   if _conf_vol > 2000 else None,
+        "MEDIUM" if _conf_vol > 500  else None,
+        (_l or {}).get("confidence"),
+        "LOW",
+    )
+
+    # ── OI ────────────────────────────────────────────────────────────────────
+    call_oi = _si_n(_first_non_null(
+        oc_p.get("call_open_interest"),
+        (_p or {}).get("call_open_interest"),
+        (_l or {}).get("call_open_interest"),
+        (_l or {}).get("call_oi"),
+        oc_l.get("call_open_interest"),
+    ))
+    put_oi = _si_n(_first_non_null(
+        oc_p.get("put_open_interest"),
+        (_p or {}).get("put_open_interest"),
+        (_l or {}).get("put_open_interest"),
+        (_l or {}).get("put_oi"),
+        oc_l.get("put_open_interest"),
+    ))
+    total_oi = _si_n(_first_non_null(
+        (_p or {}).get("open_interest"),
+        (_l or {}).get("open_interest"),
+    ))
+
+    # ── Premium fields ────────────────────────────────────────────────────────
+    # Master owns premium if present; supplement is the primary fallback
+    # (portfolio LKG rows have None for all premium dollar fields).
+    call_prem = _sf(_first_non_null(
+        (_p or {}).get("call_premium"),
+        oc_p.get("call_premium"),
+        (_s or {}).get("call_premium"),
+        (_l or {}).get("call_premium"),
+    ))
+    put_prem = _sf(_first_non_null(
+        (_p or {}).get("put_premium"),
+        oc_p.get("put_premium"),
+        (_s or {}).get("put_premium"),
+        (_l or {}).get("put_premium"),
+    ))
+    net_prem = _sf(_first_non_null(
+        (_p or {}).get("net_premium"),
+        oc_p.get("net_premium"),
+        (_s or {}).get("net_premium"),
+        (_l or {}).get("net_premium"),
+    ))
+    # Derive net if call and put are present and net is missing
+    if net_prem is None and call_prem is not None and put_prem is not None:
+        net_prem = round(call_prem - put_prem, 2)
+
+    # Premium P/C: put_prem / call_prem — never from contract volume
+    cpr = _sf(_first_non_null(
+        (_p or {}).get("call_put_premium_ratio"),
+        oc_p.get("call_put_premium_ratio"),
+        (_s or {}).get("call_put_premium_ratio"),
+    ))
+    if call_prem is not None and put_prem is not None and call_prem > 0:
+        prem_pc = round(put_prem / call_prem, 4)
+    elif cpr is not None and cpr > 0:
+        prem_pc = round(1.0 / cpr, 4)
+    else:
+        prem_pc = None
+
+    # ── Interval classification (ask / bid / midpoint) ────────────────────────
+    int_ask   = _sf(_first_non_null((_p or {}).get("interval_ask_premium"),               oc_p.get("interval_ask_premium"),               (_s or {}).get("interval_ask_premium")))
+    int_bid   = _sf(_first_non_null((_p or {}).get("interval_bid_premium"),               oc_p.get("interval_bid_premium"),               (_s or {}).get("interval_bid_premium")))
+    int_mid   = _sf(_first_non_null((_p or {}).get("interval_midpoint_unknown_premium"),  oc_p.get("interval_midpoint_unknown_premium"),  (_s or {}).get("interval_midpoint_unknown_premium")))
+    int_ask_p = _sf(_first_non_null((_p or {}).get("interval_ask_premium_pct"),           oc_p.get("interval_ask_premium_pct"),           (_s or {}).get("interval_ask_premium_pct")))
+    int_bid_p = _sf(_first_non_null((_p or {}).get("interval_bid_premium_pct"),           oc_p.get("interval_bid_premium_pct"),           (_s or {}).get("interval_bid_premium_pct")))
+    int_mid_p = _sf(_first_non_null((_p or {}).get("interval_midpoint_unknown_premium_pct"), oc_p.get("interval_midpoint_unknown_premium_pct"), (_s or {}).get("interval_midpoint_unknown_premium_pct")))
+
+    # ── Prior-session premiums ────────────────────────────────────────────────
+    _ps_ask  = _sf(_first_non_null((_prov or {}).get("prior_session_ask_premium"),    (_l or {}).get("prior_session_ask_premium"),    (_s or {}).get("prior_session_ask_premium")))
+    _ps_bid  = _sf(_first_non_null((_prov or {}).get("prior_session_bid_premium"),    (_l or {}).get("prior_session_bid_premium"),    (_s or {}).get("prior_session_bid_premium")))
+    _ps_mid  = _sf(_first_non_null((_prov or {}).get("prior_session_midpoint_premium"), (_l or {}).get("prior_session_midpoint_premium"), (_s or {}).get("prior_session_midpoint_premium")))
+    _ps_date = _first_non_null((_prov or {}).get("prior_session_date"),    (_l or {}).get("prior_session_date"),    (_s or {}).get("prior_session_date"))
+    _ps_at   = _first_non_null((_prov or {}).get("prior_session_saved_at"), (_l or {}).get("prior_session_saved_at"), (_s or {}).get("prior_session_saved_at"))
+    if not market_hours and _ps_ask is None:
+        _ps_ask  = int_ask
+        _ps_bid  = int_bid
+        _ps_mid  = int_mid
+        _ps_date = _ps_date or ((_prov or {}).get("_lkg_saved_at") or "")[:10] or None
+        _ps_at   = _ps_at or (_prov or {}).get("_lkg_saved_at")
+
+    # ── Expiration / scope metadata ───────────────────────────────────────────
+    exp_scope = _first_non_null((_p or {}).get("expiration_scope"), (_s or {}).get("expiration_scope"), (_l or {}).get("expiration_scope"))
+    exp_used  = _first_non_null((_p or {}).get("expiration_used"),  (_s or {}).get("expiration_used"),  (_l or {}).get("expiration_used"))
+    dte_used  = _first_non_null((_p or {}).get("dte_used"),         (_s or {}).get("dte_used"),         (_l or {}).get("dte_used"))
+    scope_id  = _first_non_null((_p or {}).get("premium_scope_id"), (_s or {}).get("premium_scope_id"), (_l or {}).get("premium_scope_id"))
+
+    # ── History deltas (1D/7D/30D from DB) ────────────────────────────────────
+    _h = history_deltas or {}
+    np_change_1d  = _sf(_first_non_null(_h.get("net_premium_delta_1d"),  (_prov or {}).get("net_premium_change_1d")))
+    np_change_7d  = _sf(_first_non_null(_h.get("net_premium_delta_7d"),  (_prov or {}).get("net_premium_change_7d")))
+    np_change_30d = _sf(_first_non_null(_h.get("net_premium_delta_30d"), (_prov or {}).get("net_premium_change_30d")))
+    hist_status_1d  = "available" if np_change_1d  is not None else ("insufficient_1d_history"  if net_prem is not None else "history_not_ready")
+    hist_status_7d  = "available" if np_change_7d  is not None else ("insufficient_7d_history"  if net_prem is not None else "history_not_ready")
+    hist_status_30d = "available" if np_change_30d is not None else ("insufficient_30d_history" if net_prem is not None else "history_not_ready")
+
+    # ── Snapshot provenance ───────────────────────────────────────────────────
+    snap_status = _build_snapshot_status(_prov, is_stale, market_hours)
+    snap_source = _first_non_null(
+        (_p or {}).get("source"), (_p or {}).get("_source"),
+        (_s or {}).get("_source"),
+        (_l or {}).get("source"),
+    )
+    snap_as_of = _first_non_null(
+        (_p or {}).get("_cached_at"), (_p or {}).get("_updated_at"),
+        (_s or {}).get("_cached_at"),
+        (_l or {}).get("_updated_at"), (_l or {}).get("_lkg_saved_at"),
+    )
+    import datetime as _mdt
+    reg_session_date = _mdt.datetime.utcnow().strftime("%Y-%m-%d")
+
+    vol_scope  = _first_non_null(scope_id, exp_scope, "7_60dte" if _s else None)
+    vol_method = "total_chain_contracts" if master_row_present else "sectors_chain_interval"
+
+    return {
+        # Availability
+        "data_available":          data_available,
+        "optionable":              True,
+        # Score fields
+        "score":                   score_val,
+        "options_score":           score_val,
+        "options_score_version":   score_version,
+        "options_score_source":    score_source,
+        "options_score_status":    score_status,
+        "options_score_inputs":    oc_p,
+        "options_score_unavailable_reason": score_unavail_reason,
+        "master_score_row_present": master_row_present,
+        "score_comparable_across_rows": master_row_present,
+        # Signal
+        "signal":                  signal_display,
+        "options_signal":          signal_display,
+        "confidence":              confidence,
+        "put_call_direction":      direction,
+        # Volume P/C
+        "p_c":                     vol_pc,
+        "put_call":                vol_pc,
+        "put_call_ratio":          vol_pc,
+        "volume_put_call_ratio":   vol_pc,
+        # Premium P/C
+        "premium_put_call_ratio":  prem_pc,
+        # Premium dollar fields
+        "call_premium":            call_prem,
+        "put_premium":             put_prem,
+        "net_premium":             net_prem,
+        # Interval classification
+        "interval_ask_premium":                  int_ask,
+        "interval_bid_premium":                  int_bid,
+        "interval_midpoint_unknown_premium":     int_mid,
+        "interval_ask_premium_pct":              int_ask_p,
+        "interval_bid_premium_pct":              int_bid_p,
+        "interval_midpoint_unknown_premium_pct": int_mid_p,
+        # Prior-session
+        "prior_session_ask_premium":      _ps_ask,
+        "prior_session_bid_premium":      _ps_bid,
+        "prior_session_midpoint_premium": _ps_mid,
+        "prior_session_date":             _ps_date,
+        "prior_session_saved_at":         _ps_at,
+        # IV / EM
+        "iv":              iv_out,
+        "em":              em_out,
+        "expected_move":   em_out,
+        # Volume
+        "vol":             total_vol,
+        "volume":          total_vol,
+        "call_volume":     call_vol,
+        "put_volume":      put_vol,
+        "options_volume_scope":  vol_scope,
+        "options_volume_method": vol_method,
+        # OI
+        "open_interest":       total_oi,
+        "call_open_interest":  call_oi,
+        "put_open_interest":   put_oi,
+        # History deltas
+        "net_premium_change_1d":          np_change_1d,
+        "net_premium_change_7d":          np_change_7d,
+        "net_premium_change_30d":         np_change_30d,
+        "net_premium_history_status_1d":  hist_status_1d,
+        "net_premium_history_status_7d":  hist_status_7d,
+        "net_premium_history_status_30d": hist_status_30d,
+        "net_premium_1d_ago":    _h.get("net_premium_1d_ago"),
+        "net_premium_7d_ago":    _h.get("net_premium_7d_ago"),
+        "net_premium_30d_ago":   _h.get("net_premium_30d_ago"),
+        "net_premium_trend_1d":  _h.get("net_premium_trend_1d"),
+        "net_premium_trend_7d":  _h.get("net_premium_trend_7d"),
+        "net_premium_trend_30d": _h.get("net_premium_trend_30d"),
+        # Expiration / scope
+        "expiration_scope":  exp_scope,
+        "expiration_used":   exp_used,
+        "dte_used":          dte_used,
+        "premium_scope_id":  scope_id,
+        # Snapshot provenance
+        "snapshot_status":        snap_status,
+        "snapshot_source":        snap_source,
+        "snapshot_as_of":         snap_as_of,
+        "regular_session_date":   reg_session_date,
+        "scan_status":            snap_status,
+        # Legacy compatibility for _normalize_to_watchlist_row
+        "source":              snap_source,
+        "_source":             snap_source,
+        "_snapshot_status":    snap_status,
+        "_cached_at":          snap_as_of,
+        "_updated_at":         snap_as_of,
+        "from_lkg":            bool((_prov or {}).get("from_lkg")),
+        "retry_pending":       (_prov or {}).get("retry_pending"),
+        "unavailable_reason":  None,
+    }
+
+
 def _build_position_fallback_row(sym: str, positions: list[dict]) -> dict:
     """
     Build a partial options-flow row for an open option underlying when the
@@ -1104,7 +1609,31 @@ def _normalize_to_watchlist_row(
         "net_premium_change_7d":               r.get("net_premium_change_7d"),
         "net_premium_change_30d":              r.get("net_premium_change_30d"),
         "snapshot_source":                     r.get("source") or r.get("_source"),
-        "snapshot_as_of":                      r.get("_cached_at") or r.get("_updated_at"),
+        "snapshot_as_of":                      r.get("snapshot_as_of") or r.get("_cached_at") or r.get("_updated_at"),
+        # ── Explicit lifecycle status (never 'unknown') ────────────────────────
+        "snapshot_status":                     r.get("snapshot_status") or r.get("_snapshot_status") or (
+            "stale_but_usable" if r.get("data_available") else
+            "pending" if (r.get("unavailable_reason") or "") in ("scan_pending", "scan_in_progress") else
+            "unavailable"
+        ),
+        "regular_session_date":                r.get("regular_session_date"),
+        # ── Score metadata extended ───────────────────────────────────────────
+        "options_score_status":                r.get("options_score_status"),
+        "options_score_unavailable_reason":    r.get("options_score_unavailable_reason"),
+        "master_score_row_present":            r.get("master_score_row_present", False),
+        # ── Volume scope metadata ─────────────────────────────────────────────
+        "options_volume_scope":                r.get("options_volume_scope"),
+        "options_volume_method":               r.get("options_volume_method"),
+        # ── Net premium history metadata ──────────────────────────────────────
+        "net_premium_history_status_1d":       r.get("net_premium_history_status_1d"),
+        "net_premium_history_status_7d":       r.get("net_premium_history_status_7d"),
+        "net_premium_history_status_30d":      r.get("net_premium_history_status_30d"),
+        "net_premium_trend_1d":                r.get("net_premium_trend_1d"),
+        "net_premium_trend_7d":                r.get("net_premium_trend_7d"),
+        "net_premium_trend_30d":               r.get("net_premium_trend_30d"),
+        "net_premium_1d_ago":                  r.get("net_premium_1d_ago"),
+        "net_premium_7d_ago":                  r.get("net_premium_7d_ago"),
+        "net_premium_30d_ago":                 r.get("net_premium_30d_ago"),
     }
 
 
@@ -1458,6 +1987,46 @@ async def scan_watchlist_options(
     # 2. Disk LKG (single file read, cached in memory after first access)
     disk_lkg = _load_portfolio_lkg()
 
+    # 2.5 Supplement combined snapshot — premium/volume layer for all tickers.
+    # get_combined_ticker_data() is a pure in-memory read (no network calls).
+    # Supplement rows carry call/put/net premium, interval classification, and
+    # volume counts that the portfolio LKG rows do NOT have.
+    try:
+        from data.options_theme_supplement import get_combined_ticker_data as _get_combined
+        combined_snap: dict[str, dict] = _get_combined()
+    except Exception as _cse:
+        print(f"[WATCHLIST_OPTIONS] combined_snap load error: {_cse}")
+        combined_snap = {}
+
+    # 2.6 Batch Net Premium history — one DB round-trip for all US tickers.
+    # Provides 1D/7D/30D delta fields. Non-blocking: any error yields empty dict.
+    _hist_by_ticker: dict[str, dict] = {}
+    try:
+        from data.options_net_premium_history import (
+            get_historical_snapshots_bulk as _get_hist_bulk,
+            compute_delta_fields          as _compute_delta,
+        )
+        import datetime as _hdt
+        from datetime import timedelta as _htd
+        _us_syms_for_hist = [s for s in syms if ":" not in s]
+        _hist_since = _hdt.date.today() - _htd(days=31)
+        # Query both entity types (stock + etf) in one shot; stock wins on overlap
+        _hist_entities = (
+            [("stock", s) for s in _us_syms_for_hist]
+            + [("etf",   s) for s in _us_syms_for_hist]
+        )
+        _hist_raw = _get_hist_bulk(_hist_entities, _hist_since)
+        _hist_today = _hdt.date.today()
+        for _hs in _us_syms_for_hist:
+            _rows = _hist_raw.get(("stock", _hs)) or _hist_raw.get(("etf", _hs)) or []
+            if _rows:
+                # Current net_premium from supplement (most reliable) → disk LKG
+                _src = combined_snap.get(_hs) or disk_lkg.get(_hs) or {}
+                _curr_np = _sf(_src.get("net_premium"))
+                _hist_by_ticker[_hs] = _compute_delta(_curr_np, _rows, _hist_today)
+    except Exception as _he:
+        print(f"[WATCHLIST_OPTIONS] history batch error: {_he}")
+
     # 3. Cache-first pass — NO _MAX_SYMBOLS cap
     # Priority: per-ticker memory cache → master snap → disk LKG
     #           → in-flight registry (already running) → truly uncached
@@ -1681,7 +2250,7 @@ async def scan_watchlist_options(
             f"for background refresh"
         )
 
-    # 5. Build normalised signal map
+    # 5. Build normalised signal map using multi-source join
     # "Stale" means the data is OLD — not just that it came from disk LKG.
     # LKG entries written within the last 30 min are treated as current because
     # the drain just refreshed them; their memory-cache entry may have expired
@@ -1697,9 +2266,34 @@ async def scan_watchlist_options(
         )
     }
     for sym in syms:
-        r = results[sym]
-        is_stale = sym in _stale_set
-        signals[sym] = _normalize_to_watchlist_row(sym, r, is_stale, market_hours=_market_hours)
+        r          = results[sym]
+        is_stale   = sym in _stale_set
+
+        # Multi-source join:
+        #   primary_row    = raw master screener row (score / IV / OI / signal)
+        #   supplement_row = supplement combined row  (premium / volume / interval)
+        #   lkg_row        = portfolio disk LKG       (score / IV / OI fallback)
+        #                    or currently-cached row if no disk entry
+        _master_raw  = master_by_ticker.get(sym)
+        _supp_row    = combined_snap.get(sym)
+        _disk_lkg_r  = disk_lkg.get(sym) if disk_lkg.get(sym, {}).get("data_available") else None
+        # If no disk entry, use the currently-served row as fallback
+        _lkg_or_cur  = _disk_lkg_r or (r if r.get("data_available") else None)
+
+        has_any_data = bool(_master_raw or _supp_row or _lkg_or_cur)
+        if has_any_data:
+            merged = _merge_options_sources(
+                sym,
+                primary_row    = _master_raw,
+                supplement_row = _supp_row,
+                lkg_row        = _lkg_or_cur,
+                history_deltas = _hist_by_ticker.get(sym),
+                is_stale       = is_stale,
+                market_hours   = _market_hours,
+            )
+            signals[sym] = _normalize_to_watchlist_row(sym, merged, is_stale, market_hours=_market_hours)
+        else:
+            signals[sym] = _normalize_to_watchlist_row(sym, r, is_stale, market_hours=_market_hours)
 
     # 6. Extended diagnostics
     from collections import Counter as _Counter
@@ -1950,6 +2544,27 @@ async def scan_watchlist_options(
                 "deferred_background":      _deferred,
                 "quote_retry_lifetime":     _WL_QUOTE_RETRY_STATS["queued_total"],
             },
+            # ── Multi-source join diagnostics ─────────────────────────────────
+            "master_rows_found":          sum(1 for s in syms if s in master_by_ticker),
+            "premium_rows_found":         sum(1 for s in syms if combined_snap.get(s) and (
+                combined_snap[s].get("call_premium") is not None
+                or combined_snap[s].get("net_premium") is not None
+            )),
+            "history_rows_found":         len(_hist_by_ticker),
+            "joined_rows":                sum(1 for s in syms if (
+                master_by_ticker.get(s) or combined_snap.get(s)
+                or (disk_lkg.get(s, {}).get("data_available"))
+            )),
+            "rows_with_score":            sum(1 for v in signals.values() if v.get("options_score") is not None),
+            "rows_with_signal":           sum(1 for v in signals.values() if v.get("options_signal")),
+            "rows_with_volume_pc":        sum(1 for v in signals.values() if v.get("volume_put_call_ratio") is not None),
+            "rows_with_premium_pc":       sum(1 for v in signals.values() if v.get("premium_put_call_ratio") is not None),
+            "rows_with_net_premium":      sum(1 for v in signals.values() if v.get("options_net_premium") is not None),
+            "rows_with_iv":               sum(1 for v in signals.values() if v.get("options_iv") is not None),
+            "rows_with_1d_history":       sum(1 for v in signals.values() if v.get("net_premium_change_1d") is not None),
+            "rows_with_7d_history":       sum(1 for v in signals.values() if v.get("net_premium_change_7d") is not None),
+            "rows_with_30d_history":      sum(1 for v in signals.values() if v.get("net_premium_change_30d") is not None),
+            "supplement_coverage":        len(combined_snap),
             # ── Timing ───────────────────────────────────────────────────
             "generated_at":                   _dt.datetime.utcnow().isoformat() + "Z",
             "ttl_seconds":                    _CACHE_PER_TICKER_TTL,

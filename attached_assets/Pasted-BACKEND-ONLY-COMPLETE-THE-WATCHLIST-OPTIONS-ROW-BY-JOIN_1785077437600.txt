@@ -1,0 +1,628 @@
+BACKEND ONLY — COMPLETE THE WATCHLIST OPTIONS ROW BY JOINING THE EXISTING OPTIONS DATA LAYERS
+
+Do not modify the frontend.
+
+The Watchlist frontend is now correctly fetching, matching, normalizing, and displaying the fields returned by:
+
+`GET /api/watchlist/{id}/options-signals`
+
+Current live evidence:
+
+* 338/396 tickers are reported as having options data
+* Premium P/C displays
+* Net Premium displays
+* Options Volume displays
+* Opt Score, Opt Signal, Vol P/C, IV, EM, OI, and Net 1D/7D/30D remain blank
+* snapshot status displays as `unknown`
+
+This proves the endpoint is returning only a partial premium-summary row for most tickers.
+
+Do not add more frontend aliases.
+Do not add Tradier calls.
+Do not restore the removed Portfolio/Watchlist scanner.
+Do not change the Options Score formula.
+Do not create another cache.
+
+The fix is to join the existing backend options layers into one complete per-ticker response row.
+
+==================================================
+
+1. INSPECT THE REAL SOURCE ROWS FIRST
+   ==================================================
+
+Before editing, inspect actual live rows for at least:
+
+* ALAB
+* AEHR
+* ABCL
+* AAOI
+
+Inspect each ticker in these existing sources:
+
+A. The row returned by:
+
+`data.options_theme_supplement.get_combined_ticker_data()`
+
+B. The current master Options Flow/master screener snapshot
+
+C. The existing options history storage used for:
+
+* Net Premium 1D
+* Net Premium 7D
+* Net Premium 30D
+
+D. The existing Portfolio/Watchlist LKG
+
+E. The final current `/api/watchlist/{id}/options-signals` row
+
+Print a field-coverage matrix showing which source currently contains:
+
+* score
+* score version
+* signal
+* volume P/C
+* premium P/C
+* call volume
+* put volume
+* total volume
+* call OI
+* put OI
+* total OI
+* IV
+* Expected Move
+* call premium
+* put premium
+* net premium
+* Ask/Bid/Mid premium
+* Net Premium 1D
+* Net Premium 7D
+* Net Premium 30D
+* status
+* source
+* as-of timestamp
+* expiration scope
+
+Do not assume every combined-snapshot row has the master screener schema.
+
+==================================================
+2. IDENTIFY THE EXISTING ROW FAMILIES
+=====================================
+
+The current behavior strongly indicates that `get_combined_ticker_data()` contains a premium-summary or sectors-chain row for many tickers rather than a complete master-scored row.
+
+Explicitly classify each source row by shape, for example:
+
+* master scored row
+* premium/sector summary row
+* supplement row
+* canonical LKG row
+* legacy Portfolio LKG row
+* pending/error row
+
+Do not pass every row blindly through `_normalize_master_row()`.
+
+That helper expects master-screener concepts such as:
+
+* `final_composite_score`
+* `composite_score`
+* `primary_signal`
+* `pc_ratio`
+* `avg_call_iv`
+* `avg_put_iv`
+* `options_context`
+
+A premium-summary row may instead contain fields such as:
+
+* `call_premium`
+* `put_premium`
+* `net_premium`
+* `premium_put_call_ratio`
+* `total_contract_volume`
+* interval premium fields
+
+Detect row shape and preserve the fields actually present.
+
+==================================================
+3. BUILD ONE NON-DESTRUCTIVE PER-TICKER JOIN
+============================================
+
+Create or repair one backend helper responsible for building the complete canonical response row.
+
+Use an existing appropriate helper location. Do not create another scanning subsystem.
+
+Conceptually:
+
+`merge_options_ticker_sources(symbol, master_row, premium_row, history_row, lkg_row)`
+
+The merge must be field-aware and non-destructive.
+
+A sparse row must never overwrite a populated value with:
+
+* `None`
+* empty string
+* empty dict
+* empty list
+* placeholder status
+* zero created only by a parser/default
+
+Real numeric zero remains valid.
+
+==================================================
+4. FIELD OWNERSHIP AND PRECEDENCE
+=================================
+
+Use the richest valid value available for each concept.
+
+MASTER OPTIONS FLOW / MASTER SCREENER OWNS:
+
+* Options Score
+* Options Score version
+* Options Score source
+* score components
+* Options Signal
+* confidence
+* IV
+* Expected Move
+* call OI
+* put OI
+* total OI
+* call volume
+* put volume
+* total volume
+* volume put/call ratio
+* expiration focus/scope
+* DTE
+* master scan fingerprint
+* master data-quality metadata
+
+PREMIUM / SECTORS / SUPPLEMENT SNAPSHOT OWNS:
+
+* call premium
+* put premium
+* net premium
+* premium put/call ratio
+* Ask Premium
+* Bid Premium
+* midpoint/unclassified premium
+* Ask/Bid/Mid percentages
+* premium per contract
+* total contract volume
+* call contract volume
+* put contract volume
+* premium methodology
+* premium scope ID
+* interval timestamps
+* prior-session premium fields
+* premium snapshot status/source/as-of
+
+OPTIONS HISTORY STORE OWNS:
+
+* Net Premium change 1D
+* Net Premium change 7D
+* Net Premium change 30D
+* history availability
+* history baseline dates
+* history as-of timestamp
+
+LKG OWNS ONLY FALLBACK VALUES:
+
+* Fill a missing value when no newer valid source has it
+* Never replace a populated current value with an older null or placeholder
+* Preserve valid closed-market values indefinitely until replaced
+
+==================================================
+5. SAFE DERIVATIONS
+===================
+
+Derive a field only when the required underlying values are real and share the same scope.
+
+Allowed:
+
+* `volume_put_call_ratio = put_volume / call_volume`
+* `premium_put_call_ratio = put_premium / call_premium`
+* `total_volume = call_volume + put_volume`
+* `total_open_interest = call_oi + put_oi`
+* `net_premium = call_premium - put_premium`
+
+Rules:
+
+* Preserve zero correctly.
+* Do not divide by zero.
+* Do not derive volume P/C from premium values.
+* Do not derive premium P/C from contract volume.
+* Do not mix different expiration scopes without explicitly recording that mismatch.
+* Prefer a directly supplied canonical field over a derived value.
+
+The current visible Premium P/C and Net Premium must remain unchanged unless they are demonstrably using an incorrect definition.
+
+==================================================
+6. SCORE AND SIGNAL COVERAGE
+============================
+
+Do not invent a new score in this task.
+
+Do not change `tradier_flow_v1`.
+
+Use the existing master score and signal wherever a valid master row exists.
+
+For a ticker that has premium summary data but genuinely has no master-scored row, expose:
+
+* `options_score = null`
+* `options_signal = null` or an existing honest non-scored classification
+* `options_score_status = "not_scored_by_master"`
+* `options_score_unavailable_reason`
+* `master_score_row_present = false`
+
+Do not return a fake zero score.
+
+Do not silently fall back to a different formula without explicit score version/source metadata.
+
+Report how many of the 338 displayable tickers actually have an existing master score.
+
+==================================================
+7. HISTORY JOIN
+===============
+
+The Watchlist currently receives no Net 1D/7D/30D values.
+
+Use the existing options-history storage already powering Options Flow trends.
+
+Perform one batched lookup for the requested Watchlist symbols.
+
+Do not query history separately per ticker.
+
+Join:
+
+* `net_premium_change_1d`
+* `net_premium_change_7d`
+* `net_premium_change_30d`
+* history status
+* history as-of
+* baseline dates where available
+
+Do not calculate a change when the historical baseline is absent.
+
+Return `null` plus an honest status such as:
+
+* `history_not_ready`
+* `insufficient_1d_history`
+* `insufficient_7d_history`
+* `insufficient_30d_history`
+
+==================================================
+8. FIX IV, EXPECTED MOVE, AND OI ALIASES
+========================================
+
+Support the actual source-row keys discovered during the audit.
+
+Likely concepts may exist as:
+
+IV:
+
+* `iv`
+* `implied_volatility`
+* `iv_current`
+* `avg_call_iv`
+* `avg_put_iv`
+* nested `options_context.iv_current`
+
+Expected Move:
+
+* `em`
+* `expected_move`
+* `expected_move_pct`
+* nested `options_context.expected_move_from_atm_straddle`
+
+OI:
+
+* `open_interest`
+* `total_open_interest`
+* `total_oi`
+* `call_open_interest`
+* `put_open_interest`
+* `call_oi`
+* `put_oi`
+* nested options-context fields
+
+Do not use truthiness-based `or` chains when zero is valid.
+
+Use a first-non-null helper.
+
+==================================================
+9. FIX OPTIONS VOLUME SEMANTICS
+===============================
+
+The currently displayed Opt Vol appears to come from the premium-summary layer.
+
+Determine whether it is:
+
+* full chain contract volume
+* filtered contract volume
+* top-contract volume
+* interval contract volume
+
+Expose the correct methodology fields.
+
+Map it consistently to `options_volume` only when that is the intended Watchlist metric.
+
+Also return:
+
+* `options_volume_scope`
+* `options_volume_method`
+* `call_volume`
+* `put_volume`
+
+The displayed volume and Vol P/C must use the same call/put volume scope.
+
+==================================================
+10. FIX SNAPSHOT STATUS
+=======================
+
+The Watchlist currently displays:
+
+`unknown · 4:50 AM ET`
+
+That is not acceptable when the row is a valid cached snapshot.
+
+Normalize existing lifecycle fields such as:
+
+* `_snapshot_status`
+* `snapshot_status`
+* `scan_status`
+* `ticker_state`
+* `_source`
+* `source`
+* `_cached_at`
+* `_updated_at`
+* `_scanned_at`
+* `saved_at`
+
+Return one explicit Watchlist status:
+
+* `live`
+* `prior_session`
+* `lkg_market_closed`
+* `stale_but_usable`
+* `stale_long_term`
+* `pending`
+* `unavailable`
+
+For current valid cached rows during closed markets, use `lkg_market_closed` or the correct stale classification—not `unknown`.
+
+Return:
+
+* `snapshot_status`
+* `snapshot_source`
+* `snapshot_as_of`
+* `regular_session_date`
+
+==================================================
+11. FINAL WATCHLIST RESPONSE CONTRACT
+=====================================
+
+Preserve:
+
+```json
+{
+  "signals": {
+    "ALAB": {}
+  },
+  "options_meta": {}
+}
+```
+
+Each populated signal row must expose these exact concepts:
+
+* `options_score`
+* `options_score_version`
+* `options_score_source`
+* `options_score_status`
+* `options_signal`
+* `options_confidence`
+* `volume_put_call_ratio`
+* `premium_put_call_ratio`
+* `options_call_premium`
+* `options_put_premium`
+* `options_net_premium`
+* `net_premium_change_1d`
+* `net_premium_change_7d`
+* `net_premium_change_30d`
+* `options_iv`
+* `options_expected_move`
+* `options_volume`
+* `options_call_volume`
+* `options_put_volume`
+* `options_open_interest`
+* `options_call_open_interest`
+* `options_put_open_interest`
+* `options_interval_ask_premium`
+* `options_interval_bid_premium`
+* `options_interval_midpoint_premium`
+* `prior_session_ask_premium`
+* `prior_session_bid_premium`
+* `prior_session_midpoint_premium`
+* `snapshot_status`
+* `snapshot_source`
+* `snapshot_as_of`
+* `expiration_scope`
+* `premium_scope_id`
+* `options_data_available`
+
+Preserve compatibility aliases already consumed elsewhere.
+
+==================================================
+12. REQUEST-LEVEL CACHE BEHAVIOR
+================================
+
+For one Watchlist request:
+
+* load each existing snapshot once
+* load history in one batch
+* build lookup dictionaries once
+* merge rows in memory
+* do not repeatedly read disk per symbol
+* do not make provider calls
+* do not enqueue scans while the market is closed merely to answer the request
+
+Use this source precedence:
+
+1. Valid current master row
+2. Valid premium/supplement row
+3. Existing current memory cache values
+4. Existing canonical LKG
+5. Legacy Portfolio LKG
+6. Honest unavailable/pending row
+
+This is field-level precedence, not whole-dict replacement.
+
+A premium row must be able to contribute premium fields while the master row contributes score/IV/OI.
+
+==================================================
+13. DIAGNOSTICS
+===============
+
+Add to `options_meta`:
+
+* `symbols_requested`
+* `displayable_options_rows`
+* `master_rows_found`
+* `premium_rows_found`
+* `history_rows_found`
+* `joined_rows`
+* `rows_with_score`
+* `rows_with_signal`
+* `rows_with_volume_pc`
+* `rows_with_premium_pc`
+* `rows_with_net_premium`
+* `rows_with_1d_history`
+* `rows_with_7d_history`
+* `rows_with_30d_history`
+* `rows_with_iv`
+* `rows_with_expected_move`
+* `rows_with_oi`
+* `rows_with_valid_status`
+* `unknown_status_count`
+* `provider_calls_for_request`
+
+`provider_calls_for_request` must be zero.
+
+==================================================
+14. TESTS
+=========
+
+Add tests covering real source-shape combinations.
+
+TEST A — Premium row plus master row
+
+Premium source supplies:
+
+* Premium P/C
+* Net Premium
+* contract volume
+
+Master source supplies:
+
+* score
+* signal
+* Vol P/C
+* IV
+* EM
+* OI
+
+Assert the final Watchlist row contains all fields.
+
+TEST B — History merge
+
+Seed 1D/7D/30D history and assert all three values appear without provider calls.
+
+TEST C — Sparse row cannot erase rich row
+
+A newer sparse premium row containing null score/IV/OI must not erase populated master values.
+
+TEST D — Zero preservation
+
+Zero Net Premium, zero history delta, and zero ratios remain zero rather than null.
+
+TEST E — Cached closed-market row
+
+Assert valid cached fields display with `lkg_market_closed`, not `unknown`.
+
+TEST F — No master score
+
+Assert premium data remains visible, score stays null, and the response explains `not_scored_by_master`.
+
+TEST G — Scope-safe derivation
+
+Assert Vol P/C is derived from call/put volume, Premium P/C from call/put premium, and the two are not conflated.
+
+TEST H — Real endpoint contract
+
+Call the actual Watchlist options service function with existing snapshot adapters mocked at their storage boundaries.
+
+Assert one complete joined `signals` row.
+
+==================================================
+15. LIVE VERIFICATION
+=====================
+
+Call the actual authenticated Watchlist options endpoint after implementation.
+
+Return complete rows for:
+
+* ALAB
+* AEHR
+* ABCL
+* AAOI
+
+For each ticker show:
+
+* source rows found
+* Opt Score
+* Opt Signal
+* Vol P/C
+* Prem P/C
+* Net Premium
+* Net 1D
+* Net 7D
+* Net 30D
+* IV
+* Expected Move
+* Options Volume
+* OI
+* snapshot status/source/as-of
+* score status
+
+Also show actual coverage counts across the 396 requested tickers.
+
+Do not claim completion merely because Premium P/C, Net Premium, and Opt Vol remain visible.
+
+Completion requires:
+
+* existing master fields joined where available
+* existing history joined where available
+* valid status instead of `unknown`
+* no populated source field lost during merging
+* zero provider calls
+* no frontend changes
+
+==================================================
+FINAL REPORT
+============
+
+Return:
+
+1. Exact root cause
+2. Source-row field matrix
+3. Files changed
+4. Join helper used
+5. Source precedence
+6. Before/after field coverage
+7. Actual `options_meta`
+8. Four real endpoint sample rows
+9. Score coverage count
+10. History coverage counts
+11. Unknown-status count before and after
+12. Provider-call count
+13. Tests and results
+14. Confirmation that no frontend files changed
+15. Confirmation that no scoring formula changed

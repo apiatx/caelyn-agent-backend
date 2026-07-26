@@ -1,3 +1,4 @@
+- [Watchlist options multi-source join](watchlist-options-join.md) — supplement rows have no data_available; LKG has score/IV/OI but no premium $; join required _merge_options_sources + batch history in scan_watchlist_options step 2.5/2.6
 - [Fundamentals quality audit corrections](fundamentals-quality-audit.md) — EPS Growth=fiscal-exact-YoY-diluted; IC=strict-TTM-EBIT/IE; NetDebt/EBITDA=post-BS; overlay=pure-fn-never-stored; backfill-universe=cache-table not tickers field
 - [Social refresh httpx timeout bypass](social-refresh-httpx-timeout-bypass.md) — httpx per-chunk timeout bypassed by grok-4.3 streaming chunks; asyncio.wait_for(135s) required around Phase-1 gather and Phase-2 call
 - [Fib/Wave import path bug](fib-wave-import-bug.md) — entry_state_service.py must use `from services.fib_engine` not `from backend.services.fib_engine`; wrong prefix = silent ModuleNotFoundError; fib/wave always None until fixed
