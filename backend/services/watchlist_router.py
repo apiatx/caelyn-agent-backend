@@ -3576,11 +3576,6 @@ async def watchlist_earnings_endpoint(
                 "fiscal_period":        rev.get("fiscal_period"),
                 "fiscal_year":          rev.get("fiscal_year"),
                 "state":                rev.get("state"),
-                "results_status":       (rev.get("source_status") or {}).get("results_status") or "reported",
-                "reaction_status":      (rev.get("source_status") or {}).get("reaction_status") or (
-                    "reaction_pending" if rxn.get("post_1d_pct") is None else "available"
-                ),
-                "materials_status":     (rev.get("source_status") or {}).get("materials_status") or "materials_pending",
                 "classification":       rev.get("classification"),
                 "eps_actual":           rp.get("eps_actual"),
                 "eps_estimate":         rp.get("eps_estimate"),
@@ -4465,68 +4460,6 @@ async def remove_favorite(request: Request, ticker: str):
 
 _CAT_LKG_PATH = None   # resolved lazily on first call
 
-
-def _merge_company_profile_fields(
-    symbol: str,
-    screener_profile: dict,
-    screener_row: dict,
-    watchlist_profile: dict,
-    watchlist_fields: dict,
-) -> dict:
-    """Merge cached profile sources without letting partial rows erase good data."""
-    raw_profile = screener_row.get("profile") or {}
-
-    def pick(*keys):
-        for source in (watchlist_profile, raw_profile, screener_profile):
-            for key in keys:
-                value = source.get(key)
-                if value is not None and value != "":
-                    return value
-        return None
-
-    return {
-        "symbol": symbol,
-        "company_name": screener_profile.get("name") or pick("companyName", "name") or "",
-        "sector": screener_profile.get("sector") or pick("sector") or "",
-        "industry": screener_profile.get("industry") or pick("industry") or "",
-        "market_cap": (
-            screener_profile.get("market_cap")
-            or watchlist_fields.get("Market Cap")
-            or pick("marketCap", "market_cap")
-        ),
-        "exchange": screener_profile.get("exchange") or pick("exchangeShortName", "exchange") or "",
-        "country": screener_profile.get("country") or pick("country") or "",
-        "beta": screener_profile.get("beta") if screener_profile.get("beta") is not None else pick("beta"),
-        "website": pick("website", "web_url"),
-        "image": pick("image", "logo"),
-        "ceo": pick("ceo"),
-        "description": pick("description"),
-    }
-
-
-def _stable_cached_earnings_intelligence(symbol: str, snapshot: dict | None) -> dict | None:
-    """Return null only for unsupported instruments; eligible companies get a stable EI object."""
-    from services.watchlist_fundamentals_refresh import (
-        ei_ineligible_reason,
-        empty_earnings_intelligence,
-    )
-    if ei_ineligible_reason(symbol, snapshot):
-        return None
-    raw_fields = (snapshot or {}).get("fields") or {}
-    ei = raw_fields.get("earnings_intelligence")
-    empty = empty_earnings_intelligence()
-    if not isinstance(ei, dict) or not ei:
-        return empty
-    stable = {**empty, **ei}
-    stable["ratings"] = {**empty["ratings"], **(ei.get("ratings") or {})}
-    stable["source_status"] = {**empty["source_status"], **(ei.get("source_status") or {})}
-    stable["source_status"]["coverage"] = {
-        **empty["source_status"]["coverage"],
-        **((ei.get("source_status") or {}).get("coverage") or {}),
-    }
-    return stable
-
-
 # ── Fundamentals canonical → snake_case normalization map ────────────────────
 # Keys match EXACTLY what FmpFundamentalsRefresher stores in watchlist_fundamentals_cache.
 # Source: watchlist_fundamentals_refresh.py field-mapping audit table.
@@ -4623,9 +4556,6 @@ async def ticker_detail_endpoint(symbol: str):
             wf_fields  = wf_snap.get("fields") or {}
             wf_profile = wf_fields.get("profile") or {}
             wf_refreshed_at = wf_snap.get("refreshed_at") or None
-            merged_profile = _merge_company_profile_fields(
-                sym, prof, fdb, wf_profile, wf_fields
-            )
 
             # ── 7-level description fallback ──────────────────────────────────
             # Priority: watchlist_fundamentals_cache (FmpFundamentalsRefresher)
@@ -4661,12 +4591,18 @@ async def ticker_detail_endpoint(symbol: str):
                 else:
                     description_missing_reason = "cache_miss_pending_refresh"
 
+            # ── Profile metadata fallback (website / image / ceo / exchange / country) ──
+            # Same priority: watchlist_fundamentals_cache.fields.profile first,
+            # then screener_fundamentals_cache.profile blob.
+            def _pf(key: str) -> str | None:
+                return wf_profile.get(key) or raw_p.get(key) or None
+
             # Resolve canonical market cap using watchlist_fundamentals_cache share
             # basis so company.market_cap == fundamentals.market_cap (same resolver,
             # same implied_shares).  No live price available here (overview not yet
             # built) so the auto-lookup path inside resolve_canonical_market_cap
             # reads from the in-process tradier/quote-lkg caches.
-            _static_mc_fb = merged_profile.get("market_cap")
+            _static_mc_fb = prof.get("market_cap")
             try:
                 from services.market_cap_resolver import resolve_canonical_market_cap as _mc_res_c
                 _mc_contract_c = _mc_res_c(
@@ -4681,21 +4617,18 @@ async def ticker_detail_endpoint(symbol: str):
 
             return {
                 "symbol":       sym,
-                "company_name": merged_profile.get("company_name"),
-                "sector":       merged_profile.get("sector"),
-                "industry":     merged_profile.get("industry"),
+                "company_name": prof.get("name") or raw_p.get("companyName") or "",
+                "sector":       prof.get("sector") or "",
+                "industry":     prof.get("industry") or "",
                 "market_cap":   _company_mc,
-                "exchange":     merged_profile.get("exchange"),
-                "country":      merged_profile.get("country"),
-                "beta":         merged_profile.get("beta"),
-                "website":      merged_profile.get("website"),
-                "image":        merged_profile.get("image"),
+                "exchange":     prof.get("exchange") or wf_profile.get("exchange") or "",
+                "country":      prof.get("country") or wf_profile.get("country") or "",
+                "beta":         prof.get("beta") if prof.get("beta") is not None else wf_profile.get("beta"),
+                "website":      _pf("website"),
+                "image":        _pf("image"),
                 "description":  description,
-                "ceo":          merged_profile.get("ceo"),
-                "source":       (
-                    "watchlist_fundamentals_cache"
-                    if wf_profile else (prof.get("source") or "screener_fundamentals_cache")
-                ),
+                "ceo":          _pf("ceo"),
+                "source":       prof.get("source") or "screener_fundamentals_cache",
                 "description_source":       description_source,
                 "description_last_updated": description_last_updated,
                 "description_missing_reason": description_missing_reason if not description else None,
@@ -5084,8 +5017,18 @@ async def ticker_detail_endpoint(symbol: str):
     try:
         def _fetch_ei():
             from data.watchlist_fundamentals_store import get_snapshot as _get_fs
+            from services.watchlist_fundamentals_refresh import ei_ineligible_reason as _ei_elig
             snap = _get_fs(sym)
-            return _stable_cached_earnings_intelligence(sym, snap)
+            if snap is None:
+                return None
+            _reason = _ei_elig(sym, snap)
+            if _reason:
+                return None  # ETF / non-operating security — no EI
+            raw_fields: dict = snap.get("fields") or {}
+            ei = raw_fields.get("earnings_intelligence")
+            if not ei or not isinstance(ei, dict):
+                return None
+            return ei
         earnings_intelligence = await _aio.to_thread(_fetch_ei)
         coverage["earnings_intelligence"] = bool(
             earnings_intelligence
@@ -5174,9 +5117,6 @@ async def ticker_detail_endpoint(symbol: str):
                 "company_name":        (company or {}).get("name"),
                 # ── state ─────────────────────────────────────────────────
                 "state":               ev.get("state"),
-                "results_status":      (ev.get("source_status") or {}).get("results_status"),
-                "reaction_status":     (ev.get("source_status") or {}).get("reaction_status"),
-                "materials_status":    (ev.get("source_status") or {}).get("materials_status"),
                 "classification":      ev.get("classification"),
                 "revision":            ev.get("revision", 1),
                 # ── timestamps ────────────────────────────────────────────
@@ -5208,16 +5148,8 @@ async def ticker_detail_endpoint(symbol: str):
         print(f"[TICKER_DETAIL] live_event error {sym}: {_le_e}")
         coverage["live_earnings_event"] = False
 
-    # Inject and promote the canonical event in the response as a final
-    # read-through guard. The monitor writes the same merge to Neon on result
-    # detection; this only protects a request during a transient DB write race.
+    # Inject live_event into earnings_intelligence so they arrive together
     if earnings_intelligence and isinstance(earnings_intelligence, dict):
-        try:
-            from services.earnings_monitor_service import _merge_live_event_into_ei
-            if live_event and (live_event.get("results_payload") or {}).get("eps_actual") is not None:
-                earnings_intelligence = _merge_live_event_into_ei(earnings_intelligence, live_event)
-        except Exception:
-            pass
         earnings_intelligence = dict(earnings_intelligence)
         earnings_intelligence["live_event"] = live_event
     elif live_event is not None:

@@ -226,34 +226,6 @@ def _write_alert_sync(record: dict) -> Tuple[Optional[int], Optional[str]]:
         put(conn)
 
 
-def has_alert_dedupe_key(user_id: str, dedupe_key: str) -> bool:
-    """Return whether an alert with this durable source-tag key already exists."""
-    if not user_id or not dedupe_key:
-        return False
-    conn, put = _pg()
-    if conn is None:
-        return False
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT 1 FROM public.ticker_alert_events
-            WHERE user_id = %s
-              AND source_tags @> %s::jsonb
-            LIMIT 1
-            """,
-            (user_id, json.dumps([{"key": "dedupe_key", "value": dedupe_key}])),
-        )
-        found = cur.fetchone() is not None
-        cur.close()
-        return found
-    except Exception as exc:
-        print(f"[ALERT_BUS] dedupe lookup error: {exc}")
-        return False
-    finally:
-        put(conn)
-
-
 def _get_recent_alerts_sync(
     user_id: str,
     limit: int,
