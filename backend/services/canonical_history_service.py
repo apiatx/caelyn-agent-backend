@@ -136,6 +136,13 @@ _VOLUME_METRIC_FIELDS = (
     "volume_metrics_status",
 )
 
+_PRICE_METRIC_FIELDS = (
+    "change_7d",
+    "change_30d",
+)
+
+_WATCHLIST_MARKET_METRIC_FIELDS = _VOLUME_METRIC_FIELDS + _PRICE_METRIC_FIELDS
+
 
 # ── Status helpers ─────────────────────────────────────────────────────────────
 
@@ -338,6 +345,13 @@ def _null_volume_metrics(status: str = "unavailable") -> dict[str, object]:
     }
 
 
+def _null_price_metrics() -> dict[str, object]:
+    return {
+        "change_7d": None,
+        "change_30d": None,
+    }
+
+
 def _finite_float_or_none(value) -> float | None:
     if value is None or isinstance(value, bool):
         return None
@@ -350,21 +364,10 @@ def _finite_float_or_none(value) -> float | None:
     return parsed
 
 
-def _compute_volume_metrics_from_bars(bars: list[dict]) -> dict[str, object]:
-    """
-    Completed-session volume metrics derived from canonical daily bars.
-
-    Contract: only bars strictly before the current America/New_York date are
-    eligible.  Canonical providers supply daily bars without a session marker,
-    so this date boundary is the protection against a same-day partial bar.
-    Intended for history-write time and for one-time metadata backfills.
-    """
-    result = _null_volume_metrics()
-    if not bars:
-        return result
-
+def _completed_daily_bars(bars: list[dict]) -> list[tuple[str, float | None, float | None]]:
+    """Return canonical daily bars strictly before the current New York date."""
     ny_today = datetime.now(ZoneInfo("America/New_York")).date()
-    completed: list[tuple[str, float | None]] = []
+    completed: list[tuple[str, float | None, float | None]] = []
     for bar in bars:
         date_raw = str(bar.get("date") or "")[:10]
         if not date_raw:
@@ -375,13 +378,24 @@ def _compute_volume_metrics_from_bars(bars: list[dict]) -> dict[str, object]:
             continue
         if bar_date >= ny_today:
             continue
-        completed.append((date_raw, _finite_float_or_none(bar.get("volume"))))
+        completed.append((
+            date_raw,
+            _finite_float_or_none(bar.get("close")),
+            _finite_float_or_none(bar.get("volume")),
+        ))
+    return completed
 
+
+def _compute_volume_metrics_from_completed(
+    completed: list[tuple[str, float | None, float | None]],
+) -> dict[str, object]:
+    """Compute volume metrics from already-filtered canonical daily bars."""
+    result = _null_volume_metrics()
     if not completed:
         return result
 
     result["volume_metrics_as_of"] = completed[-1][0]
-    volumes = [volume for _, volume in completed]
+    volumes = [volume for _, _, volume in completed]
 
     def _window_pct(window: int) -> float | None:
         need = window * 2
@@ -414,13 +428,59 @@ def _compute_volume_metrics_from_bars(bars: list[dict]) -> dict[str, object]:
     )
     if any(metric is not None for metric in metrics):
         result["volume_metrics_status"] = "ok" if all(metric is not None for metric in metrics) else "insufficient_history"
-    elif completed:
+    else:
         result["volume_metrics_status"] = "insufficient_history"
     return result
 
 
-def _apply_volume_metrics_to_meta(meta: dict, bars: list[dict]) -> dict:
-    return {**meta, **_compute_volume_metrics_from_bars(bars)}
+def _compute_price_metrics_from_completed(
+    completed: list[tuple[str, float | None, float | None]],
+) -> dict[str, object]:
+    """Compute completed-session close-to-close price returns for Watchlist rows."""
+    result = _null_price_metrics()
+
+    def _window_return_pct(sessions: int) -> float | None:
+        if len(completed) <= sessions:
+            return None
+        latest_close = completed[-1][1]
+        comparison_close = completed[-(sessions + 1)][1]
+        if (
+            latest_close is None
+            or latest_close < 0
+            or comparison_close is None
+            or comparison_close <= 0
+        ):
+            return None
+        return round(((latest_close / comparison_close) - 1.0) * 100.0, 6)
+
+    result["change_7d"] = _window_return_pct(7)
+    result["change_30d"] = _window_return_pct(30)
+    return result
+
+
+def _compute_watchlist_market_metrics_from_bars(bars: list[dict]) -> dict[str, object]:
+    """Compute all Watchlist history metrics from one completed-bar pass."""
+    completed = _completed_daily_bars(bars)
+    return {
+        **_compute_volume_metrics_from_completed(completed),
+        **_compute_price_metrics_from_completed(completed),
+    }
+
+
+def _compute_volume_metrics_from_bars(bars: list[dict]) -> dict[str, object]:
+    """
+    Completed-session volume metrics derived from canonical daily bars.
+
+    Contract: only bars strictly before the current America/New_York date are
+    eligible.  Canonical providers supply daily bars without a session marker,
+    so this date boundary is the protection against a same-day partial bar.
+    Intended for history-write time and for one-time metadata backfills.
+    """
+    return _compute_volume_metrics_from_completed(_completed_daily_bars(bars))
+
+
+def _apply_watchlist_market_metrics_to_meta(meta: dict, bars: list[dict]) -> dict:
+    return {**meta, **_compute_watchlist_market_metrics_from_bars(bars)}
 
 
 def _write_index() -> None:
@@ -515,7 +575,12 @@ def get_all_status() -> dict:
 
 
 def get_volume_metrics_bulk(symbols: list[str]) -> dict[str, dict]:
-    """Return persisted volume-metric summaries from in-memory canonical history metadata."""
+    """Return Watchlist volume and price metrics from the canonical cache only.
+
+    Existing metadata may predate the price-return fields.  In that case, load
+    the already-cached gz payload once for that symbol, calculate both metric
+    families in the existing in-memory index, and do not write or fetch.
+    """
     if not _INDEX:
         try:
             preload_index()
@@ -529,12 +594,27 @@ def get_volume_metrics_bulk(symbols: list[str]) -> dict[str, dict]:
             continue
         seen.add(sym)
         meta = _INDEX.get(sym) or {}
+        if any(field not in meta for field in _PRICE_METRIC_FIELDS):
+            computed = {**_null_volume_metrics(), **_null_price_metrics()}
+            bar_path = _bar_file(sym)
+            if bar_path.exists():
+                try:
+                    with gzip.open(str(bar_path), "rt", encoding="utf-8") as fh:
+                        payload = json.loads(fh.read())
+                    computed = _compute_watchlist_market_metrics_from_bars(payload.get("bars") or [])
+                except Exception as exc:
+                    print(f"[CANON_HIST] watchlist market metrics read failed {sym}: {exc}")
+            meta = {**meta, **computed}
+            _INDEX[sym] = meta
         out[sym] = {
             field: meta.get(field)
-            for field in _VOLUME_METRIC_FIELDS
+            for field in _WATCHLIST_MARKET_METRIC_FIELDS
         }
         if out[sym].get("volume_metrics_status") is None:
-            out[sym] = _null_volume_metrics("unavailable")
+            out[sym] = {
+                **_null_volume_metrics("unavailable"),
+                **_null_price_metrics(),
+            }
     return out
 
 
@@ -559,7 +639,7 @@ def backfill_volume_metrics_metadata(symbols: Optional[list[str]] = None) -> dic
         if not meta:
             skipped += 1
             continue
-        if all(field in meta for field in _VOLUME_METRIC_FIELDS):
+        if all(field in meta for field in _WATCHLIST_MARKET_METRIC_FIELDS):
             skipped += 1
             continue
         bar_path = _bar_file(sym)
@@ -571,7 +651,7 @@ def backfill_volume_metrics_metadata(symbols: Optional[list[str]] = None) -> dic
                 payload = json.loads(fh.read())
             file_reads += 1
             bars = payload.get("bars") or []
-            _INDEX[sym] = _apply_volume_metrics_to_meta(meta, bars)
+            _INDEX[sym] = _apply_watchlist_market_metrics_to_meta(meta, bars)
             updated += 1
         except Exception as exc:
             print(f"[CANON_HIST] volume-metrics metadata repair failed {sym}: {exc}")
@@ -821,7 +901,7 @@ def save_bars(
         "cache_usable":                      bar_count >= _RECENT_MIN,
         "is_10y_complete":                   is_10y_complete(status),
     }
-    meta = _apply_volume_metrics_to_meta(meta, bars)
+    meta = _apply_watchlist_market_metrics_to_meta(meta, bars)
 
     if bars:
         payload = {**meta, "bars": bars}
