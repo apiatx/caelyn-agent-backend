@@ -53,6 +53,22 @@ def test_compute_watchlist_volume_metrics_marks_insufficient_history():
     assert metrics["volume_metrics_status"] == "insufficient_history"
 
 
+def test_compute_watchlist_volume_metrics_excludes_current_ny_date_partial_bar():
+    ny_today = chs.datetime.now(chs.ZoneInfo("America/New_York")).date()
+    completed_bars = _bars(ny_today - timedelta(days=60), [100.0] * 60)
+    partial_today = {"date": ny_today.isoformat(), "volume": 9_999_999.0}
+
+    completed_metrics = chs._compute_volume_metrics_from_bars(completed_bars)
+    metrics_with_partial_today = chs._compute_volume_metrics_from_bars(
+        completed_bars + [partial_today]
+    )
+
+    assert metrics_with_partial_today == completed_metrics
+    assert metrics_with_partial_today["volume_metrics_as_of"] == (
+        ny_today - timedelta(days=1)
+    ).isoformat()
+
+
 def test_enrich_store_with_quotes_adds_cached_beta_and_volume_metrics(monkeypatch):
     async def _fake_quotes(_symbols):
         return {

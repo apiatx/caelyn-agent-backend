@@ -21,6 +21,15 @@ Lifecycle
   is_fresh(symbol)         — staleness check (stale = needs append, not unusable)
   needs_append(symbol)     — True when newest_bar_date is > 2 trading days old
 
+Daily-bar contract
+------------------
+Canonical history stores provider-supplied daily OHLCV bars: Tradier is requested
+with ``interval="daily"`` and FMP is an EOD fallback.  Ingestion normalizes the
+date and numeric OHLCV values but does not receive or invent a per-bar regular-
+session marker.  Volume metrics therefore trust prior-date canonical daily bars
+and deliberately exclude every bar dated today or later in America/New_York.  A
+same-day provider bar is not used, whether it is partial or final.
+
 History status values
 ---------------------
   available_10y                    >= 2200 bars (covers ~10 calendar years)
@@ -344,6 +353,10 @@ def _finite_float_or_none(value) -> float | None:
 def _compute_volume_metrics_from_bars(bars: list[dict]) -> dict[str, object]:
     """
     Completed-session volume metrics derived from canonical daily bars.
+
+    Contract: only bars strictly before the current America/New_York date are
+    eligible.  Canonical providers supply daily bars without a session marker,
+    so this date boundary is the protection against a same-day partial bar.
     Intended for history-write time and for one-time metadata backfills.
     """
     result = _null_volume_metrics()
