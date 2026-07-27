@@ -1002,6 +1002,33 @@ def _get_stage2_breakout(sym: str) -> dict:
         return _null
 
 
+def _finite_float_or_none(value: Any) -> float | None:
+    """Return a finite float or None without treating 0 as falsy."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if _math.isfinite(parsed) else None
+
+
+def _resolve_cached_watchlist_beta(fund_snapshot: dict | None) -> float | None:
+    """Beta from the bulk-loaded watchlist fundamentals snapshot only."""
+    fields = (fund_snapshot or {}).get("fields") or {}
+    profile = fields.get("profile") or {}
+    return _finite_float_or_none(profile.get("beta"))
+
+def _load_cached_watchlist_market_data(tickers: list[str]) -> dict[str, dict[str, Any]]:
+    """Bulk-load cache-only market-data enrichments used by canonical rows."""
+    try:
+        from services.canonical_history_service import get_volume_metrics_bulk as _get_hist_metrics_bulk
+        return _get_hist_metrics_bulk(tickers)
+    except Exception as exc:
+        print(f"[WATCHLIST_ENRICH] bulk volume metrics load failed (non-fatal): {exc}")
+        return {}
+
+
 # ── Quote enrichment helper ──────────────────────────────────────────────────
 
 async def _enrich_store_with_quotes(store: dict) -> dict:
@@ -1058,15 +1085,17 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
     quote_map: dict[str, dict] = {}
     _name_overrides: dict[str, str] = {}
     fund_snaps: dict[str, dict] = {}
+    cached_market_data: dict[str, dict[str, Any]] = {}
     _t_fetch = _time.monotonic()
     try:
         from services.name_overrides import get_name_overrides as _get_name_overrides
         from data.watchlist_fundamentals_store import get_snapshots_bulk as _get_fund_snaps_mc
         _loop = _aio_enrich.get_event_loop()
-        _q_res, _n_res, _f_res = await _aio_enrich.gather(
+        _q_res, _n_res, _f_res, _m_res = await _aio_enrich.gather(
             get_watchlist_quotes(tickers),
             _loop.run_in_executor(None, _get_name_overrides, "default"),
             _loop.run_in_executor(None, _get_fund_snaps_mc, tickers),
+            _loop.run_in_executor(None, _load_cached_watchlist_market_data, tickers),
             return_exceptions=True,
         )
         if isinstance(_q_res, Exception):
@@ -1081,11 +1110,16 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             print(f"[WATCHLIST_ENRICH] fund_snaps load failed (non-fatal): {_f_res}")
         else:
             fund_snaps = _f_res or {}
+        if isinstance(_m_res, Exception):
+            print(f"[WATCHLIST_ENRICH] cached market-data load failed (non-fatal): {_m_res}")
+        else:
+            cached_market_data = _m_res or {}
     except Exception as _fetch_err:
         print(f"[WATCHLIST_ENRICH] parallel fetch failed (non-fatal): {_fetch_err}")
     print(
-        f"[WATCHLIST_ENRICH] quote+names+fundsnaps fetch_ms={round((_time.monotonic()-_t_fetch)*1000)} "
-        f"quotes={len(quote_map)} name_overrides={len(_name_overrides)} fund_snaps={len(fund_snaps)}"
+        f"[WATCHLIST_ENRICH] quote+names+fundsnaps+history fetch_ms={round((_time.monotonic()-_t_fetch)*1000)} "
+        f"quotes={len(quote_map)} name_overrides={len(_name_overrides)} fund_snaps={len(fund_snaps)} "
+        f"history_metrics={len(cached_market_data)}"
     )
     # Pre-load for get_by_id_endpoint's apply_fmp_overlays — avoids a second Neon round-trip
     store["_fund_snaps_for_apply_fmp"] = fund_snaps
@@ -1098,6 +1132,9 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         q       = quote_map.get(sym, {})
         csv_row = csv_map.get(sym, {})
         enriched = dict(base_row)
+        _fund_snap = fund_snaps.get(sym) or {}
+        _beta = _resolve_cached_watchlist_beta(_fund_snap)
+        _volume_metrics = cached_market_data.get(sym) or {}
 
         # ── Name ──────────────────────────────────────────────────────────
         # Priority: name override (DB) > Tradier description > FMP quote name
@@ -1187,7 +1224,7 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         # the parallel gather above — zero extra Neon calls here.
         try:
             from services.market_cap_resolver import resolve_canonical_market_cap as _resolve_mc
-            _fund_snap_row   = fund_snaps.get(sym) or {}
+            _fund_snap_row   = _fund_snap
             _fund_fields_mc  = _fund_snap_row.get("fields") or {}
             _fund_ref_at     = _fund_snap_row.get("refreshed_at")
             _mc_contract = _resolve_mc(
@@ -1216,7 +1253,7 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         # fund_snaps was loaded in the parallel gather above.  We re-read the
         # same sym key here — no second DB round-trip, just a dict lookup.
         try:
-            _fund_snap_q   = fund_snaps.get(sym) or {}
+            _fund_snap_q   = _fund_snap
             _fund_fields_q = _fund_snap_q.get("fields") or {}
             if _fund_fields_q:
                 # Part 6 — Live Valuation Overlay: recompute price-sensitive
@@ -1264,6 +1301,8 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         except Exception:
             pass  # non-fatal: fundamentals simply absent from this ticker row
 
+        enriched["beta"] = _beta
+        enriched.update(_volume_metrics)
         enriched.update(_vol_mc_fields(_price_f, _vol_f, _mc))
 
         # ── More-specific unavail reasons ──────────────────────────────────

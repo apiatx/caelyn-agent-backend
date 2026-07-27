@@ -78,6 +78,7 @@ import os
 from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 _CANON_DIR   = Path(__file__).parent.parent / "data" / "canonical_history"
 _INDEX_FILE  = _CANON_DIR / "_index.json"
@@ -116,6 +117,15 @@ _COMPLETE_STATUSES = frozenset({
     "available_lifetime_under_10y",
     "actual_ticker_history_limit",
 })
+
+_VOLUME_METRIC_FIELDS = (
+    "volume_change_1d_pct",
+    "volume_change_7d_pct",
+    "volume_change_30d_pct",
+    "volume_acceleration_pp",
+    "volume_metrics_as_of",
+    "volume_metrics_status",
+)
 
 
 # ── Status helpers ─────────────────────────────────────────────────────────────
@@ -308,6 +318,98 @@ def _bar_file(symbol: str) -> Path:
     return _CANON_DIR / f"{symbol.upper()}.json.gz"
 
 
+def _null_volume_metrics(status: str = "unavailable") -> dict[str, object]:
+    return {
+        "volume_change_1d_pct": None,
+        "volume_change_7d_pct": None,
+        "volume_change_30d_pct": None,
+        "volume_acceleration_pp": None,
+        "volume_metrics_as_of": None,
+        "volume_metrics_status": status,
+    }
+
+
+def _finite_float_or_none(value) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed != parsed or parsed in (float("inf"), float("-inf")):
+        return None
+    return parsed
+
+
+def _compute_volume_metrics_from_bars(bars: list[dict]) -> dict[str, object]:
+    """
+    Completed-session volume metrics derived from canonical daily bars.
+    Intended for history-write time and for one-time metadata backfills.
+    """
+    result = _null_volume_metrics()
+    if not bars:
+        return result
+
+    ny_today = datetime.now(ZoneInfo("America/New_York")).date()
+    completed: list[tuple[str, float | None]] = []
+    for bar in bars:
+        date_raw = str(bar.get("date") or "")[:10]
+        if not date_raw:
+            continue
+        try:
+            bar_date = datetime.strptime(date_raw, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if bar_date >= ny_today:
+            continue
+        completed.append((date_raw, _finite_float_or_none(bar.get("volume"))))
+
+    if not completed:
+        return result
+
+    result["volume_metrics_as_of"] = completed[-1][0]
+    volumes = [volume for _, volume in completed]
+
+    def _window_pct(window: int) -> float | None:
+        need = window * 2
+        if len(volumes) < need:
+            return None
+        latest = volumes[-window:]
+        previous = volumes[-need:-window]
+        if any(v is None or v < 0 for v in latest + previous):
+            return None
+        prev_avg = sum(previous) / window
+        latest_avg = sum(latest) / window
+        if prev_avg <= 0:
+            return None
+        return round(((latest_avg / prev_avg) - 1.0) * 100.0, 6)
+
+    result["volume_change_1d_pct"] = _window_pct(1)
+    result["volume_change_7d_pct"] = _window_pct(7)
+    result["volume_change_30d_pct"] = _window_pct(30)
+
+    v7 = result["volume_change_7d_pct"]
+    v30 = result["volume_change_30d_pct"]
+    if v7 is not None and v30 is not None:
+        result["volume_acceleration_pp"] = round(v7 - v30, 6)
+
+    metrics = (
+        result["volume_change_1d_pct"],
+        result["volume_change_7d_pct"],
+        result["volume_change_30d_pct"],
+        result["volume_acceleration_pp"],
+    )
+    if any(metric is not None for metric in metrics):
+        result["volume_metrics_status"] = "ok" if all(metric is not None for metric in metrics) else "insufficient_history"
+    elif completed:
+        result["volume_metrics_status"] = "insufficient_history"
+    return result
+
+
+def _apply_volume_metrics_to_meta(meta: dict, bars: list[dict]) -> dict:
+    return {**meta, **_compute_volume_metrics_from_bars(bars)}
+
+
 def _write_index() -> None:
     """Write index atomically, merging with existing disk content."""
     try:
@@ -397,6 +499,72 @@ def get_metadata(symbol: str) -> Optional[dict]:
 
 def get_all_status() -> dict:
     return dict(_INDEX)
+
+
+def get_volume_metrics_bulk(symbols: list[str]) -> dict[str, dict]:
+    """Return persisted volume-metric summaries from in-memory canonical history metadata."""
+    if not _INDEX:
+        try:
+            preload_index()
+        except Exception:
+            pass
+    out: dict[str, dict] = {}
+    seen: set[str] = set()
+    for raw_symbol in symbols:
+        sym = str(raw_symbol or "").strip().upper()
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        meta = _INDEX.get(sym) or {}
+        out[sym] = {
+            field: meta.get(field)
+            for field in _VOLUME_METRIC_FIELDS
+        }
+        if out[sym].get("volume_metrics_status") is None:
+            out[sym] = _null_volume_metrics("unavailable")
+    return out
+
+
+def backfill_volume_metrics_metadata(symbols: Optional[list[str]] = None) -> dict[str, int]:
+    """
+    One-time metadata repair using existing canonical gz files.
+    Runs off-request to persist volume summaries into _INDEX.
+    """
+    if not _INDEX:
+        preload_index()
+    selected = []
+    seen: set[str] = set()
+    for raw_symbol in (symbols or list(_INDEX.keys())):
+        sym = str(raw_symbol or "").strip().upper()
+        if sym and sym not in seen:
+            selected.append(sym)
+            seen.add(sym)
+
+    file_reads = updated = skipped = 0
+    for sym in selected:
+        meta = _INDEX.get(sym)
+        if not meta:
+            skipped += 1
+            continue
+        if all(field in meta for field in _VOLUME_METRIC_FIELDS):
+            skipped += 1
+            continue
+        bar_path = _bar_file(sym)
+        if not bar_path.exists():
+            skipped += 1
+            continue
+        try:
+            with gzip.open(str(bar_path), "rt", encoding="utf-8") as fh:
+                payload = json.loads(fh.read())
+            file_reads += 1
+            bars = payload.get("bars") or []
+            _INDEX[sym] = _apply_volume_metrics_to_meta(meta, bars)
+            updated += 1
+        except Exception as exc:
+            print(f"[CANON_HIST] volume-metrics metadata repair failed {sym}: {exc}")
+    if updated:
+        _write_index()
+    return {"updated": updated, "file_reads": file_reads, "skipped": skipped}
 
 
 def is_fresh(symbol: str, max_age_h: Optional[float] = None) -> bool:
@@ -640,6 +808,7 @@ def save_bars(
         "cache_usable":                      bar_count >= _RECENT_MIN,
         "is_10y_complete":                   is_10y_complete(status),
     }
+    meta = _apply_volume_metrics_to_meta(meta, bars)
 
     if bars:
         payload = {**meta, "bars": bars}

@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -2182,7 +2183,7 @@ class FmpFundamentalsRefresher:
             _beta_raw = profile.get("beta")
             if _beta_raw is not None:
                 _beta_f = float(_beta_raw)
-                if _beta_f != 0.0:
+                if math.isfinite(_beta_f):
                     _profile_meta["beta"] = _beta_f
         except (ValueError, TypeError):
             pass
