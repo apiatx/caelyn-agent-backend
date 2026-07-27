@@ -273,6 +273,38 @@ _EI_ETF_SUBJECT_RE = _ei_re.compile(
 _EI_ETF_INDUSTRIES = frozenset({"Exchange Traded Fund", "Exchange Traded Funds"})
 
 
+def empty_earnings_intelligence() -> dict:
+    """Return the stable, backward-compatible EI shape for an eligible company."""
+    return {
+        "earnings_history": [],
+        "reaction_summary": {},
+        "ratings": {
+            "consensus": {},
+            "monthly_distribution": [],
+            "recent_actions": [],
+            "price_target": {},
+            "price_target_summary": {},
+        },
+        "sec_filings": None,
+        "source_status": {
+            "earnings_fetched_at": None,
+            "ratings_fetched_at": None,
+            "history_bars_source": "none",
+            "sec_filings_omitted_reason": None,
+            "coverage": {
+                "has_earnings_history": False,
+                "has_reactions": False,
+                "has_ratings_consensus": False,
+                "has_rating_actions": False,
+                "has_rating_history": False,
+                "has_price_targets": False,
+            },
+            "errors": {},
+        },
+        "schema_version": 1,
+    }
+
+
 def ei_ineligible_reason(symbol: str, snapshot: dict | None) -> str | None:
     """
     Return an exclusion-reason string when *symbol* should NOT receive
@@ -297,6 +329,10 @@ def ei_ineligible_reason(symbol: str, snapshot: dict | None) -> str | None:
         return None  # no snapshot yet; eligible by default
     fields = snapshot.get("fields") or {}
     profile = fields.get("profile") or {}
+    if profile.get("isEtf") is True:
+        return "etf_by_provider_flag"
+    if profile.get("isFund") is True:
+        return "fund_by_provider_flag"
     industry = (profile.get("industry") or "").strip()
     if industry in _EI_ETF_INDUSTRIES:
         return f"etf_by_industry:{industry}"
@@ -2161,6 +2197,7 @@ class FmpFundamentalsRefresher:
         # Profile metadata
         _profile_meta: dict[str, Any] = {}
         for _fmp_key, _meta_key in [
+            ("companyName", "companyName"),
             ("description", "description"),
             ("website",     "website"),
             ("ceo",         "ceo"),
@@ -2187,6 +2224,9 @@ class FmpFundamentalsRefresher:
                     _profile_meta["beta"] = _beta_f
         except (ValueError, TypeError):
             pass
+        for _flag in ("isEtf", "isFund"):
+            if profile.get(_flag) is not None:
+                _profile_meta[_flag] = profile.get(_flag) is True
         if _profile_meta:
             fields["profile"] = _profile_meta
 
@@ -2911,6 +2951,7 @@ class FmpFundamentalsRefresher:
         _ensure_hist()
 
         eligible  = [s for s in symbols if is_fmp_symbol_eligible(s)]
+        unsupported = [s for s in symbols if not is_fmp_symbol_eligible(s)]
         snapshots = get_snapshots_bulk(eligible)
 
         started_at = datetime.now(timezone.utc)
@@ -3144,6 +3185,11 @@ class FmpFundamentalsRefresher:
             "failed":                 failed,
             "empty_payload_preserved": empty_payload_preserved,
             "empty_payload_no_prior":  empty_payload_no_prior,
+            "unsupported":             unsupported,
+            "complete_count":          len(refreshed) + len(skipped),
+            "incomplete_count":        len(empty_payload_preserved) + len(empty_payload_no_prior),
+            "failed_count":            len(failed),
+            "unsupported_count":       len(unsupported),
             "elapsed_seconds":         round(elapsed, 1),
             "fmp_calls_per_symbol":    10,
         }
