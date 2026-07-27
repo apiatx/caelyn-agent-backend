@@ -498,7 +498,10 @@ def _classify_active_support_zone(
         if lv > price * NEAR_GRACE:
             return
         dist_pct   = (price - lv) / price * 100          # positive = price above level
-        prox_score = max(0.0, 1.0 - dist_pct / 20.0)    # 1.0 = same level, 0 = 20% away
+        prox_score = max(0.0, min(1.0, 1.0 - dist_pct / 20.0))
+        # 1.0 = same level (or within overhead grace), 0 = 20% below.
+        # The clamp prevents a negative distance from making an overhead level
+        # more attractive than an equally weighted level at the current price.
         raw_candidates.append({
             "label":    label,
             "level":    round(lv, 4),
@@ -541,13 +544,20 @@ def _classify_active_support_zone(
     next_downside:  Optional[dict]  = None
 
     if raw_candidates:
-        pri            = raw_candidates[0]
+        # A level above price is resistance until reclaimed. Keep the existing
+        # 3% grace candidates as a fallback for support-zone testing, but never
+        # let them outrank a valid candidate at or below the current price.
+        downside_candidates = [c for c in raw_candidates if c["level"] <= price]
+        primary_candidates  = downside_candidates or raw_candidates
+        pri            = primary_candidates[0]
         active_level   = pri["level"]
         active_type    = pri["type"]
         active_label   = pri["label"]
         active_source  = pri["source"]
         active_touches = pri.get("touches", 1)
-        for c in raw_candidates[1:]:
+        for c in raw_candidates:
+            if c is pri:
+                continue
             if c["level"] < active_level * 0.97:
                 next_downside = {"level": c["level"], "type": c["type"], "label": c["label"]}
                 break

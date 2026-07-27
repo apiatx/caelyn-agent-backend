@@ -395,8 +395,12 @@ def _compute_actionability_core(
 
     # 5) READY.
     if entry_state in _READY_CONTEXT_STATES:
+        asymmetric_ia_blocked = (
+            rr_state == "ASYMMETRIC_SUPPORT_ENTRY" and not ia_score_ok
+        )
         if (ta_score >= _READY_TA_MIN and entry_score is not None
-                and entry_score >= _READY_ENTRY_SCORE_MIN):
+                and entry_score >= _READY_ENTRY_SCORE_MIN
+                and not asymmetric_ia_blocked):
             strengths.append("STRONG_TRADE_ALIGNMENT")
             strengths.append("ACTIONABLE_ENTRY_STRUCTURE")
             strengths.append(entry_state)
@@ -404,7 +408,10 @@ def _compute_actionability_core(
             state = READY
         elif ta_score >= _WAIT_RETEST_TA_MIN:
             reasons.append("RETEST_REQUIRED")
-            reasons.append("ENTRY_SCORE_LOW" if (entry_score or 0) < _READY_ENTRY_SCORE_MIN else "TRADE_ALIGNMENT_MODERATE")
+            if asymmetric_ia_blocked:
+                reasons.append("INVESTMENT_ALIGNMENT_INSUFFICIENT")
+            else:
+                reasons.append("ENTRY_SCORE_LOW" if (entry_score or 0) < _READY_ENTRY_SCORE_MIN else "TRADE_ALIGNMENT_MODERATE")
             state = WAIT_FOR_RETEST
         else:
             reasons.append("TRADE_ALIGNMENT_MODERATE")
