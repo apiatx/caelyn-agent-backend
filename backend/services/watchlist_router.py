@@ -3576,6 +3576,11 @@ async def watchlist_earnings_endpoint(
                 "fiscal_period":        rev.get("fiscal_period"),
                 "fiscal_year":          rev.get("fiscal_year"),
                 "state":                rev.get("state"),
+                "results_status":       (rev.get("source_status") or {}).get("results_status") or "reported",
+                "reaction_status":      (rev.get("source_status") or {}).get("reaction_status") or (
+                    "reaction_pending" if rxn.get("post_1d_pct") is None else "available"
+                ),
+                "materials_status":     (rev.get("source_status") or {}).get("materials_status") or "materials_pending",
                 "classification":       rev.get("classification"),
                 "eps_actual":           rp.get("eps_actual"),
                 "eps_estimate":         rp.get("eps_estimate"),
@@ -5169,6 +5174,9 @@ async def ticker_detail_endpoint(symbol: str):
                 "company_name":        (company or {}).get("name"),
                 # ── state ─────────────────────────────────────────────────
                 "state":               ev.get("state"),
+                "results_status":      (ev.get("source_status") or {}).get("results_status"),
+                "reaction_status":     (ev.get("source_status") or {}).get("reaction_status"),
+                "materials_status":    (ev.get("source_status") or {}).get("materials_status"),
                 "classification":      ev.get("classification"),
                 "revision":            ev.get("revision", 1),
                 # ── timestamps ────────────────────────────────────────────
@@ -5200,8 +5208,16 @@ async def ticker_detail_endpoint(symbol: str):
         print(f"[TICKER_DETAIL] live_event error {sym}: {_le_e}")
         coverage["live_earnings_event"] = False
 
-    # Inject live_event into earnings_intelligence so they arrive together
+    # Inject and promote the canonical event in the response as a final
+    # read-through guard. The monitor writes the same merge to Neon on result
+    # detection; this only protects a request during a transient DB write race.
     if earnings_intelligence and isinstance(earnings_intelligence, dict):
+        try:
+            from services.earnings_monitor_service import _merge_live_event_into_ei
+            if live_event and (live_event.get("results_payload") or {}).get("eps_actual") is not None:
+                earnings_intelligence = _merge_live_event_into_ei(earnings_intelligence, live_event)
+        except Exception:
+            pass
         earnings_intelligence = dict(earnings_intelligence)
         earnings_intelligence["live_event"] = live_event
     elif live_event is not None:

@@ -562,6 +562,13 @@ async def _trigger_ei_refresh(symbol: str) -> bool:
             return False
 
         ei_data.pop("_call_count", None)
+        # A live result can reach the monitor before the provider's historical
+        # aggregate updates. Preserve/promote the canonical event after every
+        # aggregate rebuild so a stale provider response cannot demote it.
+        from data.earnings_monitor_store import get_live_event_for_symbol
+        live_event = await _aio.to_thread(get_live_event_for_symbol, symbol.upper(), False)
+        if live_event:
+            ei_data = _merge_live_event_into_ei(ei_data, live_event)
         ok = await _aio.to_thread(
             merge_fields, symbol.upper(), {"earnings_intelligence": ei_data}
         )
@@ -572,6 +579,99 @@ async def _trigger_ei_refresh(symbol: str) -> bool:
         return False
     except Exception as exc:
         print(f"[EarnMon] EI refresh error {symbol}: {exc}")
+        return False
+
+
+def _results_status(state: str, results_payload: dict | None) -> str:
+    if results_payload and (
+        results_payload.get("eps_actual") is not None
+        or results_payload.get("revenue_actual") is not None
+    ):
+        return "reported"
+    if state == "filing_detected":
+        return "results_detected"
+    return "scheduled"
+
+
+def _merge_live_event_into_ei(existing_ei: dict | None, event: dict) -> dict:
+    """Promote one canonical live event into cached EI without losing enrichment."""
+    ei = dict(existing_ei or {})
+    results = event.get("results_payload") or {}
+    expected_date = str(event.get("expected_date") or results.get("date") or "")[:10]
+    fiscal_year = event.get("fiscal_year")
+    fiscal_period = event.get("fiscal_period")
+    history = [dict(row) for row in (ei.get("earnings_history") or []) if isinstance(row, dict)]
+
+    match_index = None
+    for idx, row in enumerate(history):
+        same_fiscal = (
+            fiscal_year is not None and fiscal_period
+            and str(row.get("fiscal_year")) == str(fiscal_year)
+            and row.get("fiscal_period") == fiscal_period
+        )
+        if same_fiscal or (expected_date and str(row.get("date") or "")[:10] == expected_date):
+            match_index = idx
+            break
+
+    prior = history.pop(match_index) if match_index is not None else {}
+    reaction = dict(prior.get("price_reaction") or {})
+    reaction.update({k: v for k, v in (event.get("reaction_payload") or {}).items() if v is not None})
+    reaction.setdefault("calculation_method", "pending_live_event")
+    reaction.setdefault("reactions_final", False)
+    reaction_pending = reaction.get("post_1d_pct") is None
+
+    def _result_value(key: str):
+        value = results.get(key)
+        return prior.get(key) if value is None else value
+
+    promoted = dict(prior)
+    promoted.update({
+        "date": expected_date or prior.get("date"),
+        "fiscal_year": str(fiscal_year) if fiscal_year is not None else prior.get("fiscal_year"),
+        "fiscal_period": fiscal_period or prior.get("fiscal_period"),
+        "eps_estimate": _result_value("eps_estimate"),
+        "eps_actual": _result_value("eps_actual"),
+        "eps_surprise_amount": _result_value("eps_surprise_amount"),
+        "eps_surprise_pct": _result_value("eps_surprise_pct"),
+        "revenue_estimate": _result_value("revenue_estimate"),
+        "revenue_actual": _result_value("revenue_actual"),
+        "revenue_surprise_amount": _result_value("revenue_surprise_amount"),
+        "revenue_surprise_pct": _result_value("revenue_surprise_pct"),
+        "report_status": "reported",
+        "price_reaction": reaction,
+        "results_status": "reported",
+        "reaction_status": "reaction_pending" if reaction_pending else "available",
+        "materials_status": "materials_pending" if not event.get("filing_payload") else "available",
+        "event_id": event.get("event_id"),
+    })
+    history.append(promoted)
+    history.sort(key=lambda row: str(row.get("date") or ""), reverse=True)
+    ei["earnings_history"] = history
+    source_status = dict(ei.get("source_status") or {})
+    coverage = dict(source_status.get("coverage") or {})
+    coverage["has_earnings_history"] = bool(history)
+    source_status["coverage"] = coverage
+    source_status["latest_live_event_id"] = event.get("event_id")
+    source_status["results_status"] = "reported"
+    source_status["reaction_status"] = "reaction_pending" if reaction_pending else "available"
+    source_status["materials_status"] = "materials_pending" if not event.get("filing_payload") else "available"
+    ei["source_status"] = source_status
+    return ei
+
+
+async def _promote_live_event_to_ei(event: dict) -> bool:
+    """Immediately patch the existing Neon EI cache from valid detected results."""
+    try:
+        from data.watchlist_fundamentals_store import get_snapshot, merge_fields
+        symbol = (event.get("symbol") or "").upper()
+        snapshot = await asyncio.to_thread(get_snapshot, symbol)
+        if not snapshot:
+            return False
+        current = (snapshot.get("fields") or {}).get("earnings_intelligence") or {}
+        promoted = _merge_live_event_into_ei(current, event)
+        return bool(await asyncio.to_thread(merge_fields, symbol, {"earnings_intelligence": promoted}))
+    except Exception as exc:
+        print(f"[EarnMon] EI promotion error: {exc}")
         return False
 
 
@@ -625,7 +725,7 @@ def _fire_alert_for_event(
 ) -> None:
     """Write one alert to ticker_alert_events for a single user."""
     try:
-        from services.alert_signal_bus import _write_alert_sync
+        from services.alert_signal_bus import _write_alert_sync, has_alert_dedupe_key
         sym   = event.get("symbol", "")
         state = event.get("state", "")
         cls   = event.get("classification") or ""
@@ -646,17 +746,23 @@ def _fire_alert_for_event(
         eps = rp.get("eps_actual")
         rev_actual = rp.get("revenue_actual")
 
-        summary_parts = []
-        if eps is not None:
-            summary_parts.append(f"EPS: {eps}")
-        if rev_actual is not None:
-            rev_m = round(float(rev_actual) / 1e6, 1) if abs(float(rev_actual)) >= 1e6 else rev_actual
-            summary_parts.append(f"Rev: {rev_m}M")
-        fp  = event.get("filing_payload") or {}
-        lep = fp.get("latest_earnings_packet") or fp
-        if lep.get("accepted"):
-            summary_parts.append(f"SEC: {lep['accepted'][:10]}")
-        summary = "; ".join(summary_parts) if summary_parts else f"Earnings {state}"
+        fy = event.get("fiscal_year") or "unknown"
+        fp = event.get("fiscal_period") or str(event.get("expected_date") or "unknown")[:10]
+        dedupe_key = f"{sym}|{fy}|{fp}|earnings_results"
+        if has_alert_dedupe_key(user_id, dedupe_key):
+            return
+
+        def _money(value):
+            if value is None:
+                return "—"
+            return f"${float(value) / 1e9:.2f}B" if abs(float(value)) >= 1e9 else str(value)
+
+        summary = (
+            f"{fp} {fy}: Revenue {_money(rev_actual)} vs {_money(rp.get('revenue_estimate'))} "
+            f"({rp.get('revenue_surprise_pct')}%); EPS {eps if eps is not None else '—'} vs "
+            f"{rp.get('eps_estimate') if rp.get('eps_estimate') is not None else '—'} "
+            f"({rp.get('eps_surprise_pct')}%). {cls.replace('_', ' ').title() or 'Results'}"
+        )
 
         record = {
             "user_id":        user_id,
@@ -674,7 +780,11 @@ def _fire_alert_for_event(
                 "eps_actual":       rp.get("eps_actual"),
                 "eps_surprise_pct": rp.get("eps_surprise_pct"),
                 "rev_actual":       rp.get("revenue_actual"),
+                "rev_estimate":     rp.get("revenue_estimate"),
                 "rev_surprise_pct": rp.get("revenue_surprise_pct"),
+                "revenue_surprise_amount": rp.get("revenue_surprise_amount"),
+                "eps_estimate":     rp.get("eps_estimate"),
+                "eps_surprise_amount": rp.get("eps_surprise_amount"),
             },
             "source_tags":    [
                 {"key": "event_id",  "value": event.get("event_id", "")},
@@ -682,6 +792,8 @@ def _fire_alert_for_event(
                 {"key": "state",     "value": state},
                 {"key": "revision",  "value": str(rev)},
                 {"key": "is_dry_run","value": str(event.get("is_dry_run", False))},
+                {"key": "dedupe_key", "value": dedupe_key},
+                {"key": "route", "value": f"/watchlist/ticker-detail/{sym}#earnings"},
             ],
         }
         _write_alert_sync(record)
@@ -843,7 +955,10 @@ async def _process_target(
         if _is_monitoring_window(now_et, timing) or dry_run or catchup_mode:
             fmp_rec = await _check_fmp_results(symbol)
             _STATE["check_count"] += 1
-            if fmp_rec and fmp_rec.get("eps_actual") is not None:
+            if fmp_rec and (
+                fmp_rec.get("eps_actual") is not None
+                or fmp_rec.get("revenue_actual") is not None
+            ):
                 _STATE["fmp_detections"] += 1
                 # Enrich fiscal labels if FMP returned them
                 # (FMP stable/earnings doesn't have period; use income-statement)
@@ -946,6 +1061,15 @@ async def _process_target(
     elif existing:
         detected_at = str(existing.get("detected_at") or "")
 
+    effective_filing = filing_payload or (existing.get("filing_payload") if existing else None)
+    effective_reaction = reaction_pld or (existing.get("reaction_payload") if existing else None) or {}
+    event_source_status = {
+        "sec_checked_at": now_utc.isoformat(),
+        "fmp_checked_at": now_utc.isoformat(),
+        "results_status": _results_status(new_state, results_payload),
+        "reaction_status": "available" if effective_reaction.get("post_1d_pct") is not None else "reaction_pending",
+        "materials_status": "available" if effective_filing else "materials_pending",
+    }
     event_id, _upserted, _ = await _aio.to_thread(
         upsert_live_event,
         event_key,
@@ -960,27 +1084,44 @@ async def _process_target(
         filing_payload or (existing.get("filing_payload") if existing else None),
         results_payload,
         reaction_pld,
-        {"sec_checked_at": now_utc.isoformat(), "fmp_checked_at": now_utc.isoformat()},
+        event_source_status,
         classification,
         existing_checksum,
         last_error,
     )
 
-    # ── fire alerts ───────────────────────────────────────────────────────────
-    alert_worthy = new_state in ("filing_detected","results_partial","results_available","results_updated","complete")
-    if alert_worthy and state_changed:
+    event_row = {
+        "event_id":        event_id,
+        "event_key":       event_key,
+        "symbol":          symbol,
+        "expected_date":   date_str or None,
+        "fiscal_period":   fiscal_p,
+        "fiscal_year":     fiscal_y,
+        "state":           new_state,
+        "revision":        new_revision,
+        "is_dry_run":      dry_run,
+        "filing_payload":  effective_filing,
+        "results_payload": results_payload,
+        "reaction_payload": effective_reaction or None,
+        "source_status":   event_source_status,
+        "classification":  classification,
+    }
+
+    # ── Immediate canonical promotion ────────────────────────────────────────
+    # The live-event row is the first durable source of valid actuals. Patch it
+    # into the existing EI snapshot before optional SEC/reaction/rating work.
+    if (
+        state_changed
+        and _results_status(new_state, results_payload) == "reported"
+        and not dry_run
+    ):
+        promoted = await _promote_live_event_to_ei(event_row)
+        if not promoted:
+            print(f"[EarnMon] EI promotion deferred {symbol}: no cache row or DB error")
+
+    # ── fire one results alert; later enrichment is intentionally silent ──────
+    if new_state == "results_available" and state_changed:
         _STATE["events_created"] += 1
-        event_row = {
-            "event_id":        event_id,
-            "event_key":       event_key,
-            "symbol":          symbol,
-            "state":           new_state,
-            "revision":        new_revision,
-            "is_dry_run":      dry_run,
-            "filing_payload":  filing_payload,
-            "results_payload": results_payload,
-            "classification":  classification,
-        }
         users = _get_users_for_symbol(symbol)
         _fire_alerts_for_event(event_row, users)
     elif existing and new_state == existing_state:
