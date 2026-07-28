@@ -315,7 +315,13 @@ class TestSameDayFreshness:
         ) is current
 
     def test_completed_target_query_retries_only_invalid_same_day_results(self):
-        """The existing tick query re-admits a same-day completed target only on integrity failure."""
+        """get_due_targets includes same-day complete targets via a simple date window.
+
+        The correlated NOT EXISTS (per-row JSON scan) has been removed.  The
+        scheduler's _process_target/_has_complete_results_for_target performs the
+        integrity check at application level after fetching the candidate list.
+        This keeps the DB query fast and avoids index-defeating JSON predicates.
+        """
         from data import earnings_monitor_store as store
         cur = MagicMock()
         cur.fetchall.return_value = []
@@ -328,10 +334,13 @@ class TestSameDayFreshness:
         finally:
             store._get_conn, store._put_conn = original_get, original_put
         sql = cur.execute.call_args[0][0]
+        # Same-day complete targets are included via a simple date-window filter
         assert "status <> 'complete'" in sql
-        assert "results_payload ->> 'eps_actual' IS NOT NULL" in sql
-        assert "results_payload ->> 'revenue_actual' IS NOT NULL" in sql
         assert "expected_date >= CURRENT_DATE - INTERVAL '1 day'" in sql
+        assert "expected_date <= CURRENT_DATE" in sql
+        # No per-row correlated subquery: integrity check is at application level
+        assert "NOT EXISTS" not in sql
+        assert "results_payload ->> 'eps_actual'" not in sql
 
     def test_amkr_complete_payload_serializes_unchanged(self):
         """A complete AMKR-style event retains its values when the next poll is partial."""

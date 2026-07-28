@@ -1,0 +1,164 @@
+CRITICAL PRODUCTION REGRESSION — fix the backend without rolling back unrelated work.
+
+This regression appeared immediately after publishing backend commit:
+
+95271e84 fix(earnings): retry stale same-day results
+
+Current production symptoms:
+
+1. The Watchlist page now takes an extremely long time to load.
+2. The Upcoming Earnings toggle never loads.
+3. Recent Earnings does load.
+4. The entire Earnings tab has disappeared from ticker popup windows.
+5. The About section has also disappeared from the ticker popup Overview tab.
+6. These sections existed and worked immediately before the backend publish.
+7. No frontend changes were deployed.
+
+This is a backend-only task. Do not modify the frontend.
+
+Do not broadly revert the repository. Preserve the intended same-day earnings fix:
+
+- GLW’s current July 28 Q2 results must remain selectable instead of stale Q1 results.
+- Partial EPS/revenue updates must not erase existing non-null values.
+- AMKR’s current earnings behavior must remain correct.
+- The scheduler must still retry a current event that was falsely completed with a prior-quarter payload.
+
+However, restore the pre-deployment Watchlist and ticker-detail performance and response contracts.
+
+FIRST: diagnose before editing.
+
+Compare the exact behavior before and after commit 95271e84:
+
+git diff 95271e84^..95271e84
+
+Inspect all changes in:
+
+- backend/data/earnings_monitor_store.py
+- backend/services/earnings_monitor_service.py
+- backend/tests/test_earnings_fmp_matching.py
+
+Trace whether any changed earnings-store query is executed directly or indirectly during:
+
+- main Watchlist loading
+- Upcoming Earnings loading
+- Recent Earnings loading
+- ticker-detail loading
+- ticker-popup Overview/About hydration
+- ticker-popup Earnings hydration
+- Watchlist cache construction or refresh
+
+Measure the existing endpoints used by the frontend. Report for each:
+
+- HTTP status
+- elapsed time
+- response bytes
+- relevant row counts
+- exception or timeout logs
+
+Test at minimum:
+
+- the main Watchlist endpoint
+- the existing Upcoming Earnings endpoint/path
+- the existing Recent Earnings endpoint/path
+- the ticker-detail endpoint for GLW
+- the ticker-detail endpoint for AMKR
+- the ticker-detail endpoint for one unrelated ticker such as AMD
+
+Inspect production/runtime logs for:
+
+- database timeouts
+- pool exhaustion
+- connection leaks
+- statement timeouts
+- JSON serialization errors
+- response-model validation failures
+- cache-construction failures
+- cancelled requests
+- exceptions swallowed by broad fallback handlers
+
+Pay special attention to these new or modified paths:
+
+1. get_active_targets()
+2. get_due_targets()
+3. get_live_event_for_target()
+4. get_live_event_for_symbol()
+5. any bulk get-live-events-for-symbols function
+6. the new correlated NOT EXISTS queries against earnings_live_events
+7. ORDER BY expressions reading results_payload JSON fields
+8. any code that now performs one database query per ticker
+9. any scheduler-only query that accidentally became part of a request/cache-build path
+10. any database connection that is not returned to the pool after errors
+
+Run EXPLAIN ANALYZE on the exact newly introduced SQL using representative production-sized data.
+
+Prove the first exact divergence. Do not merely say “the endpoint is slow.”
+
+Required fix:
+
+- Restore the existing Watchlist and ticker-detail response times.
+- Upcoming Earnings and Recent Earnings must both load.
+- Ticker detail must again return every pre-existing section required for:
+  - Overview
+  - About
+  - Earnings
+- Preserve the response shape expected by the frontend.
+- Do not solve this by hiding errors or increasing frontend timeouts.
+- Do not remove About or Earnings data as a performance shortcut.
+- Do not add FMP calls to request paths.
+- Do not add a new endpoint, cache, worker, scheduler, provider, table, column, or parallel earnings pipeline.
+- Do not perform broad cache invalidation.
+- Do not change unrelated Watchlist, quote, fundamentals, confluence, or popup behavior.
+
+The completed-target integrity retry belongs exclusively in the background scheduler path. It must not cause an expensive correlated scan during ordinary Watchlist or ticker-detail requests.
+
+If the correlated NOT EXISTS logic is the cause, rewrite it within the existing scheduler/store path to avoid per-row repeated scans. Prefer an existing indexed lookup, a single bounded join/CTE, or application-side validation over a production-wide correlated scan.
+
+Do not add a database index or migration without stopping and explicitly reporting:
+
+- exact proposed index
+- query plan before
+- query plan after
+- table size
+- write impact
+- why the existing code cannot be fixed without it
+
+If the JSON ORDER BY logic is the cause, preserve newest-current-event correctness using a bounded or already-materialized event selection rather than repeatedly sorting an unbounded symbol history during bulk Watchlist hydration.
+
+Also check whether the newly added date comparison permits stale events within seven days and whether that is sufficiently strict for current event identity. Do not broaden this task unless it is part of the proven regression.
+
+Validation requirements:
+
+1. Main Watchlist loads normally again.
+2. Upcoming Earnings returns successfully and displays upcoming events.
+3. Recent Earnings returns successfully and displays recent events.
+4. GLW ticker detail contains:
+   - Overview/About data
+   - Earnings data
+   - July 28, 2026 Q2
+   - EPS actual 0.78
+   - revenue actual 4,738,000,000
+5. AMKR ticker detail still contains:
+   - July 27, 2026 Q2
+   - EPS actual 0.70
+   - revenue actual approximately 1,897,965,000
+6. AMD or another unrelated ticker still contains its About and Earnings sections.
+7. No ticker-detail response sections were removed or renamed.
+8. No per-ticker database query explosion.
+9. No database connection leak.
+10. Existing focused earnings tests pass.
+11. Add a regression test proving the bulk Watchlist/ticker-detail reader does not execute the expensive scheduler integrity query.
+12. Compare endpoint elapsed time before and after the fix across three runs.
+13. Confirm the scheduler still repairs a stale prior-quarter completion.
+14. Confirm no frontend change is required.
+
+Keep the correction surgical. Do not refactor unrelated code or touch runtime JSON/cache files.
+
+When finished, give me:
+
+- proven root cause
+- exact files changed
+- exact SQL or code path that caused the slowdown/failure
+- endpoint timings before and after
+- response fields verified for GLW, AMKR, and AMD
+- tests and results
+- whether I need to republish the backend

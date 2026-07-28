@@ -329,7 +329,14 @@ def get_targets_for_symbols(symbols: list[str]) -> list[dict]:
 
 
 def get_active_targets(limit: int = 100) -> list[dict]:
-    """Return incomplete targets plus recent completed targets with invalid results."""
+    """Return incomplete targets plus recent same-day completed targets.
+
+    Completed targets within today's window are included as candidates so the
+    scheduler's _process_target / _has_complete_results_for_target can decide
+    whether an integrity re-check is needed.  The correlated NOT EXISTS has been
+    removed: application-level checks (_has_complete_results_for_target) are
+    sufficient and avoid per-row JSON scans in the request path.
+    """
     conn = _get_conn()
     if conn is None:
         return []
@@ -344,18 +351,6 @@ def get_active_targets(limit: int = 100) -> list[dict]:
                     OR (
                         expected_date >= CURRENT_DATE - INTERVAL '1 day'
                         AND expected_date <= CURRENT_DATE
-                        AND NOT EXISTS (
-                            SELECT 1
-                            FROM public.earnings_live_events e
-                            WHERE e.symbol = earnings_monitor_targets.symbol
-                              AND e.expected_date = earnings_monitor_targets.expected_date
-                              AND e.is_dry_run = FALSE
-                              AND e.state IN ('results_available', 'results_updated', 'complete')
-                              AND e.results_payload ->> 'eps_actual' IS NOT NULL
-                              AND e.results_payload ->> 'revenue_actual' IS NOT NULL
-                              AND (e.results_payload ->> 'date') ~ '^\\d{4}-\\d{2}-\\d{2}$'
-                              AND ABS(((e.results_payload ->> 'date')::date - earnings_monitor_targets.expected_date)) <= 7
-                        )
                     )
                   )
             ORDER  BY expected_date ASC NULLS LAST
@@ -391,18 +386,6 @@ def get_due_targets(limit: int = 100) -> list[dict]:
                     OR (
                         expected_date >= CURRENT_DATE - INTERVAL '1 day'
                         AND expected_date <= CURRENT_DATE
-                        AND NOT EXISTS (
-                            SELECT 1
-                            FROM public.earnings_live_events e
-                            WHERE e.symbol = earnings_monitor_targets.symbol
-                              AND e.expected_date = earnings_monitor_targets.expected_date
-                              AND e.is_dry_run = FALSE
-                              AND e.state IN ('results_available', 'results_updated', 'complete')
-                              AND e.results_payload ->> 'eps_actual' IS NOT NULL
-                              AND e.results_payload ->> 'revenue_actual' IS NOT NULL
-                              AND (e.results_payload ->> 'date') ~ '^\\d{4}-\\d{2}-\\d{2}$'
-                              AND ABS(((e.results_payload ->> 'date')::date - earnings_monitor_targets.expected_date)) <= 7
-                        )
                     )
                   )
               AND  (
@@ -667,12 +650,17 @@ def get_live_event_for_symbol(symbol: str, include_dry_run: bool = False) -> dic
     """
     Canonical current live event for a symbol.
 
-    Within the same symbol, selects the newest reported event.  A partial
-    current quarter therefore beats a complete prior quarter, while a future
-    scheduled event without actuals cannot displace reported results.
-
-    Actual-bearing events are first ordered by expected_date DESC, then state
-    precedence and revision resolve duplicate revisions of the same event.
+    Selection priority (first match wins):
+      1. Actual-bearing events (eps_actual OR revenue_actual present) before
+         estimate-only events.
+      2. Newer expected_date first — a current-quarter partial result beats a
+         prior-quarter complete result.
+      3. Higher revision first — within the same expected_date, the most recently
+         written/corrected event version wins (e.g. results_updated|2 beats a
+         stale complete|1 that carries a prior-quarter payload).
+      4. State precedence — complete > results_updated > results_available …
+         breaks remaining ties within the same revision.
+      5. Most recently updated row as the final tiebreaker.
     """
     conn = _get_conn()
     if conn is None:
@@ -694,6 +682,7 @@ def get_live_event_for_symbol(symbol: str, include_dry_run: bool = False) -> dic
                     ELSE 1
                 END ASC,
                 expected_date DESC NULLS LAST,
+                revision DESC,
                 CASE state
                     WHEN 'complete'          THEN 0
                     WHEN 'results_updated'   THEN 1
@@ -704,7 +693,6 @@ def get_live_event_for_symbol(symbol: str, include_dry_run: bool = False) -> dic
                     WHEN 'scheduled'         THEN 6
                     ELSE                          7
                 END ASC,
-                revision DESC,
                 updated_at DESC
             LIMIT  1
         """, (symbol.upper(),))
@@ -728,9 +716,9 @@ def get_live_events_for_symbols(symbols: list[str], include_dry_run: bool = Fals
     """
     Return {symbol: canonical_current_event} for a list of symbols.
 
-    Uses the same state-precedence ORDER BY as get_live_event_for_symbol so
-    that DISTINCT ON (symbol) selects the most advanced valid state rather than
-    the most recently touched row.
+    Uses the same revision-first ORDER BY as get_live_event_for_symbol so that
+    DISTINCT ON (symbol) selects the highest-revision actual-bearing event for
+    the newest quarter rather than a stale same-date complete event.
     """
     if not symbols:
         return {}
@@ -756,6 +744,7 @@ def get_live_events_for_symbols(symbols: list[str], include_dry_run: bool = Fals
                     ELSE 1
                 END ASC,
                 expected_date DESC NULLS LAST,
+                revision DESC,
                 CASE state
                     WHEN 'complete'          THEN 0
                     WHEN 'results_updated'   THEN 1
@@ -766,7 +755,6 @@ def get_live_events_for_symbols(symbols: list[str], include_dry_run: bool = Fals
                     WHEN 'scheduled'         THEN 6
                     ELSE                          7
                 END ASC,
-                revision DESC,
                 updated_at DESC
         """, [s.upper() for s in symbols])
         cols = ["event_id","event_key","symbol","expected_date","fiscal_period","fiscal_year",
