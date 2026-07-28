@@ -460,7 +460,7 @@ async def repair_symbol_event(symbol: str, request: Request):
     try:
         from services.earnings_monitor_service import run_live_earnings_monitor_once
         catchup = await _aio.wait_for(
-            run_live_earnings_monitor_once(force_symbol=sym),
+            run_live_earnings_monitor_once(force_symbol=sym, catchup_mode=True),  # bypass window gate
             timeout=60.0,
         )
         result["steps"].append({"step": "fmp_check", "result": catchup})

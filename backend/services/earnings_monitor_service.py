@@ -1259,6 +1259,7 @@ async def run_live_earnings_monitor_once(
     dry_run: bool            = False,
     force_symbol: str | None = None,
     tick_mode: bool          = False,
+    catchup_mode: bool       = False,
 ) -> dict:
     """
     Idempotent monitoring pass.  Safe to call from CLI, scheduled job, or tick loop.
@@ -1318,7 +1319,8 @@ async def run_live_earnings_monitor_once(
             if universe is not None and not force_symbol and sym not in universe:
                 continue
             try:
-                await _process_target(target, worker_id, now_et, dry_run)
+                await _process_target(target, worker_id, now_et, dry_run,
+                                      catchup_mode=catchup_mode)
                 processed += 1
             except Exception as exc:
                 errors += 1
