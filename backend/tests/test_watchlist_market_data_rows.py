@@ -42,6 +42,29 @@ def test_resolve_cached_watchlist_beta_accepts_zero_and_rejects_nonfinite():
     assert wr._resolve_cached_watchlist_beta({"fields": {"profile": {"beta": None}}}) is None
 
 
+def test_bulk_watchlist_omits_earnings_but_ticker_detail_keeps_it():
+    earnings_intelligence = {
+        "earnings_history": [{"date": "2026-07-27", "eps_actual": 1.2}],
+        "source_status": {"coverage": {"has_earnings_history": True}},
+    }
+    cached_fields = {
+        "Revenue": 1000,
+        "PE Ratio": 20.5,
+        "earnings_intelligence": earnings_intelligence,
+    }
+    rows = [
+        {"symbol": "AAA", "fundamentals": {"fields": wr._bulk_fundamentals_fields(cached_fields)}},
+        {"symbol": "BBB", "fundamentals": {"fields": wr._bulk_fundamentals_fields(cached_fields)}},
+    ]
+
+    assert len(rows) == 2
+    assert [row["symbol"] for row in rows] == ["AAA", "BBB"]
+    assert all("earnings_intelligence" not in row["fundamentals"]["fields"] for row in rows)
+    assert all(row["fundamentals"]["fields"]["Revenue"] == 1000 for row in rows)
+    assert cached_fields["earnings_intelligence"] is earnings_intelligence
+    assert wr._ticker_detail_earnings_intelligence(cached_fields) is earnings_intelligence
+
+
 def test_compute_watchlist_volume_metrics_from_canonical_history():
     volumes = ([100.0] * 30) + ([150.0] * 23) + ([300.0] * 6) + [450.0]
     metrics = chs._compute_volume_metrics_from_bars(_bars(date(2026, 1, 1), volumes))

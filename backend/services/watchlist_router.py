@@ -1019,6 +1019,20 @@ def _resolve_cached_watchlist_beta(fund_snapshot: dict | None) -> float | None:
     profile = fields.get("profile") or {}
     return _finite_float_or_none(profile.get("beta"))
 
+
+def _bulk_fundamentals_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    """Return the lightweight fundamentals view used only by bulk watchlist rows."""
+    bulk_fields = dict(fields)
+    bulk_fields.pop("earnings_intelligence", None)
+    return bulk_fields
+
+
+def _ticker_detail_earnings_intelligence(fields: dict[str, Any]) -> dict | None:
+    """Read the complete cached earnings object for the single-ticker detail view."""
+    earnings_intelligence = fields.get("earnings_intelligence")
+    return earnings_intelligence if isinstance(earnings_intelligence, dict) else None
+
+
 def _load_cached_watchlist_market_data(tickers: list[str]) -> dict[str, dict[str, Any]]:
     """Bulk-load cache-only market-data enrichments used by canonical rows."""
     try:
@@ -1294,7 +1308,7 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
                     pass  # non-fatal: fall back to stored snapshot values
 
                 enriched["fundamentals"] = {
-                    "fields":        _fund_fields_q,
+                    "fields":        _bulk_fundamentals_fields(_fund_fields_q),
                     "refreshed_at":  _fund_snap_q.get("refreshed_at"),
                     "missing_fields": _fund_snap_q.get("missing_fields") or [],
                 }
@@ -5025,8 +5039,8 @@ async def ticker_detail_endpoint(symbol: str):
             if _reason:
                 return None  # ETF / non-operating security — no EI
             raw_fields: dict = snap.get("fields") or {}
-            ei = raw_fields.get("earnings_intelligence")
-            if not ei or not isinstance(ei, dict):
+            ei = _ticker_detail_earnings_intelligence(raw_fields)
+            if not ei:
                 return None
             return ei
         earnings_intelligence = await _aio.to_thread(_fetch_ei)
