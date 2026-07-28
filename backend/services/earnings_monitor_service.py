@@ -868,7 +868,7 @@ async def _process_target(
     import asyncio as _aio
     from data.earnings_monitor_store import (
         claim_target, update_target,
-        upsert_live_event, get_live_event_by_key,
+        upsert_live_event, get_live_event_for_target,
     )
 
     target_id  = target["id"]
@@ -895,9 +895,12 @@ async def _process_target(
     existing_checksum    = None
     existing_results     = None
 
-    # look up newest event for this base key
-    from data.earnings_monitor_store import get_live_event_for_symbol
-    existing = await _aio.to_thread(get_live_event_for_symbol, symbol, dry_run)
+    # Bind state exclusively to this scheduled event.  A prior quarter's
+    # complete event must never suppress polling or overwrite this target.
+    existing = await _aio.to_thread(
+        get_live_event_for_target,
+        symbol, date_str or None, fiscal_p, fiscal_y, dry_run,
+    )
     if existing:
         fp = existing.get("filing_payload") or {}
         lep = fp.get("latest_earnings_packet") or fp
@@ -961,7 +964,7 @@ async def _process_target(
         except Exception:
             pass
 
-    if should_fmp and existing_state not in ("complete",):
+    if should_fmp and not _has_complete_results_for_target(existing_results, date_str or None):
         # catchup_mode bypasses window gate — fills results any time of day
         if _is_monitoring_window(now_et, timing) or dry_run or catchup_mode:
             fmp_rec = await _check_fmp_results(
@@ -978,17 +981,14 @@ async def _process_target(
                 _STATE["fmp_detections"] += 1
                 # Enrich fiscal labels if FMP returned them
                 # (FMP stable/earnings doesn't have period; use income-statement)
-                rp = {
+                incoming_rp = {
                     "eps_estimate":       fmp_rec.get("eps_estimate"),
                     "eps_actual":         fmp_rec.get("eps_actual"),
-                    "eps_surprise_amount": _safe_diff(fmp_rec.get("eps_actual"), fmp_rec.get("eps_estimate")),
-                    "eps_surprise_pct":   _safe_pct(fmp_rec.get("eps_actual"), fmp_rec.get("eps_estimate")),
                     "revenue_estimate":   fmp_rec.get("revenue_estimate"),
                     "revenue_actual":     fmp_rec.get("revenue_actual"),
-                    "revenue_surprise_amount": _safe_diff(fmp_rec.get("revenue_actual"), fmp_rec.get("revenue_estimate")),
-                    "revenue_surprise_pct":    _safe_pct(fmp_rec.get("revenue_actual"), fmp_rec.get("revenue_estimate")),
                     "date":               fmp_rec.get("date"),
                 }
+                rp = _merge_results_payload(existing_results, incoming_rp)
                 new_checksum = _compute_checksum(rp)
                 has_eps = rp["eps_actual"] is not None
                 has_rev = rp["revenue_actual"] is not None
@@ -1142,6 +1142,48 @@ def _safe_pct(actual, estimate) -> float | None:
         return round((float(actual) - float(estimate)) / abs(float(estimate)) * 100, 2)
     except Exception:
         return None
+
+
+def _merge_results_payload(existing: dict | None, incoming: dict) -> dict:
+    """Merge one FMP observation without allowing a later null to erase data."""
+    prior = existing or {}
+    merged = dict(prior)
+    for key in (
+        "eps_estimate", "eps_actual", "revenue_estimate", "revenue_actual", "date",
+    ):
+        if incoming.get(key) is not None:
+            merged[key] = incoming[key]
+
+    merged["eps_surprise_amount"] = _safe_diff(
+        merged.get("eps_actual"), merged.get("eps_estimate")
+    )
+    merged["eps_surprise_pct"] = _safe_pct(
+        merged.get("eps_actual"), merged.get("eps_estimate")
+    )
+    merged["revenue_surprise_amount"] = _safe_diff(
+        merged.get("revenue_actual"), merged.get("revenue_estimate")
+    )
+    merged["revenue_surprise_pct"] = _safe_pct(
+        merged.get("revenue_actual"), merged.get("revenue_estimate")
+    )
+    return merged
+
+
+def _has_complete_results_for_target(
+    payload: dict | None,
+    expected_date: str | None,
+) -> bool:
+    """True only for both actuals on the scheduled event, never a stale quarter."""
+    if not payload or payload.get("eps_actual") is None or payload.get("revenue_actual") is None:
+        return False
+    if not expected_date:
+        return False
+    try:
+        from datetime import date as _date
+        return abs((_date.fromisoformat(str(payload.get("date"))) -
+                    _date.fromisoformat(expected_date)).days) <= 7
+    except (TypeError, ValueError):
+        return False
 
 
 def _get_users_for_symbol(symbol: str) -> list[str]:

@@ -50,7 +50,11 @@ def _rec(
 
 # ── import the pure function under test ───────────────────────────────────────
 
-from services.earnings_monitor_service import _select_matching_fmp_result
+from services.earnings_monitor_service import (
+    _has_complete_results_for_target,
+    _merge_results_payload,
+    _select_matching_fmp_result,
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -263,6 +267,99 @@ class TestRobustness:
             fiscal_year=None,
             fiscal_period=None,
         ) is None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Same-day freshness regressions
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestSameDayFreshness:
+
+    def test_glw_current_event_replaces_stale_prior_quarter(self):
+        """A later GLW poll selects July, not the complete April row."""
+        prior_q1 = _rec("2026-04-28", eps_actual=0.70, revenue_actual=4_345_000_000)
+        current_q2 = _rec("2026-07-28", eps_actual=0.78, revenue_actual=4_738_000_000)
+
+        result = _select_matching_fmp_result(
+            [prior_q1, current_q2], "2026-07-28", 2026, "Q2"
+        )
+        assert result is current_q2
+
+        refreshed = _merge_results_payload(
+            {"date": "2026-04-28", "eps_actual": 0.70, "revenue_actual": 4_345_000_000},
+            result,
+        )
+        assert refreshed["date"] == "2026-07-28"
+        assert refreshed["eps_actual"] == 0.78
+        assert refreshed["revenue_actual"] == 4_738_000_000
+
+    def test_partial_publication_merges_without_null_erasure(self):
+        """Revenue-first then EPS-only publication keeps both actual values."""
+        revenue_first = _merge_results_payload(
+            None,
+            _rec("2026-07-28", revenue_actual=4_738_000_000, revenue_estimate=4_630_209_000),
+        )
+        eps_later = _merge_results_payload(
+            revenue_first,
+            _rec("2026-07-28", eps_actual=0.78, eps_estimate=0.755, revenue_actual=None),
+        )
+        assert eps_later["revenue_actual"] == 4_738_000_000
+        assert eps_later["eps_actual"] == 0.78
+
+    def test_stale_complete_row_cannot_win_over_current_actual(self):
+        """Provider ordering never permits the complete Q1 row to win."""
+        old_complete = _rec("2026-04-28", eps_actual=0.70, revenue_actual=4_345_000_000)
+        current = _rec("2026-07-28", revenue_actual=4_738_000_000)
+        assert _select_matching_fmp_result(
+            [old_complete, current], "2026-07-28", 2026, "Q2"
+        ) is current
+
+    def test_completed_target_query_retries_only_invalid_same_day_results(self):
+        """The existing tick query re-admits a same-day completed target only on integrity failure."""
+        from data import earnings_monitor_store as store
+        cur = MagicMock()
+        cur.fetchall.return_value = []
+        conn = MagicMock()
+        conn.cursor.return_value = cur
+        original_get, original_put = store._get_conn, store._put_conn
+        store._get_conn, store._put_conn = lambda: conn, lambda _conn: None
+        try:
+            store.get_due_targets()
+        finally:
+            store._get_conn, store._put_conn = original_get, original_put
+        sql = cur.execute.call_args[0][0]
+        assert "status <> 'complete'" in sql
+        assert "results_payload ->> 'eps_actual' IS NOT NULL" in sql
+        assert "results_payload ->> 'revenue_actual' IS NOT NULL" in sql
+        assert "expected_date >= CURRENT_DATE - INTERVAL '1 day'" in sql
+
+    def test_amkr_complete_payload_serializes_unchanged(self):
+        """A complete AMKR-style event retains its values when the next poll is partial."""
+        complete = {
+            "date": "2026-07-27", "eps_actual": 0.70, "eps_estimate": 0.47,
+            "revenue_actual": 1_897_965_000, "revenue_estimate": 1_814_788_000,
+        }
+        unchanged = _merge_results_payload(complete, {"date": "2026-07-27"})
+        for key, value in complete.items():
+            assert unchanged[key] == value
+
+    def test_passed_release_time_does_not_invent_actuals(self):
+        """An estimate-only current row remains result-free; no prior value is copied."""
+        estimate_only = _rec("2026-07-28", eps_estimate=0.755, revenue_estimate=4_630_209_000)
+        assert _select_matching_fmp_result(
+            [estimate_only], "2026-07-28", 2026, "Q2"
+        ) is None
+
+    def test_stale_completed_payload_keeps_existing_polling_path_open(self):
+        """A Q2 target cannot finalize just because its stored payload is Q1."""
+        assert not _has_complete_results_for_target(
+            {"date": "2026-04-28", "eps_actual": 0.70, "revenue_actual": 4_345_000_000},
+            "2026-07-28",
+        )
+        assert _has_complete_results_for_target(
+            {"date": "2026-07-28", "eps_actual": 0.78, "revenue_actual": 4_738_000_000},
+            "2026-07-28",
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
