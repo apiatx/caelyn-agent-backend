@@ -1,0 +1,132 @@
+The data correctness fix is validated, but the production performance regression is not fixed.
+
+Do not publish, push, or modify the frontend.
+
+Current measured problems:
+
+- Main Watchlist endpoint: approximately 7.0 seconds
+- Main Watchlist payload: approximately 19,785,848 bytes / 19.8 MB
+- GLW ticker detail: approximately 4.5–4.7 seconds
+- AMKR ticker detail: up to approximately 6.4 seconds
+- AMD ticker detail: up to approximately 5.1 seconds
+
+These timings can directly explain why the Watchlist appears frozen and why the ticker popup loses the About and Earnings sections even though those fields exist in the eventual backend response.
+
+Continue the backend investigation. The task is not complete until the actual Watchlist and ticker-detail request paths return quickly and reliably.
+
+Do not make any .gitignore change. Do not commit .codex-reports. Revert any uncommitted .gitignore change if one exists. Reports do not need to be committed.
+
+First:
+
+1. Show:
+   git status -sb
+   git log --oneline origin/main..main
+   git diff
+2. Identify exactly which commits contain the functional fixes.
+3. Confirm no runtime JSON, cache, LKG, snapshot, .gitignore, or report files are included in the intended production changes.
+
+Then profile the actual existing request paths used by the browser.
+
+For the main Watchlist endpoint, add temporary local timing instrumentation or use existing logs to report elapsed time for each major phase:
+
+- authentication/user lookup
+- Watchlist membership/database read
+- quote hydration
+- fundamentals hydration
+- earnings hydration
+- live earnings event lookup
+- options hydration
+- technical/confluence hydration
+- news hydration
+- normalization/merge
+- JSON serialization
+- response transmission
+
+Do the same for:
+
+- /api/watchlist/earnings
+- /api/watchlist/ticker-detail/GLW
+- /api/watchlist/ticker-detail/AMKR
+- /api/watchlist/ticker-detail/AMD
+
+Use the exact browser endpoint, query parameters, authentication, and response path. Do not validate only an internal Python function.
+
+Investigate the 19.8 MB Watchlist response specifically.
+
+Report:
+
+- ticker count
+- top-level response keys
+- byte size of each major response section
+- whether earnings history, live-event objects, company/About data, news, options, or other large structures are duplicated per ticker
+- whether any change since 95271e84 caused a large object to be included in the bulk Watchlist payload
+- whether ticker-detail-only data is accidentally being embedded in the bulk Watchlist response
+- whether repeated earnings histories or live-event revisions are serialized for every ticker
+
+Compare the current response contract against the version before commit 95271e84 using git show and code inspection. Do not create another checkout, branch, clone, or worktree.
+
+Also inspect:
+
+- database query count per Watchlist request
+- whether get_live_event_for_symbol is executed once per ticker
+- whether an N+1 earnings-event lookup exists
+- connection-pool waits or exhaustion
+- synchronous provider/network calls inside the request
+- repeated cache rebuilding
+- serialization of unusually large nested structures
+- frontend-facing request timeout or backend proxy timeout
+- swallowed exceptions that cause partial ticker-detail responses
+
+Required outcome:
+
+1. Preserve the corrected GLW event:
+   - July 28, 2026
+   - Q2 2026
+   - EPS actual 0.78
+   - revenue actual 4,738,000,000
+
+2. Preserve AMKR’s correct event.
+
+3. Upcoming Earnings and Recent Earnings both load.
+
+4. Ticker-detail continues returning all existing Overview, About/company, and Earnings fields.
+
+5. Main Watchlist and ticker-detail performance returns to the prior practical behavior.
+
+6. Do not remove data or sections merely to make the request faster.
+
+7. Do not add a new endpoint, cache, provider call, scheduler, table, column, dependency, or frontend workaround.
+
+8. Do not increase timeouts as the fix.
+
+9. Do not broadly refactor unrelated Watchlist logic.
+
+Acceptance validation:
+
+- Run each endpoint five times, including a cold and warm request.
+- Report status, elapsed time, response bytes, database query count, and cache hit/miss.
+- Confirm no request exceeds the existing browser/proxy timeout.
+- Open the actual deployed-style Watchlist UI in preview.
+- Confirm the Watchlist finishes loading.
+- Confirm Upcoming Earnings opens.
+- Confirm Recent Earnings opens.
+- Open GLW, AMKR, and AMD popup windows.
+- Confirm About appears.
+- Confirm the Earnings tab appears and opens.
+- Confirm GLW displays its current Q2 results.
+- Check the browser console and Network panel for failed, cancelled, timed-out, or oversized requests.
+
+Do not stop after proving the JSON fields exist. Validate the actual UI behavior in preview.
+
+Make the smallest backend correction supported by evidence.
+
+After completing the fix:
+
+- run focused tests
+- run compile/type checks
+- run git diff --check
+- show exact changed files and diff
+- commit only the functional source/test files locally
+- do not push
+- do not publish
+- report the commit SHA and final timings
