@@ -270,7 +270,9 @@ def get_snapshots_bulk(symbols: list[str]) -> dict[str, dict]:
             upper = [s.upper() for s in symbols]
             cur.execute(
                 f"""
-                SELECT symbol, refreshed_at, next_refresh_at, fields, missing_fields
+                SELECT symbol, refreshed_at, next_refresh_at,
+                       (COALESCE(fields, '{{}}')::jsonb - 'earnings_intelligence') AS fields,
+                       missing_fields
                 FROM {_TABLE}
                 WHERE symbol = ANY(%s)
                 """,

@@ -6130,6 +6130,18 @@ async def get_by_id_endpoint(watchlist_id: str):
             pass
 
     _aio.create_task(_watchlist_alert_hook(store))
+
+    # Strip ticker-detail-only fields from the bulk csv_data payload.
+    # earnings_intelligence (~40 KB/ticker) is served only by
+    # GET /ticker-detail/{symbol}; embedding it in the bulk response
+    # bloats the payload by ~15 MB (94 % of total) for a 400-ticker watchlist.
+    _bulk_csv_out = store.get("csv_data")
+    if _bulk_csv_out:
+        store["csv_data"] = [
+            {k: v for k, v in row.items() if k != "earnings_intelligence"}
+            for row in _bulk_csv_out
+        ]
+
     return store
 
 
