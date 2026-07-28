@@ -219,7 +219,20 @@ def upsert_snapshot(
 
 
 def get_snapshot(symbol: str) -> dict | None:
-    """Return cached snapshot dict or None if not found."""
+    """Return the COMPLETE canonical snapshot for one symbol, or None.
+
+    Architecture contract
+    ─────────────────────
+    This is the ONLY store function permitted in the single-ticker detail path
+    (ticker_detail_endpoint, EI fetch, fundamentals fetch).  It returns the
+    full ``fields`` JSONB column — including ``earnings_intelligence``,
+    ``profile``, and every ``_*`` diagnostic key — exactly as stored.
+
+    Never replace calls to this function with get_snapshots_bulk() in any
+    code path that serves ticker-detail data.  get_snapshots_bulk() returns
+    a bulk-optimised *projection* with earnings_intelligence stripped at the
+    SQL level; using it for detail reads would silently drop the Earnings tab.
+    """
     try:
         from data.pg_storage import _get_conn, _put_conn
         conn = _get_conn()
@@ -257,7 +270,25 @@ def get_snapshot(symbol: str) -> dict | None:
 
 
 def get_snapshots_bulk(symbols: list[str]) -> dict[str, dict]:
-    """Return {SYMBOL: snapshot_dict} for all symbols found in cache."""
+    """Return {SYMBOL: lightweight-projection} for bulk Watchlist list rendering.
+
+    BULK-ONLY PROJECTION — do not use for single-ticker detail reads
+    ────────────────────────────────────────────────────────────────
+    The SQL query strips ``earnings_intelligence`` from every row
+    (``fields - 'earnings_intelligence'``).  This keeps the Neon → server
+    transfer at ~5.4 MB instead of ~15-19 MB for a 400-ticker watchlist.
+
+    Callers must observe these rules:
+      • Results may only be used for the bulk Watchlist payload (csv_data)
+        and for apply_fmp_overlays / merge_fmp_into_csv_row.
+      • Results must NOT be stored in any per-symbol module-level dict that
+        is also read by ticker_detail_endpoint or get_snapshot callers.
+      • The ``store["_fund_snaps_for_apply_fmp"]`` transient key in the
+        watchlist store dict is the canonical hand-off point; it is .pop()-ed
+        before the bulk response is returned and never re-used.
+
+    For a complete snapshot including earnings_intelligence use get_snapshot().
+    """
     if not symbols:
         return {}
     try:
