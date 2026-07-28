@@ -1474,7 +1474,13 @@ async def _earnings_catchup_pass() -> dict:
 
         all_active = await _aio.to_thread(get_active_targets, 500)
 
-        # Select targets in the recent window that are not yet complete
+        # Select targets in the recent window that are not yet complete.
+        # get_active_targets() includes same-day complete targets in its result
+        # set (via a simple date-window clause) so the scheduler can decide
+        # whether a re-check is needed.  The Python filter below is the
+        # application-level gate that keeps the catchup pass focused on
+        # genuinely incomplete targets only; _has_complete_results_for_target()
+        # in _process_target handles the same-day integrity check for due targets.
         recent = [
             t for t in all_active
             if (

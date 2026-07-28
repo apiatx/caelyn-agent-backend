@@ -5088,6 +5088,10 @@ async def ticker_detail_endpoint(symbol: str):
         earnings_intelligence = {"materials": ei_materials}
 
     # ── 10. Live Earnings Event (zero-provider DB-only lookup) ─────────────────
+    # get_live_event_for_symbol uses revision-first ordering within each
+    # expected_date bucket: a higher-revision results_updated event beats a
+    # stale lower-revision complete event for the same quarter, so the ticker
+    # popup always reflects the most recently written/corrected results payload.
     live_event: dict | None = None
     try:
         def _fetch_live_event():
