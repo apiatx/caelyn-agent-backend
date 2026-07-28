@@ -41,6 +41,16 @@ from services.news_major_service import (
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 
+# ── Bulk csv_data response strip ──────────────────────────────────────────────
+# Keys removed from every csv_data row before the bulk watchlist response is
+# returned.  Rows must contain only user-facing display fields.
+#   earnings_intelligence — full EI object (~40 KB/ticker); ticker-detail only
+#   profile               — nested company profile dict; ticker-detail only
+#   _*                    — private diagnostic internals (_valuation_*, _eps_*,
+#                           _rev_*, _market_cap_*, _roic_source, etc.) added by
+#                           apply_fmp_overlays; not display data
+_BULK_CSV_STRIP: frozenset[str] = frozenset({"earnings_intelligence", "profile"})
+
 # ── Rel-vol rank snapshot: in-memory fallback (survives within process) ───────
 # Keyed by watchlist_id → {"current": {SYM: {rank, rel_vol}},
 #                           "previous": {SYM: {rank, rel_vol}} | None}
@@ -6131,14 +6141,23 @@ async def get_by_id_endpoint(watchlist_id: str):
 
     _aio.create_task(_watchlist_alert_hook(store))
 
-    # Strip ticker-detail-only fields from the bulk csv_data payload.
-    # earnings_intelligence (~40 KB/ticker) is served only by
-    # GET /ticker-detail/{symbol}; embedding it in the bulk response
-    # bloats the payload by ~15 MB (94 % of total) for a 400-ticker watchlist.
+    # Strip ticker-detail-only and internal diagnostic fields from the bulk
+    # csv_data payload.  Bulk csv_data must contain only user-facing display
+    # fields — not complete fundamentals snapshots, not private internals.
+    #
+    # Removed keys:
+    #   earnings_intelligence — full EI object (~40 KB/ticker); served only by
+    #                           GET /ticker-detail/{symbol}
+    #   profile               — nested company profile dict; ticker-detail-only
+    #   _*                    — private diagnostic fields (_valuation_*, _eps_*,
+    #                           _rev_*, _market_cap_*, _roic_source, etc.)
+    #                           added by apply_fmp_overlays / merge_fmp_into_csv_row;
+    #                           internal computation aids, not display data
     _bulk_csv_out = store.get("csv_data")
     if _bulk_csv_out:
         store["csv_data"] = [
-            {k: v for k, v in row.items() if k != "earnings_intelligence"}
+            {k: v for k, v in row.items()
+             if k not in _BULK_CSV_STRIP and not k.startswith("_")}
             for row in _bulk_csv_out
         ]
 
