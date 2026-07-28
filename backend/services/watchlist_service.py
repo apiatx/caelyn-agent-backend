@@ -90,42 +90,6 @@ def extract_tickers(csv_data: List[Dict[str, str]], analysis: Optional[Dict] = N
     return sorted(tickers)
 
 
-# Fields preserved from an uploaded CSV row while canonical hydration is pending.
-# Everything else is stale at upload time and must be dropped — the canonical
-# FMP/Neon path (apply_fmp_overlays) will supply authoritative values once the
-# first weekly fundamentals refresh completes.
-_CSV_PLACEHOLDER_KEYS: frozenset[str] = frozenset({
-    "Symbol", "symbol", "Ticker", "ticker",  # identity — always required
-    "Company Name", "Name", "name",           # display name while pending
-    "Stock Price",                             # display price while pending
-    "Industry", "industry",                   # sector fallback in _build_ticker_row
-})
-
-
-def _normalize_csv_to_placeholder(csv_data: List[Dict]) -> List[Dict]:
-    """
-    Reduce every CSV row to the minimum fields needed for pre-hydration display.
-
-    Drops all screener-derived columns (RSI, ATR, PE Ratio, 52-week range,
-    Volume, Market Cap, EPS Growth, Revenue, etc.) that are stale from upload
-    time.  FMP canonical data replaces these via apply_fmp_overlays once the
-    first refresh succeeds.  The Symbol key is always kept so the row can be
-    matched by the enrichment path.
-    """
-    result = []
-    for row in csv_data:
-        minimal = {k: v for k, v in row.items() if k in _CSV_PLACEHOLDER_KEYS}
-        # Ensure Symbol is always present (fall back to any identity column)
-        if "Symbol" not in minimal:
-            for alt in ("symbol", "Ticker", "ticker"):
-                if alt in row:
-                    minimal["Symbol"] = row[alt]
-                    break
-        if minimal:
-            result.append(minimal)
-    return result
-
-
 def save_watchlist(
     csv_data: List[Dict[str, str]],
     analysis: Dict[str, Any],
@@ -144,24 +108,12 @@ def save_watchlist(
             name = ", ".join(tickers[:3]) + f" +{len(tickers) - 3}"
     saved_at = datetime.now(timezone.utc).isoformat()
 
-    # Normalize CSV rows to minimal placeholder fields before persistence.
-    # Full screener columns (RSI, ATR, PE Ratio, 52-week range, etc.) are
-    # upload-time snapshots that become stale immediately.  Keeping them in
-    # Neon would serve wrong values for unhydrated tickers and bloat the
-    # stored payload needlessly.  Canonical FMP data (apply_fmp_overlays)
-    # replaces these once the first fundamentals refresh succeeds.
-    csv_data_stored = _normalize_csv_to_placeholder(csv_data)
-    dropped = len(csv_data) - len(csv_data_stored)
-    if dropped > 0:
-        print(f"[Watchlist] csv_data normalization: kept {len(csv_data_stored)} rows, "
-              f"dropped {dropped} empty; placeholder keys only")
-
     # Try PostgreSQL first (survives redeploys)
     neon_ok = False
     try:
         from data.pg_storage import watchlist_write, is_available
         if is_available():
-            neon_ok = watchlist_write(watchlist_id, name, csv_data_stored, analysis, tickers)
+            neon_ok = watchlist_write(watchlist_id, name, csv_data, analysis, tickers)
             if neon_ok:
                 print(f"[Watchlist] ✅ Saved '{name}' (id={watchlist_id}, {len(tickers)} tickers) to PostgreSQL")
     except Exception as e:
@@ -169,7 +121,7 @@ def save_watchlist(
 
     if not neon_ok:
         # Fallback: JSON file (single store, overwrites)
-        store = {"id": watchlist_id, "name": name, "tickers": tickers, "csv_data": csv_data_stored, "analysis": analysis, "saved_at": saved_at}
+        store = {"id": watchlist_id, "name": name, "tickers": tickers, "csv_data": csv_data, "analysis": analysis, "saved_at": saved_at}
         _write_store(store)
         print(f"[Watchlist] Saved '{name}' (id={watchlist_id}) to JSON file")
 

@@ -1,0 +1,116 @@
+STOP — do not publish, push, or make additional architecture changes.
+
+The bulk performance improvement is valid, but the CSV lifecycle implementation exceeded the approved audit-first scope and may discard user placeholder data prematurely.
+
+First show:
+
+git status -sb
+git log --oneline origin/main..main
+git diff
+git diff --stat
+git diff --name-only
+
+Identify which of the following changes are committed and which remain uncommitted:
+
+1. Removing earnings_intelligence from get_snapshots_bulk.
+2. Removing earnings_intelligence from bulk csv_data serialization.
+3. Removing profile and all underscore-prefixed fields from bulk csv_data.
+4. Normalizing imported CSV rows to only Symbol, Company Name, Stock Price, and Industry.
+5. Mutating watchlist.csv_data from upsert_snapshot().
+6. Any claimed N+1 fix in the Watchlist reader.
+7. The GLW live-event revision-order fix.
+
+Do not modify runtime JSON, cache, LKG, snapshot, .gitignore, or report files.
+
+Preserve these already validated corrections:
+
+- GLW live-event revision ordering.
+- Partial earnings merge behavior.
+- earnings_intelligence excluded from bulk snapshot transfer.
+- earnings_intelligence excluded from bulk Watchlist csv_data.
+- Full earnings_intelligence retained by ticker-detail.
+
+Now correct the unapproved CSV lifecycle changes.
+
+A. Revert or remove the save-time normalization that keeps only four CSV fields.
+
+Reason:
+The original imported fields are allowed to serve as temporary placeholders until canonical hydration completes. They must not be discarded immediately on save.
+
+B. Revert or remove the watchlist csv_data mutation from the low-level upsert_snapshot() function.
+
+Reason:
+- A snapshot upsert may be partial.
+- The function may not have an exact user/watchlist identity.
+- A ticker may exist in multiple Watchlists.
+- A low-level canonical snapshot writer must not silently mutate unrelated Watchlist state.
+- Do not solve this with a broad symbol-only UPDATE.
+
+If either A or B is already committed, create a narrow corrective commit reverting only those behaviors. Preserve the earnings and bulk-performance fixes.
+
+C. Audit before keeping the broad response scrub.
+
+For every field removed by:
+- profile removal
+- removal of all underscore-prefixed keys
+
+Search the frontend and backend consumers.
+
+Report:
+- exact removed field names
+- whether each field is read by any frontend component, sorter, formatter, popup, tooltip, or merge function
+- whether any field is required for Watchlist display or sorting
+
+Keep removal only for fields proven to be private and unused by the bulk consumer. Do not use a blanket prefix rule unless all underscore-prefixed fields are contractually private.
+
+CSV lifecycle design — audit and proposal only:
+
+Trace the existing refresh completion semantics and determine whether there is already an established predicate meaning that a ticker’s canonical Watchlist row is sufficiently hydrated.
+
+Examples to inspect:
+- existing completeness/readiness helpers
+- required bulk Watchlist fields
+- refresh success state
+- canonical snapshot presence
+- existing fallback or provenance logic
+
+Do not invent a new status field, table, worker, scheduler, or source of truth.
+
+The correct future behavior must be:
+
+1. CSV symbols are saved through authoritative Watchlist membership.
+2. Imported values may temporarily display only while equivalent canonical fields are unavailable.
+3. Canonical non-null values always beat CSV values.
+4. CSV values must never overwrite canonical values.
+5. Temporary data is cleared only when the existing system can prove that the required canonical Watchlist fields for that exact ticker and exact Watchlist are hydrated.
+6. A partial snapshot must not clear all placeholders.
+7. Cleanup must be scoped to the exact user, Watchlist, and ticker.
+8. If the existing architecture cannot safely prove hydration completeness, stop and propose the smallest safe option rather than implementing one.
+9. Do not mass-clean existing Neon rows without reporting:
+   - exact table
+   - exact row count
+   - exact predicate
+   - before and after size
+   - rollback behavior
+
+Performance validation after removing the unsafe lifecycle mutations:
+
+- Main Watchlist endpoint: five runs, cold and warm.
+- Response bytes.
+- csv_data bytes.
+- Confirm zero earnings_intelligence keys in bulk csv_data.
+- Confirm ticker-detail GLW still contains full earnings data.
+- Confirm GLW Q2 EPS 0.78 and revenue 4,738,000,000.
+- Confirm Upcoming and Recent Earnings both load.
+- Confirm About and Earnings tabs appear in preview.
+- Confirm no required Watchlist columns became blank.
+- Confirm sorting and tooltips still function.
+- Run the existing earnings tests and relevant Watchlist tests.
+
+Then show the exact final diff before committing.
+
+Commit only the safe functional source/test changes locally.
+Do not push.
+Do not publish.
+Do not commit reports.
+Report the commit SHA and exact files changed.

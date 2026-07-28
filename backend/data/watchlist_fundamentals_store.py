@@ -172,50 +172,6 @@ def upsert_snapshot(
                 )
                 conn.commit()
                 cur.close()
-
-                # ── Clear CSV placeholder for this ticker (hydration contract) ─
-                # Now that canonical fundamentals exist, replace the ticker's
-                # full CSV row in watchlist.csv_data with {"Symbol": sym}.
-                # This satisfies: "Clear a ticker's temporary CSV fields as
-                # soon as its first canonical refresh succeeds."
-                # Non-fatal — a failure here does not affect the snapshot.
-                try:
-                    sym_upper = symbol.upper()
-                    cur2 = conn.cursor()
-                    cur2.execute(
-                        """
-                        UPDATE public.watchlist
-                           SET csv_data = (
-                               SELECT jsonb_agg(
-                                   CASE
-                                       WHEN (
-                                           elem->>'Symbol' = %s
-                                           OR elem->>'symbol' = %s
-                                           OR elem->>'Ticker' = %s
-                                       ) AND jsonb_typeof(elem) = 'object'
-                                         AND (SELECT count(*) FROM jsonb_object_keys(elem)) > 1
-                                       THEN jsonb_build_object('Symbol', %s)
-                                       ELSE elem
-                                   END
-                               )
-                               FROM jsonb_array_elements(csv_data) AS elem
-                           ),
-                           updated_at = NOW()
-                         WHERE id = %s
-                           AND csv_data IS NOT NULL
-                           AND jsonb_array_length(csv_data) > 0
-                        """,
-                        (sym_upper, sym_upper, sym_upper, sym_upper, watchlist_id),
-                    )
-                    conn.commit()
-                    cur2.close()
-                except Exception as _csv_e:
-                    try:
-                        conn.rollback()
-                    except Exception:
-                        pass
-                    log.debug("csv_placeholder minimize skipped for %s: %s", symbol, _csv_e)
-
                 return "success"
 
             # ── Unusable/empty payload path ─────────────────────────────────
