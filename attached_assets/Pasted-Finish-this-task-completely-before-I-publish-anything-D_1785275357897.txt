@@ -1,0 +1,101 @@
+Finish this task completely before I publish anything.
+
+Do not make additional functional changes unless validation proves they are necessary.
+
+First confirm the current working tree and show:
+
+git status -sb
+git diff --check
+git diff --stat
+git diff -- backend/data/earnings_monitor_store.py backend/services/earnings_monitor_service.py backend/services/watchlist_router.py backend/tests/test_earnings_fmp_matching.py
+
+Verify that no runtime JSON, cache, LKG, snapshot, generated, .replit, or unrelated files are staged or included.
+
+Then complete the missing validation.
+
+1. Measure these existing backend paths three times each and report status, elapsed time, response bytes, and relevant counts:
+
+- main Watchlist data endpoint used by the Watchlist page
+- /api/watchlist/earnings
+- /api/watchlist/ticker-detail/GLW
+- /api/watchlist/ticker-detail/AMKR
+- /api/watchlist/ticker-detail/AMD
+
+2. Verify the exact response sections needed by the frontend:
+
+For GLW, AMKR, and AMD, confirm the ticker-detail response still contains:
+
+- all existing Overview data
+- the existing About/company-information data
+- earnings_intelligence
+- earnings history
+- live_event where applicable
+
+Do not merely report HTTP 200. Report the relevant top-level and nested field names and whether their values are populated.
+
+3. Verify current earnings behavior:
+
+GLW:
+- expected_date/date July 28, 2026
+- fiscal period Q2
+- fiscal year 2026
+- EPS actual 0.78
+- revenue actual 4,738,000,000
+- stale April Q1 event does not win
+
+AMKR:
+- July 27, 2026
+- Q2 2026
+- EPS actual 0.70
+- revenue actual approximately 1,897,965,000
+
+AMD:
+- existing About and Earnings data remains present and unchanged
+
+4. Verify Upcoming and Recent earnings independently:
+
+- upcoming list returns successfully with a nonzero count
+- recent list returns successfully with a nonzero count
+- no exception, timeout, or partial response
+- report their counts and elapsed time
+
+5. Confirm the SQL change does not create unnecessary scheduler work:
+
+- report how many completed targets from today/yesterday are returned by get_active_targets and get_due_targets
+- prove valid completed targets are rejected by _has_complete_results_for_target before any FMP request
+- prove GLW’s stale/mismatched target remains repairable
+- prove there is no per-ticker provider-call explosion
+- report provider calls made during the isolated validation
+
+6. Run:
+
+cd backend
+python -m pytest tests/test_earnings_fmp_matching.py -v
+python -m py_compile services/earnings_monitor_service.py data/earnings_monitor_store.py
+git diff --check
+
+7. Stage only the exact approved source and test files. Show:
+
+git diff --cached --name-only
+git diff --cached --stat
+git diff --cached
+
+8. Create exactly one local commit on main with a descriptive message.
+
+Do not push and do not publish.
+
+9. Overwrite .codex-reports/latest.md with:
+
+- proven root cause
+- exact behavioral fix
+- files changed
+- endpoint timings across three runs
+- GLW, AMKR, and AMD response verification
+- Upcoming and Recent counts
+- scheduler/provider-call effects
+- tests and results
+- final git status
+- commit SHA and message
+- complete committed diff
+
+Stop after the local commit and report. Do not push or publish.
