@@ -508,10 +508,136 @@ async def _check_sec(
 
 # ── FMP results detection ──────────────────────────────────────────────────────
 
-async def _check_fmp_results(symbol: str) -> dict | None:
+def _select_matching_fmp_result(
+    records: list[dict],
+    expected_date: str | None,
+    fiscal_year: int | None,
+    fiscal_period: str | None,
+) -> dict | None:
     """
-    Fetch the most-recent earnings record for a symbol using the live (short-TTL) path.
-    Returns the first record with report_available=True, or None.
+    From a list of raw FMP earnings records, return the one that matches the
+    current target quarter, or None if no qualifying record exists.
+
+    A qualifying record must have at least one provider-confirmed actual:
+      - eps_actual  (value present, including zero), OR
+      - revenue_actual (value present, including zero)
+
+    Two-pass deterministic selection
+    ---------------------------------
+    PASS 1 — FISCAL MATCH  (global first pass; runs when target has both labels)
+      - Collect actual-bearing candidates that also carry usable fiscal_year +
+        fiscal_period labels.
+      - If ANY such labeled candidates exist, restrict the result set to them:
+          * Exact match on both fiscal_year and fiscal_period → return that row.
+          * Labeled candidates present but none match the target → return None.
+            Do NOT fall back to date proximity when labeled rows are available.
+      - If zero labeled candidates exist, fall through to Pass 2.
+
+    PASS 2 — DATE-PROXIMITY  (used only when no usable labeled candidates exist)
+      - Requires expected_date; if absent → return None.
+      - Evaluate ALL actual-bearing candidates with a parseable date field.
+      - Discard candidates whose |date − expected_date| > 7 calendar days.
+      - Select the candidate with the smallest distance (nearest date).
+      - Tie-breaker: prefer the later result date (more recent filing wins).
+      - Provider ordering must NOT determine the selected row.
+
+    Robustness
+    ----------
+    - Malformed or missing date strings are skipped without raising.
+    - Malformed fiscal labels are skipped without raising.
+    - EPS-only and revenue-only actuals are both accepted as qualifying.
+    - No I/O, no state changes — pure function.
+    """
+    from datetime import date as _d
+
+    # Filter to actual-bearing candidates.
+    candidates = [
+        rec for rec in records
+        if rec.get("eps_actual") is not None or rec.get("revenue_actual") is not None
+    ]
+
+    if not candidates:
+        return None
+
+    # ── PASS 1: global fiscal-label match ─────────────────────────────────────
+    if fiscal_year and fiscal_period:
+        target_fy  = int(fiscal_year)
+        target_fp  = str(fiscal_period).upper()
+
+        labeled = []
+        for rec in candidates:
+            try:
+                rec_fy = rec.get("fiscal_year")
+                rec_fp = rec.get("fiscal_period")
+                if rec_fy is not None and rec_fp:
+                    labeled.append((int(rec_fy), str(rec_fp).upper(), rec))
+            except (ValueError, TypeError):
+                pass  # malformed label — skip
+
+        if labeled:
+            # Labeled rows exist → only accept an exact match; never fall back.
+            for fy, fp, rec in labeled:
+                if fy == target_fy and fp == target_fp:
+                    return rec
+            # Labeled candidates present but none matched → definitive miss.
+            return None
+        # No labeled candidates → fall through to Pass 2.
+
+    # ── PASS 2: date-proximity (nearest within 7 days) ────────────────────────
+    if not expected_date:
+        # No validation context — never return an unverified row.
+        return None
+
+    try:
+        exp = _d.fromisoformat(str(expected_date))
+    except (ValueError, TypeError):
+        return None
+
+    best_dist: int | None = None
+    best_rec:  dict | None = None
+    best_date: _d | None  = None
+
+    for rec in candidates:
+        try:
+            rec_date_str = rec.get("date")
+            if not rec_date_str:
+                continue
+            rec_date = _d.fromisoformat(str(rec_date_str))
+            dist = abs((rec_date - exp).days)
+            if dist > 7:
+                continue
+            # Prefer smaller distance; on a tie, prefer the later result date.
+            if (
+                best_dist is None
+                or dist < best_dist
+                or (dist == best_dist and best_date is not None and rec_date > best_date)
+            ):
+                best_dist = dist
+                best_rec  = rec
+                best_date = rec_date
+        except (ValueError, TypeError):
+            pass  # malformed date — skip safely
+
+    return best_rec
+
+
+async def _check_fmp_results(
+    symbol: str,
+    expected_date: str | None = None,
+    fiscal_year: int | None = None,
+    fiscal_period: str | None = None,
+) -> dict | None:
+    """
+    Fetch FMP live earnings records and return the one matching the current
+    target quarter.  Returns None when no qualifying current record exists so
+    the caller does not advance the event or target state prematurely.
+
+    Parameters
+    ----------
+    symbol        : ticker symbol
+    expected_date : ISO-8601 date the monitor expects results (from target)
+    fiscal_year   : target fiscal year  (used for label-based matching)
+    fiscal_period : target fiscal period, e.g. ``"Q2"`` (used for label matching)
     """
     try:
         from data.fmp_provider import FMPProvider
@@ -524,10 +650,7 @@ async def _check_fmp_results(symbol: str) -> dict | None:
         fmp = FMPProvider(fmp_key)
         daily_budget.spend("fmp")
         records = await fmp.get_earnings_history_live(symbol, limit=2)
-        for rec in records:
-            if rec.get("report_available") or rec.get("eps_actual") is not None:
-                return rec
-        return None
+        return _select_matching_fmp_result(records, expected_date, fiscal_year, fiscal_period)
     except Exception as exc:
         print(f"[EarnMon] FMP results check error {symbol}: {exc}")
         return None
@@ -841,9 +964,17 @@ async def _process_target(
     if should_fmp and existing_state not in ("complete",):
         # catchup_mode bypasses window gate — fills results any time of day
         if _is_monitoring_window(now_et, timing) or dry_run or catchup_mode:
-            fmp_rec = await _check_fmp_results(symbol)
+            fmp_rec = await _check_fmp_results(
+                symbol,
+                expected_date=date_str or None,
+                fiscal_year=fiscal_y,
+                fiscal_period=fiscal_p,
+            )
             _STATE["check_count"] += 1
-            if fmp_rec and fmp_rec.get("eps_actual") is not None:
+            if fmp_rec and (
+                fmp_rec.get("eps_actual") is not None
+                or fmp_rec.get("revenue_actual") is not None
+            ):
                 _STATE["fmp_detections"] += 1
                 # Enrich fiscal labels if FMP returned them
                 # (FMP stable/earnings doesn't have period; use income-statement)
@@ -1350,9 +1481,17 @@ async def _earnings_catchup_pass() -> dict:
 
             # First, probe FMP so we can decide between fill vs bounded-retry
             # without burning two FMP calls when data is absent.
-            probe = await _check_fmp_results(symbol)
+            probe = await _check_fmp_results(
+                symbol,
+                expected_date=str(target.get("expected_date") or "") or None,
+                fiscal_year=target.get("fiscal_year"),
+                fiscal_period=target.get("fiscal_period"),
+            )
 
-            if probe and probe.get("eps_actual") is not None:
+            if probe and (
+                probe.get("eps_actual") is not None
+                or probe.get("revenue_actual") is not None
+            ):
                 # Results are on FMP — run full state machine to get
                 # alert + EI refresh + state transition in one pass.
                 try:

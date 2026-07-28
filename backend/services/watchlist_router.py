@@ -3551,11 +3551,17 @@ async def watchlist_earnings_endpoint(
         import asyncio as _aio_re
 
         _since = (_date2.today() - _td2(days=30)).isoformat()
+        # Compute today in ET so the Recent upper bound is ET-local, not
+        # DB-session time.  Future events must never enter the Recent section.
+        from datetime import datetime as _dt_re
+        from zoneinfo import ZoneInfo as _ZI_re
+        _today_et = _dt_re.now(_ZI_re("America/New_York")).date().isoformat()
         from data.earnings_monitor_store import get_recent_complete_events_for_symbols
         _recent_raw = await _aio_re.to_thread(
             get_recent_complete_events_for_symbols,
             list(symbols),
             _since,
+            _today_et,
         )
 
         def _parse_jb(v):

@@ -799,13 +799,19 @@ def update_reaction_payload(event_id: str, payload: dict, merge: bool = True) ->
 def get_recent_complete_events_for_symbols(
     symbols: list[str],
     since_date: str,
+    today: str,
     states: tuple[str, ...] = ("results_available", "results_updated", "complete"),
 ) -> list[dict]:
     """
     Return the most-advanced recent completed event per symbol (DISTINCT ON symbol).
 
     Used by watchlist earnings endpoint to build the "recent" section: events
-    that already reported (state in states) since since_date.
+    that already reported (state in states) since since_date up through today.
+
+    ``today`` must be an ISO-8601 date string computed by the caller in the
+    America/New_York timezone so the upper bound is ET-local, not DB-session
+    time.  Future events (expected_date > today) are excluded, preventing
+    scheduled-but-not-yet-reported events from appearing in the Recent section.
 
     Returns a flat list ordered by expected_date DESC.
     """
@@ -830,6 +836,7 @@ def get_recent_complete_events_for_symbols(
               AND  is_dry_run = FALSE
               AND  state IN ({state_ph})
               AND  expected_date >= %s
+              AND  expected_date <= %s
             ORDER  BY symbol,
                 CASE state
                     WHEN 'complete'          THEN 0
@@ -840,7 +847,7 @@ def get_recent_complete_events_for_symbols(
                 revision DESC,
                 updated_at DESC
             """,
-            [s.upper() for s in symbols] + list(states) + [since_date],
+            [s.upper() for s in symbols] + list(states) + [since_date, today],
         )
         cols = [
             "event_id", "event_key", "symbol", "expected_date", "fiscal_period",
