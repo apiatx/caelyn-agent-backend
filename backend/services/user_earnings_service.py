@@ -324,7 +324,6 @@ async def get_or_sync_user_earnings(
             ev for ev in in_range
             if (ev.get("symbol") or "").upper() in symbols
         ]
-        in_range = await _overlay_timing_async(in_range, symbols)
         print(f"{prefix} returning {len(in_range)} events in range (cache_status={cache_status})")
         return in_range, {
             "universe":      universe,
@@ -338,7 +337,6 @@ async def get_or_sync_user_earnings(
     print(f"{prefix} cache MISS — syncing from FMP")
     events   = await _sync_from_fmp(universe, symbols, fmp_key)
     in_range = _filter_by_date(events, from_date, to_date)
-    in_range = await _overlay_timing_async(in_range, symbols)
     print(f"{prefix} returning {len(in_range)} events after sync")
     return in_range, {
         "universe":      universe,

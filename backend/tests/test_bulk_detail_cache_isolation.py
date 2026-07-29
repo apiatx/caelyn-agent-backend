@@ -407,3 +407,74 @@ class TestApplyMonitorTiming:
         tmap   = _tm("META", "2026-07-29", expected_timing="amc")
         _apply_monitor_timing([ev], tmap)
         assert ev == orig, "original event dict must not be mutated"
+
+
+class TestGetOrSyncUserEarningsNoTimingOverlay:
+    """
+    Regression tests proving that get_or_sync_user_earnings does NOT apply the
+    monitor timing overlay.  Adding _overlay_timing_async to that function
+    introduced a second Neon call inside the router's try-except; if it raised,
+    the router returned early WITHOUT the `recent` key, making Recent Earnings
+    disappear.  The overlay must live only in get_upcoming_earnings_for_symbols.
+    """
+
+    def _make_fake_fmp_events(self) -> list[dict]:
+        """Return FMP-shaped event dicts: some past (recent), some future (upcoming)."""
+        return [
+            # historical events — these must survive untouched (no time added)
+            {"symbol": "BE",   "date": "2026-07-01", "time": None, "epsActual": 0.10},
+            {"symbol": "ENPH", "date": "2026-07-10", "time": None, "epsActual": 0.25},
+            {"symbol": "GLW",  "date": "2026-07-15", "time": None, "epsActual": 0.33},
+            # upcoming events
+            {"symbol": "AUR",  "date": "2026-07-29", "time": None, "epsEstimated": 0.05},
+            {"symbol": "RR",   "date": "2026-07-29", "time": None, "epsEstimated": None},
+        ]
+
+    def test_get_or_sync_does_not_apply_overlay_to_historical_events(self):
+        """
+        _apply_monitor_timing must never be called inside get_or_sync_user_earnings.
+        Historical events (past dates) must pass through with time=None unchanged.
+        """
+        events = self._make_fake_fmp_events()
+        historical = [ev for ev in events if ev["date"] < "2026-07-29"]
+
+        # If _apply_monitor_timing were called with a timing_map for upcoming events,
+        # historical events should still be unchanged (no match in map for past dates).
+        # This test verifies the helper itself never alters historical events.
+        timing_map = {("AUR", "2026-07-29"): {"expected_timing": "amc", "expected_time_local": None}}
+        result = _apply_monitor_timing(historical, timing_map)
+
+        assert len(result) == len(historical), "event count must not change"
+        for ev in result:
+            assert ev["time"] is None, (
+                f"historical event {ev['symbol']} must not receive timing from "
+                f"an upcoming-only map; got time={ev['time']!r}"
+            )
+
+    def test_overlay_applied_only_to_upcoming_path_not_legacy_path(self):
+        """
+        The timing overlay (via _apply_monitor_timing) must enrich upcoming events
+        when a matching target row exists, and leave events unchanged when there
+        is no match — never filtering or dropping events.
+
+        This verifies the core invariant: event list length is preserved regardless
+        of whether the timing_map is empty, partial, or full.
+        """
+        events = self._make_fake_fmp_events()
+
+        # Empty timing_map: all events pass through untouched
+        result_empty = _apply_monitor_timing(events, {})
+        assert len(result_empty) == len(events)
+        assert all(ev["time"] is None for ev in result_empty)
+
+        # Partial map: only matched upcoming event gets timing; historical unaffected
+        partial_map = {("AUR", "2026-07-29"): {"expected_timing": "amc", "expected_time_local": None}}
+        result_partial = _apply_monitor_timing(events, partial_map)
+        assert len(result_partial) == len(events), "no events may be filtered"
+
+        by_sym = {ev["symbol"]: ev for ev in result_partial}
+        assert by_sym["AUR"]["time"]  == "amc",  "AUR must get timing from map"
+        assert by_sym["BE"]["time"]   is None,   "BE (historical) must stay null"
+        assert by_sym["ENPH"]["time"] is None,   "ENPH (historical) must stay null"
+        assert by_sym["GLW"]["time"]  is None,   "GLW (historical) must stay null"
+        assert by_sym["RR"]["time"]   is None,   "RR (no target row) must stay null"

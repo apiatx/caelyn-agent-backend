@@ -1,0 +1,143 @@
+Fix the regression from the earnings timing implementation. Do not broadly roll back the prior work.
+
+Current visible behavior
+
+1. Upcoming timing is only partially populated.
+   Timing visibly appears for:
+   - AUR
+   - GNRC
+   - HOOD
+   - MX
+
+   But it is absent for same-date events including:
+   - RR
+   - TEVA
+   - UMC
+   - QURE
+
+2. Recent Earnings is now completely empty:
+   “No watchlist earnings reported in the past 30 days.”
+
+Before this backend change, Recent Earnings contained approximately 22 events, including:
+- AREC
+- BE
+- ENPH
+- GLW
+- KLAC
+- LOGI
+- MOD
+- NAUT
+
+This regression appeared immediately after adding the earnings_monitor_targets timing overlay.
+
+Required investigation before editing
+
+Compare:
+
+- the current committed diff
+- the previous working implementation
+- the live response consumed by the Watchlist
+- the frontend response shape expected for Upcoming and Recent
+
+Trace both exact paths separately:
+
+A. Upcoming Earnings path
+B. Recent Earnings path
+
+Do not assume they can safely share the same timing overlay behavior.
+
+For Recent Earnings, prove:
+
+- which backend endpoint/query supplies the Recent array
+- the current event count returned by the backend
+- whether the events are absent in the backend response or are being removed during normalization/filtering
+- whether the newly added timing code changed:
+  - date filtering
+  - event list mutation
+  - response construction
+  - cache behavior
+  - return paths
+  - upcoming-versus-historical classification
+
+Inspect the changes made to:
+
+- user_earnings_service.py
+- earnings_monitor_store.py
+- any edited test file
+
+Pay particular attention to the new calls added to both return paths of get_or_sync_user_earnings. The timing enrichment must not replace, filter, or rebuild the Recent Earnings collection.
+
+For incomplete Upcoming timing, inspect the exact live endpoint objects and matching earnings_monitor_targets rows for:
+
+- RR
+- AUR
+- TEVA
+- UMC
+- QURE
+- GNRC
+- HOOD
+- MX
+
+For each symbol report:
+
+- event date in the Watchlist response
+- target expected_date
+- expected_timing
+- expected_time_local
+- generated lookup key
+- whether an exact match occurred
+- final response time value
+
+Do not guess why some match and others do not.
+
+Required fix
+
+1. Restore Recent Earnings to its exact pre-change behavior and data path.
+2. Apply monitor timing enrichment only to Upcoming events.
+3. Never apply the upcoming timing overlay to historical/recent events.
+4. Preserve the full existing Upcoming and Recent response structure.
+5. Preserve event counts, ordering, estimates, surprise data, and classifications.
+6. Keep exact matching by normalized:
+   (symbol, event date)
+7. Keep one bulk Neon read, not per-symbol reads.
+8. Keep zero new provider calls.
+9. Do not add a new endpoint, cache, table, worker, or data pipeline.
+10. Do not modify the frontend unless the backend response is proven correct and the frontend alone is filtering valid Recent events.
+
+Important
+
+Do not simply delete the timing work.
+
+Keep the timing that is already successfully reaching cards such as AUR, GNRC, HOOD, and MX while fixing:
+
+- missing exact matches for other events where target timing exists
+- the Recent Earnings regression
+
+Validation requirements
+
+Validate the actual authenticated endpoint response and rendered Watchlist.
+
+Recent Earnings:
+
+- Recent count is non-zero again.
+- Previously visible symbols such as BE, ENPH, GLW, KLAC, LOGI, and MOD return.
+- The past-30-days filter behaves exactly as before.
+- Recent dates and beat/miss data remain intact.
+
+Upcoming Earnings:
+
+- Existing working timing remains visible.
+- RR, TEVA, UMC, and QURE receive timing only when an exact matching target row contains timing.
+- If a target genuinely has no timing, report that clearly and leave it blank rather than fabricating it.
+- Event count and ordering remain unchanged.
+
+Also prove:
+
+- one bulk timing-store read per request
+- zero database writes
+- zero new FMP calls
+- no runtime JSON files included in the change
+- focused regression test covering Recent events remaining present after timing enrichment
+- focused test proving timing enrichment affects only Upcoming events
+
+Do not report completion based only on tests or HMR. Confirm the rendered Recent cards are back in the Watchlist.
