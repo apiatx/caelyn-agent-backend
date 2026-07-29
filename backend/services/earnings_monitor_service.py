@@ -1214,11 +1214,31 @@ def _has_complete_results_for_target(
     payload: dict | None,
     expected_date: str | None,
 ) -> bool:
-    """True only for both actuals on the scheduled event, never a stale quarter."""
+    """True only for both actuals on the scheduled event, never a stale quarter.
+
+    A results payload is considered complete only when:
+      - Both eps_actual and revenue_actual are non-null.
+      - The payload date is within 7 calendar days of expected_date.
+      - The revenue_actual passes a plausibility gate: actual must not exceed
+        10× the estimate.  A ratio > 10 (>1000 % beat) is a strong indicator of
+        a unit-normalization error in the upstream provider (e.g. FMP returning
+        a six-month cumulative value or a thousands-scaled value instead of the
+        correct quarterly dollar figure).  Rejecting such payloads forces a
+        re-poll on the next monitor tick so the provider can self-correct.
+    """
     if not payload or payload.get("eps_actual") is None or payload.get("revenue_actual") is None:
         return False
     if not expected_date:
         return False
+    # Plausibility: revenue_actual > 10× estimate signals unit corruption.
+    rev_actual   = payload.get("revenue_actual")
+    rev_estimate = payload.get("revenue_estimate")
+    if rev_actual is not None and rev_estimate is not None:
+        try:
+            if float(rev_estimate) > 0 and float(rev_actual) > float(rev_estimate) * 10:
+                return False
+        except (TypeError, ValueError):
+            pass
     try:
         from datetime import date as _date
         return abs((_date.fromisoformat(str(payload.get("date"))) -

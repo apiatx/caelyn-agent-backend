@@ -1,0 +1,200 @@
+Fix the corrupted BAND Q2 2026 earnings revenue data shown in the Watchlist ticker popup.
+
+This is a backend data-integrity task. Do not modify the frontend unless the backend endpoint is proven correct and the frontend independently transforms it incorrectly.
+
+Verified correct result
+
+Bandwidth’s official Q2 2026 release reports:
+
+- Quarterly revenue: $219.897 million
+- Quarterly revenue estimate: approximately $217.0 million
+- Revenue surprise: approximately +1.3%
+- Q2 non-GAAP EPS: $0.37
+- EPS estimate: $0.36
+- Six-month cumulative revenue: $428.681 million
+
+The current application incorrectly displays:
+
+- Revenue actual: approximately $428.47 billion
+- Revenue surprise: +197,316.2%
+- Revenue QoQ and YoY growth above 200,000%
+
+The value near 428 strongly suggests that the six-month cumulative revenue row may have been selected instead of the three-month quarterly row, followed by incorrect unit scaling. Treat that as a hypothesis until repository and payload evidence proves it.
+
+Required investigation before editing
+
+Trace BAND Q2 2026 through the complete existing path:
+
+1. Raw provider and source data
+   - FMP Earnings Report response
+   - FMP calendar response if involved
+   - SEC filing/XBRL response if involved
+   - earnings release/material extraction if involved
+   - any fallback source used after the earnings result was detected
+
+2. Storage and writers
+   - earnings_monitor
+   - earnings_monitor_targets
+   - earnings intelligence/history stores
+   - user earnings cache
+   - any extracted financial-table or SEC-material store
+   - the exact writer that persisted the reported revenue
+
+3. Readers and endpoint
+   - ticker-detail endpoint used by the Earnings Overview tab
+   - exact serialized BAND earnings object
+   - exact fields used for reported revenue, estimate, surprise, QoQ and YoY growth
+
+For every stage, report:
+
+- raw value
+- raw unit
+- normalized value
+- period start date
+- period end date
+- duration or fiscal period
+- source/provenance
+- database value, if persisted
+
+Identify the first exact divergence.
+
+Critical period validation
+
+The official financial table contains both:
+
+- three months ended June 30, 2026: revenue 219,897, reported in thousands
+- six months ended June 30, 2026: revenue 428,681, reported in thousands
+
+For a Q2 quarterly earnings event, the system must select the three-month value.
+
+Do not accept the first row that merely matches:
+
+- symbol
+- end date
+- fiscal year
+- revenue concept
+
+The row must also match the intended fiscal period or duration.
+
+For quarterly earnings:
+
+- prefer explicit fiscal-quarter metadata when available
+- otherwise require a duration consistent with a quarter
+- reject six-month YTD facts for a standalone quarterly result
+- preserve annual and YTD facts for their proper consumers
+
+Critical unit validation
+
+Determine exactly how the current value became approximately $428.47B.
+
+Verify whether the raw source provides:
+
+- 428,681 with unit “USD in thousands”
+- 428.681 with unit “USD millions”
+- 428,681,000 already expressed in dollars
+- or another representation
+
+Apply scaling exactly once.
+
+Examples:
+
+- 219,897 in thousands → 219,897,000 dollars
+- 219.897 in millions → 219,897,000 dollars
+- 219,897,000 already in dollars → preserve it
+
+Do not multiply an already normalized dollar value again.
+
+Required fix
+
+Correct the existing period-selection and/or unit-normalization path proven responsible.
+
+Do not:
+
+- hardcode BAND
+- special-case the value 428
+- cap surprise percentages as the primary fix
+- replace the value only in the frontend
+- create a new earnings pipeline
+- add a new endpoint, provider call, table, cache, worker or scheduler
+- change unrelated earnings timing work
+- alter Recent or Upcoming earnings membership
+- alter EPS values that are already correct
+- broadly rewrite the SEC/material parser
+
+Preserve the existing canonical path and fix the first exact divergence.
+
+Persistent-data repair
+
+After correcting the code:
+
+- repair BAND through the existing ingestion, refresh or upsert path
+- do not perform broad database rewrites
+- do not manually overwrite unrelated history
+- if manual production SQL is genuinely required, stop and report:
+  - exact table
+  - exact BAND row and predicate
+  - current value
+  - intended value
+  - rollback plan
+
+Do not execute manual SQL without reporting first.
+
+Regression scan
+
+Read-only scan recent completed earnings events for the same failure pattern:
+
+- quarterly actual revenue implausibly larger than revenue estimate
+- actual revenue more than 20x estimate
+- quarter value matching a six- or nine-month cumulative filing value
+- values inflated by exactly 1,000x
+- extreme revenue growth caused by a period/unit mismatch
+
+Report any other affected symbols separately.
+
+Do not broadly mutate additional records without approval if the impact extends beyond the existing narrow refresh path.
+
+Required tests
+
+Add focused regression coverage using a filing/table containing:
+
+- three-month revenue: 219,897
+- six-month revenue: 428,681
+- unit: thousands
+- same end date: June 30, 2026
+
+Prove:
+
+1. Q2 selects 219,897, not 428,681.
+2. The normalized result is 219,897,000 dollars.
+3. It is not scaled to 219.897 billion.
+4. Six-month cumulative revenue is rejected as the quarterly actual.
+5. Already-dollar-denominated values are not scaled twice.
+6. Missing duration metadata does not cause the first plausible row to be accepted blindly.
+
+Validate a working comparison ticker and one negative/boundary case.
+
+Final endpoint validation
+
+Validate the actual BAND ticker-detail endpoint consumed by the frontend.
+
+Expected final behavior:
+
+- reported revenue: approximately $219.9M
+- estimated revenue: approximately $217.0M
+- revenue beat: approximately +1.3%
+- reported non-GAAP EPS: $0.37
+- estimated EPS: $0.36
+- no $428B value
+- no six-figure revenue growth percentage
+- six-month $428.681M revenue is not used as the Q2 quarterly actual
+- materials, filing links, price reaction and timing remain unchanged
+
+Also confirm:
+
+- no new provider calls
+- no request-path database writes
+- no unrelated earnings regressions
+- no runtime JSON/cache files included
+- relevant focused and existing tests pass
+
+Keep this surgical and within no more than two production files. Stop and report if the proven correction requires a broader architecture change.

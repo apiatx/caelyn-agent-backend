@@ -1570,6 +1570,19 @@ class FmpFundamentalsRefresher:
             eps_est    = ev.get("epsEstimated")
             rev_actual = ev.get("revenueActual")
             rev_est    = ev.get("revenueEstimated")
+            # Plausibility: discard revenue_actual when it exceeds 10× the
+            # estimate.  A ratio above 10 (> 1000 % beat) is a strong signal
+            # of a provider unit-normalization error (e.g. FMP returning a
+            # six-month cumulative or a thousands-scaled value instead of the
+            # correct quarterly dollar figure).  Treating it as None prevents
+            # the corrupted value from being persisted in the EI cache and
+            # propagating to the ticker-detail earnings history display.
+            if rev_actual is not None and rev_est is not None:
+                try:
+                    if float(rev_est) > 0 and float(rev_actual) > float(rev_est) * 10:
+                        rev_actual = None
+                except (TypeError, ValueError):
+                    pass
 
             # EPS surprise
             eps_surp_amt, eps_surp_pct = None, None
