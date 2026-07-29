@@ -1,0 +1,110 @@
+Implement the narrow backend fix for incomplete earnings timing coverage.
+
+Important current truths from the audit
+
+1. Keep the Recent Earnings recovery intact.
+   - Do not reintroduce timing overlay into get_or_sync_user_earnings.
+   - Recent currently works again because those redundant calls were removed.
+
+2. The remaining problem is in the earnings monitor refresh path, not the Watchlist endpoint.
+
+3. Proven audit findings:
+   - TEVA, UMC, QURE are present in FMP’s with-times calendar now, but were absent at the 04:00 ET refresh.
+   - RR is present in the regular FMP earnings calendar, but absent from the with-times calendar.
+   - The current fallback path is capped at 30 per-symbol history calls and stops alphabetically around NXT, so QURE / RR / TEVA / UMC were silently skipped.
+   - The current server process also showed the monitor as not running (enabled false / run_count 0), so self-correction may not occur unless that path is working.
+
+Scope
+
+Fix the existing earnings monitor path only.
+Do not modify the frontend.
+Do not touch the Watchlist response enrichment logic that is already working for Upcoming cards.
+Do not reintroduce any timing overlay into get_or_sync_user_earnings.
+
+Required implementation
+
+A. Preserve the existing primary refresh source:
+- keep FMPProvider.get_earnings_calendar_with_times(...)
+- this remains the authoritative source for timing when available
+
+B. Add one secondary batch source inside _refresh_schedule():
+- fetch the regular FMP earnings calendar for the same date window
+- use it only to identify additional upcoming symbols/events missing from the with-times calendar
+- do not fabricate timing for those rows
+
+C. Candidate-building behavior:
+- build the monitor candidate set from the union of:
+  1. with-times calendar rows
+  2. regular calendar rows
+- still filter to the existing monitored symbol universe
+- still preserve existing eligibility filters
+
+D. Upsert behavior:
+- if a symbol/date exists in with-times, use that row and populate timing normally
+- if a symbol/date exists only in the regular calendar, still upsert/update the target row for that date, but leave timing fields null/unknown unless the existing codebase already has a canonical fallback
+- do not invent BMO/AMC
+- do not infer timing from market, exchange, or history
+
+E. Fallback behavior:
+- keep the current per-symbol earnings history fallback only for cases not covered by either calendar source
+- do not expand the fallback cap into a broad high-cost loop
+- the point of the second calendar call is to avoid alphabetical starvation and reduce dependence on capped per-symbol fallback
+
+F. Monitor runtime / startup:
+- inspect the existing call site and gating that should start the earnings monitor
+- prove why the audited process showed enabled false / run_count 0
+- if repository evidence shows the monitor is supposed to run in this environment, fix that existing startup/gating path
+- do not create a new worker or scheduler
+- do not add a parallel refresh loop
+- if the disabled state is intentional for the current environment, report that clearly instead of inventing a startup fix
+
+Behavioral requirements
+
+- Preserve Recent Earnings exactly as currently restored.
+- Preserve existing Watchlist Upcoming timing overlay behavior.
+- Preserve zero provider calls in the Watchlist request path.
+- Preserve one bulk Neon read in the Watchlist timing overlay path.
+- Do not add endpoints, caches, tables, or new persistence paths.
+- Do not fabricate timing for RR or any other symbol lacking real timing data.
+
+Validation
+
+Validate all of the following with the actual live logic and endpoint responses:
+
+1. Recent Earnings still returns the existing recent events:
+   - BE, ENPH, GLW, KLAC, LOGI, MOD, etc.
+
+2. Upcoming timing still works for already-covered examples:
+   - AUR
+   - GNRC
+   - HOOD
+   - MX
+
+3. After the refresh-path fix:
+   - TEVA, UMC, QURE are no longer silently skipped from earnings_monitor_targets
+   - if with-times now provides timing, they receive that timing
+   - if timing is absent, they remain present but with null timing
+
+4. RR:
+   - confirm it is captured from the regular calendar path if appropriate
+   - confirm timing remains null unless a real existing source provides it
+
+5. Prove the fallback alphabetical starvation is eliminated for symbols after N.
+
+6. Prove provider cost remains controlled:
+   - one with-times calendar call
+   - one regular calendar call
+   - fallback only for truly uncovered leftovers
+
+7. If a startup/gating fix is made:
+   - prove the monitor actually runs in the intended environment
+   - report the exact gating condition that was wrong
+
+Preferred file discipline
+
+Keep this surgical and stay on the existing path.
+Likely files:
+- earnings_monitor_service.py
+- possibly the existing monitor startup/call-site file only if needed
+
+Stop and report if more than two production files appear necessary.
