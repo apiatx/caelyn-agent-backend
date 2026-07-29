@@ -1,0 +1,91 @@
+Audit only. Do not edit yet.
+
+Recent Earnings has been restored by removing the redundant timing overlay calls from get_or_sync_user_earnings. Keep that fix intact.
+
+The remaining issue is incomplete earnings_monitor_targets coverage.
+
+For July 29 Upcoming Earnings:
+
+Timing target exists:
+- AUR
+- GNRC
+- HOOD
+- MX
+
+Timing target is absent:
+- RR
+- TEVA
+- UMC
+- QURE
+
+All eight are near-term Watchlist earnings events on the same date. Therefore, the missing four cannot be explained by the monitor’s approximately 10-day coverage window.
+
+Trace exactly why RR, TEVA, UMC, and QURE are not present in earnings_monitor_targets.
+
+Required investigation
+
+1. Inspect the raw response from:
+   FMPProvider.get_earnings_calendar_with_times(...)
+   for all eight symbols.
+
+For each symbol report:
+- whether a raw row exists
+- raw symbol
+- raw date
+- raw time
+- raw confirmed field
+- any exchange or company metadata used in filtering
+
+2. Trace earnings_monitor_service._refresh_schedule() from the raw calendar response through:
+- symbol normalization
+- universe or target filtering
+- date filtering
+- duplicate handling
+- eligibility checks
+- expected_timing mapping
+- upsert_target()
+
+3. For each missing symbol, identify the first exact point where it is excluded or fails to persist.
+
+4. Check whether the refresh job only targets:
+- portfolio symbols
+- favorites
+- a limited monitored universe
+- previously existing targets
+- symbols passing a liquidity or quote filter
+- a capped result set
+- only symbols with an existing earnings_monitor row
+- or another subset instead of the complete Watchlist earnings set
+
+5. Compare the actual Watchlist membership source against the symbol universe used by _refresh_schedule().
+
+Remember:
+public.watchlist.tickers is authoritative Watchlist membership.
+
+6. Check logs or stored refresh diagnostics for RR, TEVA, UMC, and QURE.
+
+7. Resolve the contradiction with the prior audit statement that all near-term Watchlist earnings symbols were covered.
+
+Report before editing
+
+For each of RR, TEVA, UMC, and QURE, provide:
+
+- present in FMP with-times response: yes/no
+- timing returned by FMP
+- entered refresh processing: yes/no
+- passed symbol/universe filters: yes/no
+- upsert attempted: yes/no
+- upsert succeeded: yes/no
+- proven exclusion or failure reason
+
+Then recommend the narrowest existing-path correction.
+
+Constraints
+
+- Do not reintroduce timing reads into get_or_sync_user_earnings.
+- Do not add per-symbol provider calls.
+- Do not add provider calls to the Watchlist request.
+- Do not create a new timing pipeline, table, cache, worker, or endpoint.
+- Do not fabricate timing when FMP provides none.
+- Preserve Recent Earnings exactly as restored.
+- Do not edit or commit during this audit.
