@@ -1,0 +1,51 @@
+Audit only first. Do not edit until the existing earnings timing paths are proven.
+
+The Watchlist Upcoming Earnings cards need BMO/AMC/during-market/exact-time data. The frontend agent confirmed that all 326 objects from the current Upcoming Earnings response have `time: null`.
+
+The ticker popup Earnings Overview already displays timing, including labels such as:
+- Before Market Open
+- After Market Close
+- During Market Hours
+- timing confirmed / estimated / unconfirmed where applicable
+
+Trace both existing paths and determine the exact divergence.
+
+Required investigation
+
+1. Identify the exact backend endpoint consumed by the Watchlist Upcoming Earnings strip.
+2. Identify its upstream provider endpoint and inspect a real raw response.
+3. Confirm whether it uses FMP Earnings Calendar and whether that provider response actually contains a timing field.
+4. Identify the exact backend endpoint/data source consumed by the ticker popup Earnings Overview.
+5. For at least three currently upcoming symbols, inspect the popup source and report:
+   - raw timing-related fields
+   - normalized timing value
+   - confirmed/estimated/unconfirmed status
+   - exact time, if present
+6. Determine whether popup timing:
+   - comes from FMP Earnings Report,
+   - comes from another provider,
+   - is stored/cached,
+   - is derived,
+   - or is fetched only when the popup opens.
+7. Search for any existing bulk cache/store/map that already contains upcoming timing for Watchlist symbols.
+
+Do not assume `time` is the correct field merely because the frontend type contains it.
+
+Report before editing
+
+Provide:
+- Watchlist route and provider path
+- popup route and provider path
+- exact timing fields from each
+- whether popup timing exists before the ticker is clicked
+- number of provider calls that would be required to populate all upcoming Watchlist events
+- existing cache/store that can be reused, if any
+- safest existing architecture path for exposing timing without adding hundreds of request-time provider calls
+
+Important constraints
+
+- Do not add one per-symbol provider call inside the Watchlist request.
+- Do not add a parallel earnings pipeline.
+- Do not create a new source of truth.
+- Preserve current FMP limits and existing scheduled/cache behavior.
+- Do not edit or commit during this audit.
