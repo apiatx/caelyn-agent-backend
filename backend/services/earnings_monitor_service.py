@@ -1059,38 +1059,27 @@ async def _process_target(
                 }
                 rp = _merge_results_payload(existing_results, incoming_rp)
 
-                # ── Revenue verification state machine ────────────────────────
-                # When revenue_actual exceeds 10× revenue_estimate, one re-poll
-                # is needed before the result counts as complete.  A second
-                # consecutive sighting of the *same* extreme value from FMP is
-                # treated as sufficient provider-side confirmation (_revenue_verified).
-                # If FMP self-corrects on the re-poll, the plausible replacement
-                # value clears both flags and is accepted normally.
+                # ── Revenue plausibility flag ──────────────────────────────────
+                # _revenue_suspect signals that the value exceeds 10× the estimate
+                # and has not yet been independently confirmed.
+                #
+                # Repeated identical FMP observations do NOT constitute independent
+                # confirmation — two polls of the same endpoint prove persistence,
+                # not correctness.  If FMP had returned a corrupted value consistently
+                # across multiple cycles, promoting it to "verified" would be wrong.
+                #
+                # The flag stays set until FMP self-corrects to a plausible value
+                # (handled by the else branch below), or an external path writes
+                # _revenue_verified (e.g. the EI refresh confirms via income-statement
+                # data already ingested).  Only that external write ends re-polling.
                 # Zero, null, or negative estimates bypass ratio validation.
-                _prior        = existing_results or {}
-                _prior_rev    = _prior.get("revenue_actual")
-                _prior_sus    = bool(_prior.get("_revenue_suspect"))
-                _prior_ver    = bool(_prior.get("_revenue_verified"))
-                _new_rev      = rp.get("revenue_actual")
-
                 if _is_revenue_suspect(rp):
-                    if _prior_ver and _new_rev == _prior_rev:
-                        # Value was already confirmed in a prior cycle — preserve.
-                        rp["_revenue_verified"] = True
-                        rp.pop("_revenue_suspect", None)
-                    elif _prior_sus and _new_rev == _prior_rev:
-                        # Second consecutive sighting of the same extreme value.
-                        # Promote: FMP is consistently reporting this figure.
-                        rp["_revenue_verified"] = True
-                        rp.pop("_revenue_suspect", None)
-                    else:
-                        # First detection, or value changed — flag as suspect.
-                        rp["_revenue_suspect"] = True
-                        rp.pop("_revenue_verified", None)
+                    rp["_revenue_suspect"] = True
+                    rp.pop("_revenue_verified", None)
                 else:
-                    # Plausible value (or zero/null estimate) — clear both flags.
-                    # This branch fires when FMP self-corrects a previously
-                    # suspect value; the replacement is accepted without delay.
+                    # Plausible value — clear both flags.
+                    # This fires when FMP self-corrects a previously suspect value;
+                    # the corrected replacement is accepted without delay.
                     rp.pop("_revenue_suspect", None)
                     rp.pop("_revenue_verified", None)
 

@@ -311,32 +311,37 @@ def _confirm_extreme_revenue(
     income_by_filing: dict,
     ev_date: str,
     *,
-    tolerance: float = 2.0,
+    expected_period: str | None = None,
+    expected_year: int | str | None = None,
+    rel_tolerance: float = 0.02,
+    abs_tolerance: float = 1_000_000,
 ) -> bool:
     """
-    Return True when an income-statement row for *ev_date* (±7 days) independently
-    corroborates *rev_actual*.
+    Return True when a **quarterly** income-statement row for *ev_date* (±7 days)
+    independently corroborates *rev_actual* with strict fiscal and numeric matching.
 
-    An extreme ``revenue_actual`` (> 10× the provider estimate) is treated as
-    suspicious — a potential unit-normalization error — until an independent source
-    confirms it.  This function uses the quarterly income statement fetched in
-    batch A of ``_fetch_earnings_intelligence`` as that independent source.
+    Confirmation requires ALL of the following:
 
-    Confirmation threshold
-    ----------------------
-    The income-statement ``revenue`` field must be within ±*tolerance*× of
-    ``rev_actual`` (default 2×, i.e. the ratio must lie in [0.5, 2.0]).
+    1. **Quarterly duration**: the IS row's ``period`` field must be Q1/Q2/Q3/Q4.
+       Annual ("FY") or other non-quarterly labels are rejected outright — they
+       represent accumulated values and would incorrectly validate six-month or
+       nine-month cumulative figures as if they were quarterly.
 
-    Returns False when
-    ------------------
-    - ``income_by_filing`` is empty (income statement fetch failed).
-    - No row matches ``ev_date`` (exact or within 7 calendar days).
-    - The matched row has no ``revenue`` value.
-    - The ratio falls outside the tolerance band (value contradicts IS data).
+    2. **Matching fiscal quarter**: when *expected_period* is supplied and the IS
+       row carries a period label, they must match.  A six-month row filed on the
+       same date would be rejected here.
 
-    In all False cases the caller should treat the value as unconfirmed and
-    exclude it from the canonical earnings cache.  It remains eligible for
-    re-validation on the next EI refresh once income-statement data arrives.
+    3. **Matching fiscal year**: when *expected_year* is supplied and the IS row
+       carries ``calendarYear``, they must agree (integer comparison).
+
+    4. **Narrow numeric agreement**: the absolute difference must be ≤ *rel_tolerance*
+       (default 2 %) of the IS revenue, OR the raw difference must be ≤ *abs_tolerance*
+       (default $1 M).  This permits ordinary rounding without accepting the 1.9×
+       mismatch that a six-month cumulative value produces against a quarterly one.
+
+    Returns False in all other cases.  Callers should treat a False result as
+    "unconfirmed" and exclude the suspicious value from the canonical cache.
+    The value remains eligible for re-validation on the next EI refresh.
     """
     if not income_by_filing or not ev_date:
         return False
@@ -359,15 +364,97 @@ def _confirm_extreme_revenue(
     if is_row is None:
         return False
 
+    # 1. Reject non-quarterly IS rows (annual, semi-annual, etc.).
+    _QUARTERLY = {"Q1", "Q2", "Q3", "Q4"}
+    row_period = str(is_row.get("period") or "").upper().strip()
+    if row_period and row_period not in _QUARTERLY:
+        return False
+
+    # 2. Fiscal quarter must match when both sides provide a label.
+    if expected_period:
+        ep = str(expected_period).upper().strip()
+        if ep in _QUARTERLY and row_period and row_period != ep:
+            return False
+
+    # 3. Fiscal year must match when both sides provide a value.
+    if expected_year is not None:
+        row_year = is_row.get("calendarYear")
+        if row_year is not None:
+            try:
+                if int(row_year) != int(expected_year):
+                    return False
+            except (TypeError, ValueError):
+                pass
+
     inc_rev = is_row.get("revenue")
     if inc_rev is None:
         return False
 
     try:
-        ratio = float(rev_actual) / float(inc_rev)
-        return (1.0 / tolerance) <= ratio <= tolerance
+        inc_f = float(inc_rev)
+        act_f = float(rev_actual)
+        if inc_f <= 0:
+            return False
+        diff = abs(act_f - inc_f)
+        # 4. Narrow tolerance: 2% relative OR $1 M absolute rounding allowance.
+        return diff / inc_f <= rel_tolerance or diff <= abs_tolerance
     except (TypeError, ValueError, ZeroDivisionError):
         return False
+
+
+def _is_revenue_scale_anomaly(rev_actual: float, prior_revenues: list[float]) -> bool:
+    """
+    Return True when *rev_actual* exhibits a telltale unit/period scale error
+    relative to recent quarterly revenue history, without requiring a valid
+    estimate denominator.
+
+    Used as a fallback signal when the estimate is zero, null, negative, or
+    non-numeric — situations where ratio-based validation is undefined.
+
+    Checks (using 5 % numeric tolerance for approximate matching):
+
+    - **1 000× unit relationship**: rev_actual ≈ any prior quarter × 1 000
+      (thousands-scaled vs dollars, or similar currency-unit confusion).
+    - **Six-month cumulative**: rev_actual ≈ sum of the two most recent prior quarters.
+    - **Nine-month cumulative**: rev_actual ≈ sum of the three most recent prior quarters.
+    - **Massive relative scale**: rev_actual > 5 × trailing-12-month revenue when
+      at least four prior quarters are available.
+
+    Returns False when ``prior_revenues`` is empty or *rev_actual* ≤ 0.
+    These signals trigger IS-confirmation (same gate as the ratio check), not
+    automatic invalidation.
+    """
+    if not prior_revenues or rev_actual <= 0:
+        return False
+
+    _TOL = 0.05
+    valid = [r for r in prior_revenues if isinstance(r, (int, float)) and r > 0]
+    if not valid:
+        return False
+
+    def _near(a: float, ref: float) -> bool:
+        return ref > 0 and abs(a / ref - 1.0) <= _TOL
+
+    # 1 000× unit error vs any single prior quarter
+    for r in valid:
+        if _near(rev_actual, r * 1_000):
+            return True
+
+    # Six-month cumulative (last two quarters)
+    if len(valid) >= 2 and _near(rev_actual, sum(valid[-2:])):
+        return True
+
+    # Nine-month cumulative (last three quarters)
+    if len(valid) >= 3 and _near(rev_actual, sum(valid[-3:])):
+        return True
+
+    # Massive scale vs trailing-12M (last four quarters)
+    if len(valid) >= 4:
+        t12m = sum(valid[-4:])
+        if t12m > 0 and rev_actual > t12m * 5:
+            return True
+
+    return False
 
 
 class FmpFundamentalsRefresher:
@@ -1634,28 +1721,65 @@ class FmpFundamentalsRefresher:
             eps_est    = ev.get("epsEstimated")
             rev_actual = ev.get("revenueActual")
             rev_est    = ev.get("revenueEstimated")
-            # Suspicious-revenue validation via income-statement cross-check.
-            # A ratio > 10× between actual and estimate is a possible provider
-            # unit-normalization error (e.g. FMP reporting six-month cumulative
-            # revenue, or a thousands-scaled value, instead of the correct
-            # quarterly dollar figure).  The threshold is a signal, not a
-            # validity rule.  We validate against the income-statement batch
-            # (already fetched in batch A) before caching.
+            # Suspicious-revenue validation — two detection paths; same IS gate.
             #
-            # - Confirmed by IS (revenue within 2×): accept the extreme value;
-            #   a 1 000 %+ surprise can be real (acquisitions, new products,
-            #   stale or thin analyst coverage, accounting changes, etc.).
-            # - Not confirmed (IS absent, contradicts, or has no revenue):
-            #   set rev_actual = None — do NOT cache unverified extreme data.
-            #   The value remains eligible on the next EI refresh once the IS
-            #   data is available or corrected by the provider.
-            # - Zero, null, or negative estimates: percentage-ratio validation
-            #   is undefined; skip the check and use rev_actual as-is.
-            if rev_actual is not None and rev_est is not None:
+            # Path A (estimate denominator is valid: non-null and positive):
+            #   Flag when revenue_actual > 10× revenue_estimate.  The ratio is
+            #   a suspicious-data signal, not a validity rule.
+            #
+            # Path B (estimate is unsuitable: zero, null, or negative):
+            #   Cannot divide by the estimate.  Use prior-quarter revenue history
+            #   (already available in hist_events) to detect scale anomalies:
+            #   1 000× unit errors, six- or nine-month cumulative patterns, and
+            #   implausible magnitude relative to trailing-12M revenue.
+            #
+            # In both paths: validate the suspicious value against the quarterly
+            # income statement (batch A, same fiscal quarter and year).  Accept
+            # only when the IS independently confirms within 2 % / $1 M.
+            # Unconfirmed values are excluded (rev_actual = None); they remain
+            # eligible for re-validation on the next EI refresh.
+            if rev_actual is not None:
                 try:
-                    if float(rev_est) > 0 and float(rev_actual) > float(rev_est) * 10:
-                        if not _confirm_extreme_revenue(rev_actual, income_by_filing, ev_date):
-                            rev_actual = None
+                    ra     = float(rev_actual)
+                    ev_per = str(ev.get("period") or "").strip() or None
+                    ev_yr  = ev.get("calendarYear")
+                    sus    = False
+
+                    # Path A: ratio check
+                    if not sus and rev_est is not None:
+                        try:
+                            re_ = float(rev_est)
+                            if re_ > 0 and ra > re_ * 10:
+                                sus = True
+                        except (TypeError, ValueError):
+                            pass
+
+                    # Path B: scale-anomaly when estimate is unsuitable
+                    if not sus:
+                        est_ok = False
+                        try:
+                            est_ok = rev_est is not None and float(rev_est) > 0
+                        except (TypeError, ValueError):
+                            pass
+                        if not est_ok:
+                            prior_revs: list[float] = []
+                            for h in hist_events[:i]:
+                                try:
+                                    pr = float(h.get("revenueActual") or 0)
+                                    if pr > 0:
+                                        prior_revs.append(pr)
+                                except (TypeError, ValueError):
+                                    pass
+                            if _is_revenue_scale_anomaly(ra, prior_revs):
+                                sus = True
+
+                    if sus and not _confirm_extreme_revenue(
+                        rev_actual, income_by_filing, ev_date,
+                        expected_period=ev_per,
+                        expected_year=ev_yr,
+                    ):
+                        rev_actual = None
+
                 except (TypeError, ValueError):
                     pass
 
