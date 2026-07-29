@@ -411,6 +411,52 @@ class FMPProvider:
             print(f"[FMP] earnings-calendar-with-times failed: {exc}")
             return []
 
+    async def get_earnings_calendar(
+        self,
+        from_date: str,
+        to_date: str,
+    ) -> list[dict]:
+        """
+        Fetch the regular (no-timing) FMP earnings calendar for a date window.
+        Uses /stable/earnings-calendar without includeReportTimes.
+
+        Returns raw dicts with at least: symbol, date, epsEstimated, revenueEstimated.
+        Broader coverage than the with-times endpoint — includes symbols FMP has not
+        yet confirmed timing for.
+
+        Cache TTL: 1800s (30 min), same as the with-times variant.
+        """
+        cache_key = f"fmp:earn_cal:{from_date}:{to_date}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        params = {
+            "from":   from_date,
+            "to":     to_date,
+            "apikey": self.api_key,
+        }
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{self.STABLE_URL}/earnings-calendar",
+                    params=params,
+                    timeout=20,
+                )
+            if resp.status_code != 200:
+                print(f"[FMP] earnings-calendar (regular) HTTP {resp.status_code}")
+                return []
+            data = resp.json()
+            if not isinstance(data, list):
+                return []
+            results = [r for r in data if isinstance(r, dict)]
+            if results:
+                cache.set(cache_key, results, 1800)
+            return results
+        except Exception as exc:
+            print(f"[FMP] earnings-calendar (regular) failed: {exc}")
+            return []
+
     async def get_income_statement(self, ticker: str, limit: int = 4, period: str = "quarter") -> list:
         """
         Per-ticker income statement (quarterly or annual) via stable/income-statement.

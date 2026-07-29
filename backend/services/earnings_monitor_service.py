@@ -382,6 +382,46 @@ async def _refresh_schedule(symbols: list[str], now_et: datetime) -> None:
         if sym in sym_set:
             cal_by_sym[sym] = row
 
+    # ── Secondary source: regular FMP calendar (no includeReportTimes) ───────
+    # One additional budget unit.  Catches symbols the with-times endpoint
+    # omits entirely (e.g. RR) and symbols FMP confirmed after the with-times
+    # cache was last populated (e.g. TEVA/UMC/QURE at the 04:00 ET run).
+    # Symbols already in cal_by_sym are not touched — with-times always wins.
+    # Timing fields are left null for these rows; no timing is fabricated.
+    reg_matches = 0
+    if daily_budget.can_spend("fmp", 1):
+        daily_budget.spend("fmp")
+        try:
+            reg_rows = await asyncio.wait_for(
+                fmp.get_earnings_calendar(from_date, to_date),
+                timeout=25.0,
+            )
+        except Exception as exc:
+            print(f"[EarnMon] regular calendar fetch error: {exc}")
+            reg_rows = []
+
+        for row in reg_rows:
+            sym = (row.get("symbol") or "").upper().strip()
+            if not sym or sym not in sym_set or sym in cal_by_sym:
+                continue
+            date_str = row.get("date") or ""
+            try:
+                rec_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if not (window_start <= rec_date <= window_end):
+                continue
+            cal_by_sym[sym] = {
+                "expected_date":    date_str,
+                "expected_timing":  None,
+                "report_time_status": "unknown",
+                "fiscal_period":    None,
+                "fiscal_year":      None,
+                "report_period":    None,
+                "schedule_source":  "fmp_earnings_calendar",
+            }
+            reg_matches += 1
+
     cal_matches = len(cal_by_sym)
     processed   = 0
     fallback_calls = 0
@@ -467,7 +507,8 @@ async def _refresh_schedule(symbols: list[str], now_et: datetime) -> None:
 
     print(
         f"[EarnMon] schedule refresh done: {processed}/{len(symbols)} symbols upserted, "
-        f"{cal_matches} calendar matches, {fallback_calls} fallback calls"
+        f"{cal_matches} calendar matches (wt={cal_matches - reg_matches}, reg={reg_matches}), "
+        f"{fallback_calls} fallback calls"
     )
 
 
@@ -1333,10 +1374,19 @@ async def run_live_earnings_monitor_once(
 
         elif tick_mode:
             # ── tick mode: use existing DB targets, no watchlist scan ────────
-            # Use the already-registered symbols as the schedule-refresh universe
-            # so that timing data stays current without rebuilding from scratch.
-            all_active       = await _aio.to_thread(get_active_targets, 500)
-            refresh_universe = [t["symbol"] for t in all_active]
+            # When the schedule TTL is expiring, augment with the full watchlist
+            # universe so _refresh_schedule can discover and register new targets
+            # (e.g. TEVA/UMC/QURE/RR that were absent from the with-times
+            # calendar at the time of the last refresh).  _build_universe() is
+            # called only when _refresh_schedule will actually do real work —
+            # the TTL check here matches the TTL guard inside _refresh_schedule.
+            all_active  = await _aio.to_thread(get_active_targets, 500)
+            active_syms = [t["symbol"] for t in all_active]
+            if time.time() - _last_schedule_refresh >= _SCHEDULE_REFRESH_TTL:
+                full_universe    = await _build_universe()
+                refresh_universe = list(set(active_syms) | set(full_universe))
+            else:
+                refresh_universe = active_syms
             await _refresh_schedule(refresh_universe, now_et)   # TTL-protected
             targets  = await _aio.to_thread(get_due_targets, 200)
             universe = None  # None signals: skip membership filter below
