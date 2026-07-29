@@ -1,0 +1,114 @@
+Revise the extreme-revenue validation implementation. The current version is improved, but two parts are unsafe.
+
+Do not undo the targeted BAND database correction.
+
+Problem 1: repeated FMP data is not independent verification
+
+The current state machine promotes an implausible revenue value to `_revenue_verified: True` after FMP returns the exact same value twice.
+
+Remove that promotion behavior.
+
+Two identical observations from the same FMP endpoint establish persistence, not correctness. If FMP had returned BAND’s corrupted $428B value for two cycles, the current implementation would incorrectly verify it.
+
+Required monitor behavior:
+
+1. First suspicious FMP result:
+   - store/retain the suspicious state
+   - remain eligible for re-polling
+
+2. Same suspicious FMP result on later polls:
+   - remain suspicious
+   - do not set `_revenue_verified: True`
+   - repetition count or last-seen metadata may be retained only if an existing payload field supports it; do not create generalized infrastructure
+
+3. FMP corrects to a plausible value:
+   - clear suspicious state
+   - accept the corrected result
+
+4. Independent existing source confirms the extreme result:
+   - accept it as verified regardless of the surprise percentage
+
+5. No independent confirmation:
+   - do not cache it as canonical
+   - keep it eligible for later verification
+
+Problem 2: the income-statement confirmation tolerance is too broad
+
+The current `_confirm_extreme_revenue` accepts values within 2×.
+
+That can validate a six-month cumulative value against a quarterly value, which is exactly the class of period-selection error that affected BAND.
+
+Replace the 2× test with strict quarterly identity validation.
+
+Independent confirmation must require:
+
+- matching symbol
+- matching fiscal year
+- matching fiscal quarter when available
+- quarterly duration, not six-month or nine-month YTD
+- compatible currency/unit normalization
+- close numeric agreement allowing only ordinary rounding differences
+
+Use repository evidence to choose a reasonable tolerance. It should be narrow, such as a small percentage plus an appropriate absolute rounding allowance—not a factor-of-two range.
+
+Do not accept a source merely because its filing/report date is within ±7 days unless the code also proves that the source represents the same fiscal quarter and quarterly duration.
+
+Additional anomaly behavior
+
+The 10× estimate rule remains only one suspicious-data trigger.
+
+When estimate is zero, negative, null, or otherwise unsuitable, do not divide by it. Instead, use existing available context to detect extreme scale anomalies when possible:
+
+- previous-quarter revenue
+- same-quarter prior-year revenue
+- trailing-12-month revenue
+- exact or near-exact 1,000× unit relationships
+- quarterly value resembling six- or nine-month cumulative revenue
+- incompatible fiscal duration
+
+These signals must trigger verification, not automatically invalidate the result.
+
+Keep scope surgical
+
+- Preserve the existing monitor, EI refresh, provider, stores, endpoints and caches.
+- Do not add provider calls.
+- Do not create a new table, worker, cache, endpoint or verification pipeline.
+- Reuse income-statement data already available to the current refresh.
+- Do not hardcode BAND.
+- Do not alter ordinary earnings behavior.
+
+Required tests
+
+1. Same corrupted FMP value returned twice:
+   - remains suspicious
+   - is not promoted to verified
+
+2. BAND-style data:
+   - quarterly revenue approximately $220M
+   - six-month revenue approximately $428M
+   - corrupted provider value approximately $428B
+   - corrupted value is not accepted
+
+3. Period mismatch:
+   - suspicious value is approximately 1.9× the correct quarter
+   - six-month cumulative value must not confirm the quarterly result
+   - proves the old 2× tolerance would have been unsafe
+
+4. Real extreme revenue beat:
+   - estimate $1M
+   - actual $15M
+   - same-quarter quarterly income statement independently confirms approximately $15M
+   - actual is accepted and the full 1,400% surprise is preserved
+
+5. Independent source differs materially:
+   - suspicious FMP result remains unverified
+
+6. Corrected FMP value:
+   - suspicious flags clear
+   - corrected plausible value is accepted
+
+7. Zero/null/negative estimate:
+   - no invalid ratio calculation
+   - obvious period/unit anomaly can still be flagged using existing contextual data when available
+
+Run all existing earnings suites and validate BAND’s endpoint remains correct.
