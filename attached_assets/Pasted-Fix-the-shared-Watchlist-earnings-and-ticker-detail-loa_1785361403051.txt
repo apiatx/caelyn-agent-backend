@@ -1,0 +1,271 @@
+Fix the shared Watchlist earnings and ticker-detail loading architecture.
+
+EOSE is only a reproducible example. This task applies to ALL ticker popups and
+ALL Watchlist tabs/symbol sets.
+
+Do not edit immediately.
+
+First:
+1. Read the repo AGENTS.md instructions.
+2. Run git status -sb and git diff --name-only.
+3. Trace the exact current working-tree implementations, not assumptions from
+   old reports.
+4. Report the precise files and functions you intend to modify.
+5. Preserve all existing routes, payload fields, cache tables, timing overlays,
+   Recent Earnings serialization, ticker popup tabs, and provider-call budgets.
+
+Do not touch runtime JSON/cache files.
+
+──────────────────────────────────────────────────────────────────────────────
+PROVEN ARCHITECTURAL PROBLEMS
+──────────────────────────────────────────────────────────────────────────────
+
+1. The Watchlist page calls:
+
+   POST /api/watchlist/earnings/by-symbols
+
+   On cache miss or symbol-universe expansion, that request currently waits for
+   a full FMP synchronization.
+
+2. The frontend proxy currently aborts that request after roughly 15 seconds.
+
+3. Upcoming Earnings is obtained from the explicit-symbol request, while Recent
+   Earnings is obtained through a separate/global path.
+
+4. Repeated tab switching or sorting can cause repeated requests while the
+   underlying cache is still warming.
+
+5. Ticker-detail latency/failure affects every ticker popup. EOSE is only a test
+   symbol. A timeout must not be treated as proof that earnings/company data is
+   absent.
+
+──────────────────────────────────────────────────────────────────────────────
+REQUIRED BACKEND CHANGES
+──────────────────────────────────────────────────────────────────────────────
+
+A. Preserve the existing by-symbols contract for other consumers
+
+Do NOT globally change the existing endpoint from synchronous to asynchronous
+without preserving backward compatibility.
+
+Extend the existing EarningsBySymbolsRequest with one optional additive field,
+for example:
+
+    wait_for_sync: bool = True
+
+or an equivalently clear name.
+
+Requirements:
+
+- Default must preserve current synchronous behavior.
+- Existing callers that omit the field must behave exactly as before.
+- The Watchlist frontend will explicitly send wait_for_sync=false.
+- Do not create a new endpoint.
+
+When wait_for_sync=false, call the existing canonical function using:
+
+- sync_on_miss=False
+- background_sync_on_miss=True
+
+Behavior:
+
+- Full cache hit:
+  return immediately with current events.
+
+- Partial cache hit:
+  return matching cached events immediately and schedule one background universe
+  expansion.
+
+- Stale cache with usable events:
+  return matching stale events immediately and schedule one background refresh.
+
+- True cold miss:
+  return immediately with cache_status=miss_syncing and start the existing
+  background synchronization.
+
+No provider call may block the non-waiting request path.
+
+B. Preserve last-known-good data on stale cache
+
+Audit get_upcoming_earnings_for_symbols.
+
+The current stale-cache branch may discard an existing stale payload and return
+empty while refreshing. Correct that only if confirmed in the current code.
+
+For wait_for_sync=false:
+
+- stale cached matching events must be returned as stale data;
+- the refresh must run in the background;
+- do not replace usable stale events with an empty array;
+- include an explicit cache status such as stale_syncing;
+- preserve existing event normalization and timing overlays.
+
+C. Prevent duplicate background synchronizations
+
+Inspect whether user_earnings_service already has a single-flight/in-flight
+guard around _sync_for_explicit_symbols.
+
+If one exists, reuse it.
+
+If none exists, add the narrowest possible in-process guard keyed by the
+existing cache universe. It must:
+
+- prevent repeated Watchlist polling, sorting, tab switching, or popup activity
+  from launching duplicate FMP jobs;
+- allow a future refresh after the current job completes;
+- clean up on success and failure;
+- add no table, worker, scheduler, queue, endpoint, or alternate cache.
+
+D. Add Recent Earnings to the existing by-symbols response
+
+Reuse the existing bulk Neon reader:
+
+    get_recent_complete_events_for_symbols
+
+Return an additive:
+
+    recent: [...]
+
+from POST /api/watchlist/earnings/by-symbols.
+
+Requirements:
+
+- exact requested symbols only;
+- last 30 days;
+- newest first;
+- same field names and calculations already used by the existing Watchlist
+  Recent Earnings path;
+- one bulk Neon read;
+- zero provider calls;
+- no Primary/Favorites/custom-watchlist cross-contamination;
+- do not remove or alter the existing global Recent path yet, because other
+  consumers may still use it.
+
+E. Audit ticker-detail performance for ALL symbols
+
+Do not implement an EOSE-only fix.
+
+Trace the shared endpoint:
+
+    GET /api/watchlist/ticker-detail/{symbol}
+
+Measure at least these representative symbols:
+
+- EOSE
+- one ticker with rich earnings intelligence
+- one ticker with no upcoming earnings
+- one foreign/ADR ticker
+- one ETF or intentionally ineligible security, if supported
+
+For each, report:
+
+- HTTP status;
+- elapsed time;
+- response size;
+- company/profile presence;
+- earnings_intelligence presence;
+- whether an explicit eligibility/ineligibility field exists;
+- slowest internal step;
+- whether request-path provider calls occur;
+- cache-hit versus cache-miss timing.
+
+Correct only proven shared bottlenecks.
+
+Rules:
+
+- Preserve the existing ticker-detail route and payload.
+- Reuse existing cached/stored data.
+- Do not add another detail endpoint.
+- Do not remove fields to make it faster.
+- Do not skip earnings intelligence, company profile, fundamentals, technicals,
+  confluence, or news.
+- Do not move required work into per-ticker provider calls.
+- A timeout or provider failure must not be serialized as a legitimate
+  “ineligible/no earnings” result.
+- If a subcomponent fails, preserve the rest of the detail payload where the
+  current architecture permits partial responses.
+
+F. Error semantics
+
+Ensure the backend distinguishes:
+
+- confirmed empty/no event;
+- confirmed ineligible;
+- cache warming;
+- stale data being refreshed;
+- transient internal failure.
+
+Do not report a transient failure as a successful empty payload.
+
+Do not invent an eligibility flag if one already exists. If none exists and
+adding one would expand scope beyond the approved files, report that fact for
+the frontend rather than creating a new eligibility system.
+
+──────────────────────────────────────────────────────────────────────────────
+REGRESSION REQUIREMENTS
+──────────────────────────────────────────────────────────────────────────────
+
+Preserve all of the following:
+
+- Upcoming Earnings data and timing overlays;
+- Recent Earnings data and classifications;
+- Favorites and Primary symbol isolation;
+- explicit by-symbol scoping;
+- existing synchronous callers;
+- FMP request budget;
+- no per-symbol earnings-calendar provider loop;
+- ticker popup Earnings overview/history/price moves/ratings/materials;
+- company/profile data;
+- all ticker-detail fields;
+- live earnings badges and updates;
+- existing cache invalidation behavior;
+- existing routes and response fields.
+
+Add focused tests proving:
+
+1. Caller omitting wait_for_sync retains current synchronous behavior.
+
+2. wait_for_sync=false on cold cache returns quickly with miss_syncing and
+   schedules exactly one background sync.
+
+3. wait_for_sync=false on stale cache returns stale matching events instead of
+   empty and schedules refresh.
+
+4. Repeated non-waiting requests create one in-flight synchronization.
+
+5. Warm by-symbols response contains both events/upcoming and recent.
+
+6. Recent is scoped strictly to the requested symbols.
+
+7. Existing timing-overlay tests remain green.
+
+8. Ticker-detail continues returning its complete established payload on a
+   successful request.
+
+──────────────────────────────────────────────────────────────────────────────
+VALIDATION
+──────────────────────────────────────────────────────────────────────────────
+
+Perform a clean restart without manual data writes.
+
+Validate:
+
+- cold non-waiting by-symbols response returns in under 1 second;
+- background sync completes without browser interaction;
+- polling later receives populated Upcoming data;
+- Recent is available in the same response;
+- a warm request makes zero provider calls;
+- repeated polling launches one sync only;
+- five representative ticker-detail calls work through the shared route;
+- no feature or payload field disappeared;
+- no runtime JSON files are committed.
+
+Before committing, show:
+
+- git diff --name-only;
+- git diff --check;
+- focused test results;
+- exact production files changed;
+- direct endpoint timing results.
+
+Stop and report before editing if more than three production files are required.

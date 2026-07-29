@@ -3658,9 +3658,10 @@ async def watchlist_earnings_endpoint(
 
 class EarningsBySymbolsRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    symbols:   List[str]
-    from_date: Optional[str] = None
-    to_date:   Optional[str] = None
+    symbols:       List[str]
+    from_date:     Optional[str] = None
+    to_date:       Optional[str] = None
+    wait_for_sync: bool          = True
 
 
 @router.post("/earnings/by-symbols")
@@ -3748,8 +3749,8 @@ async def earnings_by_symbols_endpoint(body: EarningsBySymbolsRequest):
             from_date = from_date,
             to_date   = to_date,
             fmp_key   = _fmp_key_bys,
-            sync_on_miss            = True,   # explicit POST — wait for sync
-            background_sync_on_miss = False,
+            sync_on_miss            = body.wait_for_sync,
+            background_sync_on_miss = not body.wait_for_sync,
         )
     except Exception as _e_bys:
         print(f"[EARNINGS_BY_SYMS] get_upcoming_earnings_for_symbols error: {_e_bys}")
@@ -3764,10 +3765,94 @@ async def earnings_by_symbols_endpoint(body: EarningsBySymbolsRequest):
             "error":             str(_e_bys),
         }
 
+    # ── Recent earnings (last 30 days) — strictly scoped to requested symbols.
+    # Reuses the same bulk Neon reader and normalization already used by the
+    # watchlist-by-ID earnings path.  Zero provider calls; one bulk DB read.
+    # Does not affect or replace the existing global Recent path used by other
+    # consumers.
+    _recent_bys: list[dict] = []
+    try:
+        from datetime import date as _date_rec, timedelta as _td_rec, \
+            datetime as _dt_rec
+        import asyncio as _aio_rec
+        from zoneinfo import ZoneInfo as _ZI_rec
+        from data.earnings_monitor_store import (  # type: ignore
+            get_recent_complete_events_for_symbols as _grc_bys,
+        )
+
+        _since_rec  = (_date_rec.today() - _td_rec(days=30)).isoformat()
+        _today_et_r = _dt_rec.now(_ZI_rec("America/New_York")).date().isoformat()
+        _recent_raw = await _aio_rec.to_thread(
+            _grc_bys, symbols, _since_rec, _today_et_r,
+        )
+        _sym_set_bys = {s.upper() for s in symbols}
+
+        def _parse_jb_bys(v):
+            if v is None:
+                return {}
+            if isinstance(v, dict):
+                return v
+            try:
+                import json as _jjb
+                return _jjb.loads(v)
+            except Exception:
+                return {}
+
+        def _fmt_iso_bys(dt_val) -> Optional[str]:
+            if dt_val is None:
+                return None
+            if hasattr(dt_val, "isoformat"):
+                return dt_val.isoformat()[:10]
+            s = str(dt_val)
+            return s[:10] if s else None
+
+        def _fmt_date_bys(dt_str: Optional[str]) -> str:
+            if not dt_str:
+                return "N/A"
+            try:
+                from datetime import datetime as _dt_fmt
+                return _dt_fmt.strptime(dt_str, "%Y-%m-%d").strftime("%b %-d")
+            except Exception:
+                return dt_str or "N/A"
+
+        for _rr in _recent_raw:
+            _rsym = (_rr.get("symbol") or "").upper()
+            if _rsym not in _sym_set_bys:
+                continue
+            _rp  = _parse_jb_bys(_rr.get("results_payload"))
+            _rxn = _parse_jb_bys(_rr.get("reaction_payload"))
+            _recent_bys.append({
+                "ticker":               _rsym,
+                "earnings_date":        _fmt_iso_bys(_rr.get("expected_date")),
+                "earnings_date_fmt":    _fmt_date_bys(_fmt_iso_bys(_rr.get("expected_date"))),
+                "fiscal_period":        _rr.get("fiscal_period"),
+                "fiscal_year":          _rr.get("fiscal_year"),
+                "state":                _rr.get("state"),
+                "classification":       _rr.get("classification"),
+                "eps_actual":           _rp.get("eps_actual"),
+                "eps_estimate":         _rp.get("eps_estimate"),
+                "eps_surprise_pct":     _rp.get("eps_surprise_pct"),
+                "revenue_actual":       _rp.get("revenue_actual"),
+                "revenue_estimate":     _rp.get("revenue_estimate"),
+                "revenue_surprise_pct": _rp.get("revenue_surprise_pct"),
+                "pre_1d_pct":           _rxn.get("pre_1d_pct"),
+                "post_1d_pct":          _rxn.get("post_1d_pct"),
+                "post_3d_pct":          _rxn.get("post_3d_pct"),
+                "post_5d_pct":          _rxn.get("post_5d_pct"),
+                "reaction_computed_at": _rxn.get("computed_at"),
+                "in_watchlist":         True,
+                "source":               "earnings_monitor",
+            })
+    except Exception as _rec_exc:
+        print(f"[EARNINGS_BY_SYMS] recent events error: {_rec_exc}")
+
+    result["recent"] = _recent_bys
+
     _ms_bys = round((_tm_bys.time() - _t0_bys) * 1000)
     print(
         f"[EARNINGS_BY_SYMS] symbols={len(symbols)} events={len(result.get('events',[]))} "
         f"missing={len(result.get('missing_symbols',[]))} "
+        f"recent={len(_recent_bys)} "
         f"cache_status={result.get('cache_status')} elapsed_ms={_ms_bys}"
     )
     result["elapsed_ms"] = _ms_bys

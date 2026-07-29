@@ -372,6 +372,12 @@ async def sync_universe_background(
 # (which is always the default/first watchlist) so there is no cross-contamination.
 _BY_SYMS_UNIVERSE = "watchlist_by_syms"
 
+# In-flight guard: prevents concurrent duplicate FMP sync jobs for the same
+# universe key when repeated Watchlist polls, tab switches, or sort operations
+# arrive while a sync is already running.  Keyed by universe string.
+# Cleaned up unconditionally in a finally block inside _sync_for_explicit_symbols.
+_SYNC_INFLIGHT: set[str] = set()
+
 
 def _apply_monitor_timing(events: list[dict], timing_map: dict) -> list[dict]:
     """
@@ -493,40 +499,54 @@ async def _sync_for_explicit_symbols(
 
     Writes the filtered result to Neon under the given universe key.
     Does NOT write if FMP returns zero events (transient API failure guard).
+
+    In-flight guard: returns [] immediately when another coroutine is already
+    syncing the same universe, preventing duplicate FMP calls from concurrent
+    Watchlist polls, tab switches, or sort operations.
     """
-    win_from = _today_str()
-    win_to   = _window_end_str()
-    print(
-        f"[user_earnings] _sync_for_explicit_symbols universe={universe}: "
-        f"{len(symbols)} symbols, window={win_from}→{win_to}"
-    )
-    try:
-        from services.catalyst_calendar_service import (  # type: ignore
-            CatalystFMP,
-            _fetch_earnings_dates,
-        )
-        fmp = CatalystFMP(fmp_key)
-        # Pass requested symbols as *watchlist* — used for importance scoring only.
-        all_events = await _fetch_earnings_dates(fmp, win_from, win_to, symbols, set())
-        if not all_events:
-            print(
-                f"[user_earnings] FMP returned 0 events (transient?) "
-                f"— skipping cache write for universe={universe}"
-            )
-            return []
-        filtered = [
-            ev for ev in all_events
-            if (ev.get("symbol") or "").upper() in symbols
-        ]
+    if universe in _SYNC_INFLIGHT:
         print(
-            f"[user_earnings] _sync_for_explicit_symbols: "
-            f"{len(filtered)}/{len(all_events)} events match {len(symbols)} symbols"
+            f"[user_earnings] _sync_for_explicit_symbols: {universe} already "
+            f"in-flight — skipping duplicate sync"
         )
-        _pg_write(universe, filtered, sorted(symbols), win_from, win_to)
-        return filtered
-    except Exception as e:
-        print(f"[user_earnings] _sync_for_explicit_symbols error (universe={universe}): {e}")
         return []
+    _SYNC_INFLIGHT.add(universe)
+    try:
+        win_from = _today_str()
+        win_to   = _window_end_str()
+        print(
+            f"[user_earnings] _sync_for_explicit_symbols universe={universe}: "
+            f"{len(symbols)} symbols, window={win_from}→{win_to}"
+        )
+        try:
+            from services.catalyst_calendar_service import (  # type: ignore
+                CatalystFMP,
+                _fetch_earnings_dates,
+            )
+            fmp = CatalystFMP(fmp_key)
+            # Pass requested symbols as *watchlist* — used for importance scoring only.
+            all_events = await _fetch_earnings_dates(fmp, win_from, win_to, symbols, set())
+            if not all_events:
+                print(
+                    f"[user_earnings] FMP returned 0 events (transient?) "
+                    f"— skipping cache write for universe={universe}"
+                )
+                return []
+            filtered = [
+                ev for ev in all_events
+                if (ev.get("symbol") or "").upper() in symbols
+            ]
+            print(
+                f"[user_earnings] _sync_for_explicit_symbols: "
+                f"{len(filtered)}/{len(all_events)} events match {len(symbols)} symbols"
+            )
+            _pg_write(universe, filtered, sorted(symbols), win_from, win_to)
+            return filtered
+        except Exception as e:
+            print(f"[user_earnings] _sync_for_explicit_symbols error (universe={universe}): {e}")
+            return []
+    finally:
+        _SYNC_INFLIGHT.discard(universe)
 
 
 async def get_earnings_for_symbols(
@@ -769,20 +789,37 @@ async def get_upcoming_earnings_for_symbols(
             # Return events we have (filtered to requested symbols)
             return _build_response(cached.get("events", []), last_updated, "partial_syncing", stale=False)
     else:
-        # Cache miss or stale
+        # Cache miss or stale.
+        # Distinguish the two cases: cached is not None when a row exists but
+        # its TTL has expired (stale); cached is None on a true cold miss.
+        # Stale events are usable — return them immediately while scheduling
+        # a background refresh so the Watchlist never shows an empty state.
+        _has_stale = cached is not None and bool(cached.get("events"))
+        _stale_upd = cached.get("fetched_at") if _has_stale else None
+
         if sync_on_miss and fmp_key:
-            # Await full sync
+            # Await full sync (synchronous callers: wait_for_sync=True)
             events = await _sync_for_explicit_symbols(_BY_SYMS_UNIVERSE, req_syms, fmp_key)
             return _build_response(events, _today_str(), "miss", stale=False)
         elif background_sync_on_miss and fmp_key:
-            # Fire background sync, return empty immediately
+            # Fire background sync; return usable stale events when available
             _aio_ue.create_task(
                 _sync_for_explicit_symbols(_BY_SYMS_UNIVERSE, req_syms, fmp_key)
             )
+            if _has_stale:
+                print(
+                    f"[user_earnings] stale_syncing: {len(req_syms)} symbols "
+                    f"background-queued; returning stale events"
+                )
+                return _build_response(
+                    cached["events"], _stale_upd, "stale_syncing", stale=True
+                )
             print(
                 f"[user_earnings] miss_syncing: {len(req_syms)} symbols "
                 f"background-queued for initial sync"
             )
             return _empty_response("miss_syncing", stale=True)
         else:
+            if _has_stale:
+                return _build_response(cached["events"], _stale_upd, "stale", stale=True)
             return _empty_response("miss", stale=True)
