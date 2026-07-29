@@ -1,0 +1,94 @@
+Implement the audited Watchlist Upcoming Earnings timing fix.
+
+The audit proved:
+
+- GET /api/watchlist/{watchlist_id}/earnings currently receives `time: null` from the CatalystFMP earnings-calendar path.
+- `earnings_monitor_targets` already contains the timing data used by the ticker popup.
+- The existing background monitor populates that table before the popup is opened.
+- No additional provider calls are needed.
+- The frontend Upcoming card already renders and formats its existing `time` field.
+
+Use the existing earnings monitor store and response field. Do not add a new pipeline or provider request.
+
+Required implementation
+
+After the Watchlist upcoming earnings events have been assembled, perform one bulk read through the existing earnings monitor store for the relevant symbols.
+
+Overlay timing only when an exact target match exists.
+
+Exact matching key:
+
+(symbol, event date) == (target symbol, target expected_date)
+
+Do not match by symbol alone.
+
+Timing precedence for each upcoming event:
+
+1. Preserve the event’s existing non-null `time` value.
+2. Otherwise use the matching target’s `expected_timing` when non-null.
+   - Examples: `bmo`, `amc`, `during_market`
+3. Otherwise use the matching target’s `expected_time_local` when non-null.
+   - This preserves fallback values such as `After Market Close (AMC)`
+   - It also allows an exact stored time to pass through when one exists
+4. Otherwise leave `time` null.
+
+Use the existing `time` response field rather than adding a new response contract field. The current frontend already:
+- maps `bmo`, `amc`, and `during_market`
+- displays other non-null strings as timing text
+- omits null timing safely
+
+Scope and architecture constraints
+
+- Reuse the existing `earnings_monitor_store` bulk getter if it already accepts multiple symbols.
+- Do not write direct SQL in the router if the existing store path can perform the read.
+- Do not modify CatalystFMP.
+- Do not add `includeReportTimes=true` to the strip provider request.
+- Do not add provider calls inside the Watchlist request.
+- Do not create a new cache, table, endpoint, worker, or scheduler.
+- Do not modify the earnings monitor write path.
+- Do not change event membership, dates, sorting, estimates, recent earnings, or beat/miss calculations.
+- Do not change the frontend.
+- Do not populate a far-out event with timing from a nearer event for the same symbol.
+
+Important coverage behavior
+
+The earnings monitor target window currently covers roughly the next 10 days, while the Watchlist strip covers roughly 90 days.
+
+That is acceptable:
+
+- matching near-term events receive timing
+- farther-out events without a matching target remain null
+- do not estimate or fabricate their timing
+
+Validation
+
+Validate the exact endpoint response, not merely the helper function.
+
+Required cases:
+
+1. A matching event with `expected_timing = amc`, such as META or AAPL:
+   - response `time` becomes `amc`
+
+2. A matching event where `expected_timing` is null but `expected_time_local` exists, such as the audited MSFT example:
+   - response `time` becomes the existing human-readable timing value
+
+3. A far-out event with no target row:
+   - response `time` remains null
+
+4. A ticker with multiple event dates:
+   - only the exact `(symbol, date)` target is applied
+
+5. An event whose original `time` is already non-null:
+   - existing value is preserved
+
+Also verify:
+
+- one bulk Neon read, not N per-symbol reads
+- zero new FMP/provider calls
+- response event count and ordering are unchanged
+- Recent Earnings behavior is unchanged
+- no database writes occur
+- existing endpoint tests pass
+- add a focused regression test for exact symbol-and-date matching
+
+Keep this surgical, preferably within the existing service/store path and no more than two production files.

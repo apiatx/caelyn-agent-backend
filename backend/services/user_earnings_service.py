@@ -324,6 +324,7 @@ async def get_or_sync_user_earnings(
             ev for ev in in_range
             if (ev.get("symbol") or "").upper() in symbols
         ]
+        in_range = await _overlay_timing_async(in_range, symbols)
         print(f"{prefix} returning {len(in_range)} events in range (cache_status={cache_status})")
         return in_range, {
             "universe":      universe,
@@ -337,6 +338,7 @@ async def get_or_sync_user_earnings(
     print(f"{prefix} cache MISS — syncing from FMP")
     events   = await _sync_from_fmp(universe, symbols, fmp_key)
     in_range = _filter_by_date(events, from_date, to_date)
+    in_range = await _overlay_timing_async(in_range, symbols)
     print(f"{prefix} returning {len(in_range)} events after sync")
     return in_range, {
         "universe":      universe,
@@ -371,6 +373,71 @@ async def sync_universe_background(
 # Neon universe key used by the by-symbols cache.  Separate from "watchlist"
 # (which is always the default/first watchlist) so there is no cross-contamination.
 _BY_SYMS_UNIVERSE = "watchlist_by_syms"
+
+
+def _apply_monitor_timing(events: list[dict], timing_map: dict) -> list[dict]:
+    """
+    Overlay timing from earnings_monitor_targets onto a list of upcoming events.
+
+    Timing precedence per event:
+      1. Preserve the event's existing non-null ``time`` value.
+      2. Use ``expected_timing`` from the matched target when non-null (e.g. "bmo", "amc").
+      3. Use ``expected_time_local`` from the matched target when non-null
+         (e.g. "After Market Close (AMC)" — preserves human-readable fallbacks).
+      4. Leave ``time`` null when no matching target exists.
+
+    Matching key: exact (symbol_upper, earnings_date_str) — never crosses event
+    dates so a symbol with two upcoming events is never assigned the wrong timing.
+
+    Supports both raw-FMP event shape (symbol / date) and normalised shape
+    (ticker / earnings_date) so the helper works at any point in the pipeline.
+
+    No DB calls are made here; ``timing_map`` must be pre-fetched by the caller
+    via ``get_timing_for_symbol_dates``.  Returns ``events`` unchanged when
+    ``timing_map`` is empty.
+    """
+    if not timing_map:
+        return events
+    result: list[dict] = []
+    for ev in events:
+        if ev.get("time") is not None:
+            result.append(ev)
+            continue
+        sym  = (ev.get("ticker") or ev.get("symbol") or "").upper()
+        date = ev.get("earnings_date") or ev.get("date") or ""
+        target = timing_map.get((sym, date))
+        if target:
+            t = target.get("expected_timing") or target.get("expected_time_local")
+            if t is not None:
+                ev = {**ev, "time": t}
+        result.append(ev)
+    return result
+
+
+async def _overlay_timing_async(events: list[dict], symbols: set | list) -> list[dict]:
+    """
+    Async wrapper: fetch timing map for *symbols* via run_in_executor then
+    apply _apply_monitor_timing.  Used by get_or_sync_user_earnings which
+    operates on raw FMP events (symbol / date fields).
+
+    Zero provider calls, one bulk Neon read.  Returns events unchanged on any
+    error so the caller is never worse off.
+    """
+    import asyncio as _aio_ot
+    if not events:
+        return events
+    try:
+        from data.earnings_monitor_store import (  # type: ignore
+            get_timing_for_symbol_dates as _gtfsd_ot,
+        )
+        sym_list = list(symbols) if not isinstance(symbols, list) else symbols
+        timing_map = await _aio_ot.get_event_loop().run_in_executor(
+            None, _gtfsd_ot, sym_list
+        )
+        return _apply_monitor_timing(events, timing_map)
+    except Exception as _ot_err:
+        print(f"[user_earnings] _overlay_timing_async error: {_ot_err}")
+        return events
 
 
 def _normalize_event_canonical(ev: dict, last_updated: Optional[str]) -> dict:
@@ -632,6 +699,19 @@ async def get_upcoming_earnings_for_symbols(
     if not req_syms:
         return _empty_response("empty", stale=False)
 
+    # ── Pre-fetch timing overlay map (one bulk read, zero provider calls) ─────
+    # Closed over by _build_response so all return paths share the same map.
+    _timing_map: dict = {}
+    try:
+        from data.earnings_monitor_store import (  # type: ignore
+            get_timing_for_symbol_dates as _gtfsd,
+        )
+        _timing_map = await _aio_ue.get_event_loop().run_in_executor(
+            None, _gtfsd, list(req_syms)
+        )
+    except Exception as _tm_err:
+        print(f"[user_earnings] timing overlay prefetch error: {_tm_err}")
+
     def _build_response(
         events_raw: list[dict],
         last_upd: Optional[str],
@@ -641,6 +721,7 @@ async def get_upcoming_earnings_for_symbols(
         filtered  = [ev for ev in events_raw if (ev.get("symbol") or "").upper() in req_syms]
         in_range  = _filter_by_date(filtered, from_date, to_date)
         normalised = [_normalize_event_canonical(ev, last_upd) for ev in in_range]
+        normalised = _apply_monitor_timing(normalised, _timing_map)
         normalised.sort(key=lambda x: x.get("earnings_date") or "")
         syms_with_events = {ev["ticker"] for ev in normalised}
         missing = sorted(req_syms - syms_with_events)

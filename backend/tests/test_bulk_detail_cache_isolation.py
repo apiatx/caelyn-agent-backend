@@ -283,3 +283,127 @@ def test_glw_ei_fields_are_stable_after_bulk_simulation():
         "Mutating the bulk projection dict must not affect the canonical snapshot dict — "
         "they must be independent objects with no shared reference"
     )
+
+
+# ── Earnings timing overlay regression tests ─────────────────────────────────
+#
+# These tests exercise _apply_monitor_timing directly — no DB connection,
+# no provider calls, no server required.  They enforce the exact precedence
+# and (symbol, date) matching contract specified in the implementation spec.
+
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from services.user_earnings_service import _apply_monitor_timing
+
+
+def _ev(ticker, date, time=None):
+    """Build a minimal normalised earnings event."""
+    return {"ticker": ticker, "earnings_date": date, "time": time,
+            "company": ticker, "eps_estimate": None}
+
+
+def _tm(symbol, date, expected_timing=None, expected_time_local=None):
+    """Build a timing_map with a single entry."""
+    return {(symbol, date): {"expected_timing": expected_timing,
+                              "expected_time_local": expected_time_local}}
+
+
+class TestApplyMonitorTiming:
+
+    def test_amc_expected_timing_applied(self):
+        """Case 1: expected_timing='amc' → event time becomes 'amc'."""
+        events = [_ev("META", "2026-07-29")]
+        tmap   = _tm("META", "2026-07-29", expected_timing="amc")
+        result = _apply_monitor_timing(events, tmap)
+        assert result[0]["time"] == "amc", (
+            "event with expected_timing=amc must surface 'amc' in time field"
+        )
+
+    def test_bmo_expected_timing_applied(self):
+        """Case 1b: expected_timing='bmo' → event time becomes 'bmo'."""
+        events = [_ev("AAPL", "2026-07-30")]
+        tmap   = _tm("AAPL", "2026-07-30", expected_timing="bmo")
+        result = _apply_monitor_timing(events, tmap)
+        assert result[0]["time"] == "bmo"
+
+    def test_expected_time_local_fallback_when_timing_null(self):
+        """Case 2: expected_timing=None but expected_time_local set → local value used."""
+        events = [_ev("MSFT", "2026-07-29")]
+        tmap   = _tm("MSFT", "2026-07-29",
+                     expected_timing=None,
+                     expected_time_local="After Market Close (AMC)")
+        result = _apply_monitor_timing(events, tmap)
+        assert result[0]["time"] == "After Market Close (AMC)", (
+            "expected_time_local must be used as fallback when expected_timing is None"
+        )
+
+    def test_no_target_row_leaves_time_null(self):
+        """Case 3: far-out event with no matching target → time stays null."""
+        events = [_ev("NVDA", "2026-10-15")]
+        tmap   = {}
+        result = _apply_monitor_timing(events, tmap)
+        assert result[0]["time"] is None, (
+            "event with no target in timing_map must remain time=null"
+        )
+
+    def test_exact_date_match_required_multi_event(self):
+        """Case 4: symbol with two dates — only the exact (symbol, date) match applies."""
+        events = [
+            _ev("NET", "2026-07-30"),
+            _ev("NET", "2026-08-06"),
+        ]
+        tmap = _tm("NET", "2026-07-30", expected_timing="amc")
+        result = _apply_monitor_timing(events, tmap)
+        assert result[0]["time"] == "amc",  "2026-07-30 must get amc timing"
+        assert result[1]["time"] is None,   "2026-08-06 has no target — must stay null"
+
+    def test_existing_nonnull_time_preserved(self):
+        """Case 5: event already has a non-null time value → must not be overwritten."""
+        events = [_ev("TSLA", "2026-07-23", time="bmo")]
+        tmap   = _tm("TSLA", "2026-07-23", expected_timing="amc")
+        result = _apply_monitor_timing(events, tmap)
+        assert result[0]["time"] == "bmo", (
+            "existing non-null time must be preserved; target must not overwrite it"
+        )
+
+    def test_empty_timing_map_returns_events_unchanged(self):
+        """Empty timing_map → list returned unchanged (fast path)."""
+        events = [_ev("AAPL", "2026-07-30"), _ev("META", "2026-07-29")]
+        result = _apply_monitor_timing(events, {})
+        assert result is events, "empty timing_map must return the original list object"
+
+    def test_event_count_and_order_preserved(self):
+        """Overlay must not drop or reorder events."""
+        events = [
+            _ev("AMZN", "2026-07-30"),
+            _ev("FSLR", "2026-07-30"),
+            _ev("NVDA", "2026-10-15"),
+        ]
+        tmap = {
+            ("AMZN", "2026-07-30"): {"expected_timing": "amc",  "expected_time_local": None},
+            ("FSLR", "2026-07-30"): {"expected_timing": None,   "expected_time_local": "After Market Close (AMC)"},
+        }
+        result = _apply_monitor_timing(events, tmap)
+        assert len(result) == 3,               "event count must be unchanged"
+        assert result[0]["ticker"] == "AMZN",  "order must be preserved"
+        assert result[1]["ticker"] == "FSLR"
+        assert result[2]["ticker"] == "NVDA"
+        assert result[0]["time"] == "amc"
+        assert result[1]["time"] == "After Market Close (AMC)"
+        assert result[2]["time"] is None
+
+    def test_raw_fmp_shape_supported(self):
+        """Helper must work on raw FMP events (symbol/date) not just normalised shape."""
+        raw_ev = {"symbol": "GNRC", "date": "2026-07-29", "time": None,
+                  "companyName": "Generac Holdings"}
+        tmap = _tm("GNRC", "2026-07-29", expected_timing="bmo")
+        result = _apply_monitor_timing([raw_ev], tmap)
+        assert result[0]["time"] == "bmo", "raw FMP event shape (symbol/date) must be resolved"
+
+    def test_no_mutation_of_original_events(self):
+        """_apply_monitor_timing must not mutate the original event dicts."""
+        ev     = _ev("META", "2026-07-29")
+        orig   = dict(ev)
+        tmap   = _tm("META", "2026-07-29", expected_timing="amc")
+        _apply_monitor_timing([ev], tmap)
+        assert ev == orig, "original event dict must not be mutated"

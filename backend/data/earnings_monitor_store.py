@@ -328,6 +328,54 @@ def get_targets_for_symbols(symbols: list[str]) -> list[dict]:
         _put_conn(conn)
 
 
+def get_timing_for_symbol_dates(symbols: list[str]) -> dict:
+    """
+    Bulk-fetch timing fields from earnings_monitor_targets for the given symbols.
+
+    Returns a dict keyed by (symbol_upper, expected_date_str) mapping to:
+        {
+          "expected_timing":     "bmo" | "amc" | None,
+          "expected_time_local": str | None,
+        }
+
+    Only returns rows where expected_date >= today so farther-out events that
+    have no target row produce no key and are left untouched by callers.
+
+    Single query, zero provider calls, no writes.  Intended for the Watchlist
+    upcoming-earnings timing overlay (exact symbol+date match required).
+    """
+    if not symbols:
+        return {}
+    conn = _get_conn()
+    if conn is None:
+        return {}
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT symbol, expected_date::text, expected_timing, expected_time_local
+            FROM   public.earnings_monitor_targets
+            WHERE  symbol = ANY(%s)
+              AND  expected_date >= CURRENT_DATE
+            """,
+            ([s.upper() for s in symbols],),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return {
+            (row[0], row[1]): {
+                "expected_timing":     row[2],
+                "expected_time_local": row[3],
+            }
+            for row in rows
+        }
+    except Exception as exc:
+        print(f"[EarnMonStore] get_timing_for_symbol_dates error: {exc}")
+        return {}
+    finally:
+        _put_conn(conn)
+
+
 def get_active_targets(limit: int = 100) -> list[dict]:
     """Return incomplete targets plus recent same-day completed targets.
 
