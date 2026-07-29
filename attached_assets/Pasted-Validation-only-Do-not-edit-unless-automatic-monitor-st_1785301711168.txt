@@ -1,0 +1,70 @@
+Validation only. Do not edit unless automatic monitor startup is proven broken.
+
+The dual-calendar refresh implementation appears correct, and Recent Earnings is restored. One critical item remains unproven: the successful refresh was manually forced.
+
+Prove that the normal earnings monitor starts and refreshes automatically after a cold server restart.
+
+Required validation
+
+1. Capture the exact production files changed:
+   - git diff --name-only
+   - confirm no runtime JSON, cache, log, or generated files are included
+   - confirm no more than two production files changed
+
+2. Perform a clean application restart using the normal Replit runtime path.
+
+3. Do not manually invoke:
+   - _refresh_schedule()
+   - a force-refresh endpoint
+   - a Python helper
+   - direct database writes
+
+4. Immediately after startup, capture the monitor status:
+   - enabled
+   - running
+   - run_count
+   - last_run
+   - last schedule refresh time
+   - tick_mode / autoscale mode
+
+5. Wait for the normal startup/tick path to execute.
+
+6. Capture proof that the monitor loop itself invoked the refresh:
+   - timestamped server log
+   - run_count increment
+   - last_run or last schedule refresh updated
+   - no manual trigger involved
+
+7. Confirm the refresh uses:
+   - one with-times calendar batch call
+   - one regular calendar batch call
+   - capped fallback only for symbols absent from both calendars
+
+8. Validate database targets after the automatic refresh:
+   - TEVA
+   - UMC
+   - QURE
+   - RR
+
+For each, report:
+   - target exists or not
+   - expected_date
+   - expected_timing
+   - expected_time_local
+   - schedule_source
+
+Remember:
+- regular-calendar-only events may correctly have null timing
+- do not fabricate BMO/AMC
+
+9. Validate the actual Watchlist response:
+   - Upcoming event count remains unchanged
+   - Recent count is 22
+   - BE, ENPH, GLW, KLAC, LOGI, and MOD remain present
+   - AUR, GNRC, HOOD, and MX timing remains present
+
+10. Confirm no provider calls occur inside the Watchlist request path.
+
+Do not make further code changes if the automatic monitor loop works correctly.
+
+If it does not start automatically, report the exact gating condition and call path before editing.
