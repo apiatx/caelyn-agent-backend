@@ -290,6 +290,150 @@ def _is_revenue_suspect(payload: dict, *, threshold: float = 10.0) -> bool:
         return False
 
 
+def _is_revenue_scale_anomaly(rev_actual: float, prior_revenues: list[float]) -> bool:
+    """
+    Return True when *rev_actual* exhibits a telltale unit/period scale error
+    relative to recent quarterly revenue history, without requiring a valid
+    estimate denominator.
+
+    Used when the estimate is zero, null, or negative — situations where ratio
+    validation is undefined.  These signals trigger IS confirmation, not automatic
+    invalidation.
+
+    Checks (5 % numeric tolerance for approximate matching):
+      - 1 000× unit relationship vs any prior quarter (thousands-vs-dollars error)
+      - Six-month cumulative: ≈ sum of two most-recent prior quarters
+      - Nine-month cumulative: ≈ sum of three most-recent prior quarters
+      - Massive scale: rev_actual > 5× trailing-12M when ≥ 4 quarters available
+
+    Returns False when ``prior_revenues`` is empty or *rev_actual* ≤ 0.
+    """
+    if not prior_revenues or rev_actual <= 0:
+        return False
+    _TOL = 0.05
+    valid = [r for r in prior_revenues if isinstance(r, (int, float)) and r > 0]
+    if not valid:
+        return False
+
+    def _near(a: float, ref: float) -> bool:
+        return ref > 0 and abs(a / ref - 1.0) <= _TOL
+
+    for r in valid:
+        if _near(rev_actual, r * 1_000):
+            return True
+    if len(valid) >= 2 and _near(rev_actual, sum(valid[-2:])):
+        return True
+    if len(valid) >= 3 and _near(rev_actual, sum(valid[-3:])):
+        return True
+    if len(valid) >= 4:
+        t12m = sum(valid[-4:])
+        if t12m > 0 and rev_actual > t12m * 5:
+            return True
+    return False
+
+
+def _get_prior_quarterly_revenues(
+    symbol: str,
+    *,
+    exclude_fiscal_period: str | None = None,
+    exclude_fiscal_year: int | None = None,
+    limit: int = 8,
+) -> list[float]:
+    """
+    Read prior completed quarterly revenue_actual values from earnings_live_events
+    via the existing monitor store.  Returns an empty list on any error.
+    Called inside asyncio.to_thread — no event-loop interaction.
+    """
+    try:
+        from data.earnings_monitor_store import get_prior_quarterly_revenues as _gpr
+        return _gpr(
+            symbol, limit,
+            exclude_fiscal_period=exclude_fiscal_period,
+            exclude_fiscal_year=exclude_fiscal_year,
+        )
+    except Exception:
+        return []
+
+
+def _confirm_extreme_from_ei_cache(
+    rev_actual: float,
+    symbol: str,
+    expected_period: str | None,
+    expected_year: int | None,
+    *,
+    rel_tolerance: float = 0.02,
+    abs_tolerance: float = 1_000_000,
+) -> bool:
+    """
+    Return True when the watchlist_fundamentals_cache already holds an
+    IS-validated revenue for this symbol / fiscal-quarter / fiscal-year that
+    agrees with *rev_actual* within the narrow tolerance (2 % / $1 M).
+
+    Architecture: reads ``watchlist_fundamentals_store.get_snapshot()`` — an
+    existing read-only DB function.  No new table, cache, or provider call.
+    The EI refresh (watchlist_fundamentals_refresh) validates each quarter's
+    revenue against the income statement before writing it into the cache; a
+    non-null ``revenue_actual`` in ``earnings_history`` means the EI refresh
+    independently confirmed it.  A null means the EI refresh also rejected it.
+
+    Confirmation requirements (all must pass):
+      1. A snapshot exists for the symbol.
+      2. ``earnings_intelligence.earnings_history`` contains an entry whose
+         ``fiscal_period`` and ``fiscal_year`` match the current earnings event.
+      3. The cached ``revenue_actual`` is non-null — null means the EI refresh
+         could not confirm it (do not treat that as confirmation).
+      4. Revenue agreement within *rel_tolerance* (2 %) or *abs_tolerance* ($1 M).
+
+    Called inside asyncio.to_thread — no event-loop interaction.
+    Returns False on any error or missing data.
+    """
+    try:
+        from data.watchlist_fundamentals_store import get_snapshot as _get_snap
+        snap = _get_snap(symbol)
+        if not snap:
+            return False
+        ei      = (snap.get("fields") or {}).get("earnings_intelligence") or {}
+        history = ei.get("earnings_history") or []
+        if not history:
+            return False
+
+        _QUARTERLY = {"Q1", "Q2", "Q3", "Q4"}
+        ep = str(expected_period or "").upper().strip()
+        ey_int: int | None = expected_year  # already int or None
+
+        for evt in history:
+            if not isinstance(evt, dict):
+                continue
+            # Fiscal quarter must match when both sides have a label
+            row_period = str(evt.get("fiscal_period") or "").upper().strip()
+            if ep in _QUARTERLY and row_period and row_period != ep:
+                continue
+            # Fiscal year must match when available
+            if ey_int is not None:
+                try:
+                    if int(str(evt.get("fiscal_year") or "")) != ey_int:
+                        continue
+                except (ValueError, TypeError):
+                    pass  # fiscal_year absent in this row — skip year gate
+            # Found the matching quarter — check the IS-validated revenue
+            cached_rev = evt.get("revenue_actual")
+            if cached_rev is None:
+                # EI refresh also found this value unconfirmable — do not verify
+                return False
+            try:
+                c_f = float(cached_rev)
+                a_f = float(rev_actual)
+                if c_f <= 0:
+                    return False
+                diff = abs(a_f - c_f)
+                return diff / c_f <= rel_tolerance or diff <= abs_tolerance
+            except (TypeError, ValueError, ZeroDivisionError):
+                return False
+        return False  # matching quarter not yet in EI cache
+    except Exception:
+        return False
+
+
 # ── universe builder ──────────────────────────────────────────────────────────
 
 async def _build_universe() -> list[str]:
@@ -1059,27 +1203,77 @@ async def _process_target(
                 }
                 rp = _merge_results_payload(existing_results, incoming_rp)
 
-                # ── Revenue plausibility flag ──────────────────────────────────
-                # _revenue_suspect signals that the value exceeds 10× the estimate
-                # and has not yet been independently confirmed.
+                # ── Revenue plausibility / verification ───────────────────────
+                # Classify revenue_actual and attempt independent confirmation
+                # in a single pass, using two existing read-only data sources:
                 #
-                # Repeated identical FMP observations do NOT constitute independent
-                # confirmation — two polls of the same endpoint prove persistence,
-                # not correctness.  If FMP had returned a corrupted value consistently
-                # across multiple cycles, promoting it to "verified" would be wrong.
+                #   Scale history : earnings_live_events (prior completed quarters)
+                #                   → _get_prior_quarterly_revenues, same store/table
+                #   IS validation : watchlist_fundamentals_cache (EI refresh output)
+                #                   → _confirm_extreme_from_ei_cache, existing store
                 #
-                # The flag stays set until FMP self-corrects to a plausible value
-                # (handled by the else branch below), or an external path writes
-                # _revenue_verified (e.g. the EI refresh confirms via income-statement
-                # data already ingested).  Only that external write ends re-polling.
-                # Zero, null, or negative estimates bypass ratio validation.
+                # Three classification outcomes written into results_payload:
+                #   _revenue_verified: True  — IS-confirmed; re-polling stops.
+                #   _revenue_suspect:  True  — anomaly detected, not yet confirmed;
+                #                              re-poll on next tick.
+                #   neither flag             — plausible result; normal path.
+                #
+                # Rule: repeated identical FMP observations are NOT confirmation.
+                #       Only the independent EI-cache source sets _revenue_verified.
+
+                _rev_a     = rp.get("revenue_actual")
+                _rev_e     = rp.get("revenue_estimate")
+                _anomalous = False
+
+                # Path A: ratio-based suspicion (estimate is a valid denominator)
                 if _is_revenue_suspect(rp):
-                    rp["_revenue_suspect"] = True
-                    rp.pop("_revenue_verified", None)
+                    _anomalous = True
+
+                # Path B: scale anomaly when estimate is unsuitable (null/zero/neg)
+                if not _anomalous and _rev_a is not None:
+                    _est_ok = False
+                    try:
+                        _est_ok = _rev_e is not None and float(_rev_e) > 0
+                    except (TypeError, ValueError):
+                        pass
+                    if not _est_ok:
+                        _prior_revs: list[float] = await _aio.to_thread(
+                            lambda: _get_prior_quarterly_revenues(
+                                symbol,
+                                exclude_fiscal_period=fiscal_p,
+                                exclude_fiscal_year=(
+                                    int(fiscal_y) if fiscal_y is not None else None
+                                ),
+                            )
+                        )
+                        try:
+                            if _is_revenue_scale_anomaly(float(_rev_a), _prior_revs):
+                                _anomalous = True
+                        except (TypeError, ValueError):
+                            pass
+
+                # Outcome: try independent confirmation; write flags accordingly
+                if _anomalous:
+                    _confirmed = False
+                    if _rev_a is not None:
+                        try:
+                            _fy_int = int(fiscal_y) if fiscal_y is not None else None
+                        except (TypeError, ValueError):
+                            _fy_int = None
+                        _confirmed = await _aio.to_thread(
+                            lambda: _confirm_extreme_from_ei_cache(
+                                float(_rev_a), symbol, fiscal_p, _fy_int,
+                            )
+                        )
+                    if _confirmed:
+                        rp["_revenue_verified"] = True
+                        rp.pop("_revenue_suspect", None)
+                    else:
+                        rp["_revenue_suspect"] = True
+                        rp.pop("_revenue_verified", None)
                 else:
-                    # Plausible value — clear both flags.
-                    # This fires when FMP self-corrects a previously suspect value;
-                    # the corrected replacement is accepted without delay.
+                    # Plausible (or no anomaly detectable) — clear both flags.
+                    # This fires when FMP self-corrects a previously suspect value.
                     rp.pop("_revenue_suspect", None)
                     rp.pop("_revenue_verified", None)
 
@@ -1277,17 +1471,20 @@ def _has_complete_results_for_target(
     3. Revenue plausibility — three cases (in priority order):
 
        ``_revenue_verified = True``
-           A previous re-poll confirmed the extreme value (FMP returned it
-           consistently across two consecutive ticks).  The result is accepted
-           regardless of surprise magnitude.  Re-polling stops.
+           The monitor independently confirmed the extreme value via the EI
+           cache (watchlist_fundamentals_cache) in a prior tick.  The result
+           is accepted regardless of surprise magnitude.  Re-polling stops.
+           Written exclusively by ``_process_target``; no other service writes
+           this flag into ``earnings_live_events.results_payload``.
 
        ``_revenue_suspect = True``
-           The value is pending confirmation.  Return False so the monitor
-           re-polls on the next tick.
+           A ratio or scale anomaly was detected but independent confirmation
+           has not yet arrived (EI cache may not have run yet).  Return False
+           so the monitor re-polls on the next tick.
 
        Neither flag set, but ``_is_revenue_suspect`` fires
            Edge-case guard for payloads written before the flag system existed
-           (e.g. a crash between merge and upsert on the very first detection).
+           (e.g. a crash between the merge and upsert on first detection).
            Return False to force one re-poll, after which the flag will be set.
 
        No flag, not suspicious

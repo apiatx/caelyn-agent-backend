@@ -1,0 +1,180 @@
+Implement the final narrow correction to extreme-revenue validation.
+
+The audit proved two real defects:
+
+1. `_revenue_verified` is read by earnings_monitor_service but has no writer.
+   - watchlist_fundamentals_refresh does not write to earnings_live_events
+   - it writes to a separate fundamentals cache
+   - therefore the verified branch in `_has_complete_results_for_target()` is currently dead
+
+2. When revenue_estimate is null, zero, or negative:
+   - `_is_revenue_suspect()` returns False
+   - flags are cleared
+   - `_has_complete_results_for_target()` can return True
+   - a scale-corrupted actual can become permanently accepted
+
+Architecture decision
+
+Keep earnings_monitor_service as the sole writer of:
+
+public.earnings_live_events.results_payload
+
+Do not make watchlist_fundamentals_refresh write verification flags into the monitor table. That would create a second writer and unnecessary cross-service coupling.
+
+Instead, perform independent verification in the monitor path using existing stored/cached quarterly financial data.
+
+Required investigation before editing
+
+Identify the existing read-only store/cache already containing:
+
+- current-quarter income-statement revenue
+- prior-quarter revenue history
+- fiscal quarter/year
+- reporting period or duration
+- normalized dollar values
+
+Reuse that existing stored data.
+
+Do not add a provider call, table, cache, endpoint, worker, scheduler or new persistence path.
+
+If no existing stored quarterly source is accessible from the monitor without a provider request, stop and report the exact missing connection before inventing one.
+
+Required monitor behavior
+
+After an FMP earnings result is received, classify the revenue actual using:
+
+A. Ratio anomaly, when estimate is suitable
+
+Trigger suspicion when:
+
+revenue_actual > 10 × revenue_estimate
+
+The threshold remains an anomaly signal, not proof of invalidity.
+
+B. Scale/period anomaly, when estimate is null, zero, negative or unsuitable
+
+Use existing historical financial data to detect:
+
+- actual approximately 1,000× a plausible quarterly revenue value
+- actual resembling a six-month cumulative amount
+- actual resembling a nine-month cumulative amount
+- actual materially exceeding trailing-12-month revenue
+- actual grossly inconsistent with prior-quarter and prior-year quarterly scale
+- incompatible fiscal period or duration
+
+These signals trigger verification. They do not automatically prove the value is false.
+
+Independent confirmation
+
+A suspicious value may be accepted only when the existing quarterly financial source confirms:
+
+- same symbol
+- same fiscal year
+- same fiscal quarter when available
+- quarterly duration, not six- or nine-month YTD
+- compatible normalized currency units
+- close numeric agreement within the existing narrow tolerance:
+  - no more than 2% relative difference, or
+  - no more than $1 million absolute difference
+
+Do not use a factor-of-two tolerance.
+
+State handling inside earnings_monitor_service
+
+1. Suspicious and independently confirmed:
+   - preserve revenue_actual
+   - set `_revenue_verified: True`
+   - clear `_revenue_suspect`
+   - persist those flags in the exact results_payload written to earnings_live_events
+   - subsequent `_has_complete_results_for_target()` calls must treat it as complete
+
+2. Suspicious and not confirmed:
+   - set `_revenue_suspect: True`
+   - do not set `_revenue_verified`
+   - do not expose/cache the suspicious value as canonical revenue_actual
+   - keep the target eligible for re-polling
+   - preserve the raw provider value only if an existing raw-provider payload already exists; do not invent a new diagnostics system
+
+3. FMP corrects to a plausible value:
+   - accept the corrected value
+   - clear both flags
+
+4. Same suspicious FMP value appears repeatedly:
+   - remain suspicious
+   - never promote based solely on repeated observations from FMP
+
+5. Estimate unsuitable but historical scale is normal:
+   - preserve the normal existing result path
+   - do not force every no-estimate result into permanent re-polling
+
+Completion gate
+
+Update `_has_complete_results_for_target()` so that:
+
+- `_revenue_verified: True` means complete
+- `_revenue_suspect: True` means incomplete
+- corrected/plausible results behave normally
+- null/zero/negative estimates do not bypass scale-anomaly protection
+- no dead comment claims another service writes `_revenue_verified`
+
+watchlist_fundamentals_refresh
+
+Keep its protection against caching suspicious, unconfirmed revenue.
+
+Do not turn it into a writer for earnings_live_events.
+
+It may continue independently validating what it places in the fundamentals/EI cache, but the canonical monitor verification flag must be written by earnings_monitor_service itself.
+
+Required tests
+
+1. Verified flag persistence:
+   - monitor independently confirms a real extreme result
+   - `_revenue_verified: True` is written into earnings_live_events results_payload
+   - the next completion check returns True
+
+2. Same FMP value twice:
+   - remains suspicious
+   - never becomes verified
+
+3. BAND corruption:
+   - FMP actual approximately $428B
+   - estimate approximately $217M
+   - quarterly financial source approximately $220M
+   - suspicious value is not canonicalized
+   - corrected $220M result is accepted
+
+4. Real extreme result:
+   - estimate $1M
+   - actual $15M
+   - matching quarterly source confirms $15M
+   - verified flag is persisted
+   - full 1,400% surprise remains visible
+
+5. Null estimate with unit corruption:
+   - actual approximately 1,000× historical quarterly scale
+   - value becomes suspicious despite the unusable estimate
+   - it is not accepted without independent confirmation
+
+6. Null estimate with normal scale:
+   - ordinary result remains accepted
+   - no permanent re-poll loop
+
+7. Six-month versus quarter:
+   - cumulative value cannot confirm a quarterly result
+
+8. Corrected provider value:
+   - flags clear
+   - corrected result becomes complete
+
+Final validation
+
+- BAND endpoint remains approximately $220M revenue and +1.36%
+- no $428B value returns
+- no new provider calls
+- no second writer to earnings_live_events
+- no request-path database writes
+- ordinary earnings remain unchanged
+- run all existing earnings test suites
+- no runtime JSON/cache files included
+
+Keep this surgical. Prefer earnings_monitor_service plus one existing shared/store file only if needed to read already-stored quarterly data. Stop if more than two production files are required.

@@ -995,6 +995,62 @@ def get_recent_complete_events_for_symbols(
         _put_conn(conn)
 
 
+def get_prior_quarterly_revenues(
+    symbol: str,
+    limit: int = 8,
+    *,
+    exclude_fiscal_period: str | None = None,
+    exclude_fiscal_year: int | None = None,
+) -> list[float]:
+    """
+    Return ``revenue_actual`` floats from completed prior quarters for *symbol*,
+    ordered oldest-first so callers can use list slicing for window sums.
+
+    Results come from ``earnings_live_events`` rows in states
+    ``results_available``, ``results_updated``, or ``complete`` whose
+    ``results_payload`` carries a non-null ``revenue_actual``.
+
+    When *exclude_fiscal_period* and *exclude_fiscal_year* are both provided,
+    the current quarter is excluded so it does not compare against itself.
+
+    Returns an empty list on any DB error.  Callers must treat an empty list
+    as "no history available" and skip scale-anomaly detection rather than
+    raising.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        cur = conn.cursor()
+        params: list = [symbol.upper()]
+        exclude_clause = ""
+        if exclude_fiscal_period is not None and exclude_fiscal_year is not None:
+            exclude_clause = "AND NOT (fiscal_period = %s AND fiscal_year = %s)"
+            params += [exclude_fiscal_period, str(exclude_fiscal_year)]
+        cur.execute(
+            f"""
+            SELECT (results_payload->>'revenue_actual')::numeric
+            FROM   public.earnings_live_events
+            WHERE  symbol = %s
+              AND  is_dry_run = FALSE
+              AND  state IN ('results_available', 'results_updated', 'complete')
+              AND  results_payload->>'revenue_actual' IS NOT NULL
+              {exclude_clause}
+            ORDER  BY expected_date ASC NULLS LAST
+            LIMIT  %s
+            """,
+            params + [limit],
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return [float(r[0]) for r in rows if r[0] is not None]
+    except Exception as exc:
+        print(f"[EarnMonStore] get_prior_quarterly_revenues({symbol}) error: {exc}")
+        return []
+    finally:
+        _put_conn(conn)
+
+
 # ── per-user event feed ───────────────────────────────────────────────────────
 
 def mark_event_read(event_id: str, user_id: str) -> bool:

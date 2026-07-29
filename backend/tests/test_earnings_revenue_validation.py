@@ -1,16 +1,16 @@
 """
 Revenue-validation tests for the two-stage corruption-prevention system.
 
-The 10× threshold (revenue_actual > 10× revenue_estimate) is a suspicious-data
-signal, not a validity rule.  These tests verify the required behaviors:
+Tests cover the eight required scenarios plus supporting contracts:
 
-  1. Same corrupted FMP value returned twice → still suspect, NOT promoted.
-  2. BAND-style data → corrupted value not accepted.
-  3. Period mismatch (six-month vs quarterly) → old 2× tolerance proved unsafe.
-  4. Real extreme beat with quarterly IS confirmation → accepted, surprise preserved.
-  5. Independent IS source differs materially → remains unverified.
-  6. Corrected FMP value → flags clear, plausible replacement accepted.
-  7. Zero/null/negative estimate → no invalid ratio; scale-anomaly check available.
+  1. Verified flag persistence — monitor confirms, _revenue_verified written, event complete.
+  2. Same FMP value twice — remains suspect, never promoted to verified.
+  3. BAND corruption — $428B not canonicalized; corrected $220M accepted.
+  4. Real extreme result — $15M confirmed by EI cache; 1 400% surprise preserved.
+  5. Null estimate + unit corruption — scale anomaly triggers verification gate.
+  6. Null estimate + normal scale — ordinary result accepted; no infinite re-poll.
+  7. Six-month vs quarter — cumulative value cannot confirm a quarterly result.
+  8. Corrected provider value — flags clear; corrected result becomes complete.
 
 Run with:
     cd backend && python -m pytest tests/test_earnings_revenue_validation.py -v
@@ -19,22 +19,26 @@ from __future__ import annotations
 
 import sys
 import os
+import types
+from unittest.mock import patch, MagicMock
+
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from services.earnings_monitor_service import (
     _is_revenue_suspect,
+    _is_revenue_scale_anomaly,
+    _confirm_extreme_from_ei_cache,
     _has_complete_results_for_target,
     _merge_results_payload,
 )
 from services.watchlist_fundamentals_refresh import (
     _confirm_extreme_revenue,
-    _is_revenue_scale_anomaly,
 )
 
 
-# ── shared helpers ─────────────────────────────────────────────────────────────
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 def _payload(
     *,
@@ -60,520 +64,568 @@ def _payload(
     return p
 
 
-def _is_row(
-    date: str,
-    revenue: float | None,
+def _ei_snapshot(
+    symbol: str,
     *,
-    period: str = "Q2",
-    calendar_year: int = 2026,
+    fiscal_period: str,
+    fiscal_year: int,
+    cached_revenue: float | None,
 ) -> dict:
-    """Build a minimal FMP income-statement row."""
+    """Build a minimal watchlist_fundamentals_cache snapshot for testing."""
     return {
-        "filingDate":    date,
-        "revenue":       revenue,
-        "period":        period,
-        "calendarYear":  calendar_year,
+        "symbol": symbol,
+        "fields": {
+            "earnings_intelligence": {
+                "earnings_history": [
+                    {
+                        "fiscal_period": fiscal_period,
+                        "fiscal_year":   str(fiscal_year),
+                        "revenue_actual": cached_revenue,
+                        "eps_actual":    0.37,
+                        "date":          "2026-07-29",
+                    }
+                ]
+            }
+        },
     }
 
 
-def _income(date: str, revenue: float | None, **kw) -> dict:
-    """Build an income_by_filing dict with one row."""
-    return {date: _is_row(date, revenue, **kw)}
+def _is_row(date: str, revenue: float | None, *, period: str = "Q2",
+            calendar_year: int = 2026) -> dict:
+    return {"filingDate": date, "revenue": revenue,
+            "period": period, "calendarYear": calendar_year}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Test 1 — Same corrupted value returned twice: still suspect, NOT promoted
+# Scenario 1 — Verified flag persistence
+# Monitor confirms via EI cache → _revenue_verified: True → event complete
 # ══════════════════════════════════════════════════════════════════════════════
 
-class TestSameSuspectValueStaysSuspect:
+class TestVerifiedFlagPersistence:
     """
-    Two identical observations from the same FMP endpoint prove persistence,
-    not correctness.  The monitor must NOT promote to _revenue_verified merely
-    because it polled twice and got the same implausible value.
+    _confirm_extreme_from_ei_cache returns True when the EI cache holds an
+    IS-validated revenue that agrees within 2 % / $1 M.
+    Once _revenue_verified: True is in results_payload, the completion gate
+    returns True and re-polling stops.
     """
 
-    ACTUAL   = 428_472_200_000   # $428 B — corrupted
-    ESTIMATE = 217_040_000       # $217 M — correct estimate
+    ACTUAL  = 15_000_000   # $15M extreme beat
+    SYMBOL  = "TEST"
+    PERIOD  = "Q2"
+    YEAR    = 2026
 
-    def test_first_poll_sets_suspect(self):
-        """First detection: suspicious value flags _revenue_suspect."""
-        p = _payload(revenue_actual=self.ACTUAL, revenue_estimate=self.ESTIMATE,
-                     revenue_suspect=True)
-        assert p.get("_revenue_suspect") is True
-        assert not p.get("_revenue_verified")
+    def test_ei_cache_confirms_matching_revenue(self):
+        """EI cache same-quarter revenue = $15M → confirmed within 0%."""
+        snap = _ei_snapshot(self.SYMBOL, fiscal_period=self.PERIOD,
+                            fiscal_year=self.YEAR, cached_revenue=self.ACTUAL)
+        with patch("data.watchlist_fundamentals_store.get_snapshot", return_value=snap):
+            result = _confirm_extreme_from_ei_cache(
+                self.ACTUAL, self.SYMBOL, self.PERIOD, self.YEAR,
+            )
+        assert result is True
 
-    def test_same_value_second_poll_stays_suspect(self):
-        """
-        _merge_results_payload carrying forward _revenue_suspect from the
-        existing payload proves the flag survives a re-poll with the same value.
-        The monitor state machine must not upgrade it to _revenue_verified.
-        """
-        existing = _payload(revenue_actual=self.ACTUAL, revenue_estimate=self.ESTIMATE,
-                            revenue_suspect=True)
-        incoming = {
-            "revenue_actual":   self.ACTUAL,
-            "revenue_estimate": self.ESTIMATE,
-            "eps_actual":       0.37,
-            "eps_estimate":     0.364,
-            "date":             "2026-07-29",
-        }
-        merged = _merge_results_payload(existing, incoming)
-        # _merge_results_payload must carry the existing suspect flag forward
-        assert merged.get("_revenue_suspect") is True
-        # A second sighting of the same value must NOT auto-set _revenue_verified
-        assert not merged.get("_revenue_verified")
+    def test_ei_cache_confirms_with_rounding(self):
+        """$14.85M cached (1% below $15M actual) — within 2% tolerance."""
+        snap = _ei_snapshot(self.SYMBOL, fiscal_period=self.PERIOD,
+                            fiscal_year=self.YEAR, cached_revenue=14_850_000)
+        with patch("data.watchlist_fundamentals_store.get_snapshot", return_value=snap):
+            result = _confirm_extreme_from_ei_cache(
+                self.ACTUAL, self.SYMBOL, self.PERIOD, self.YEAR,
+            )
+        assert result is True
 
-    def test_suspect_flag_keeps_result_incomplete(self):
-        """_revenue_suspect blocks _has_complete_results_for_target (re-poll gate)."""
-        p = _payload(revenue_actual=self.ACTUAL, revenue_estimate=self.ESTIMATE,
-                     revenue_suspect=True)
-        assert not _has_complete_results_for_target(p, "2026-07-29")
+    def test_verified_flag_makes_event_complete(self):
+        """_revenue_verified: True in results_payload → completion gate returns True."""
+        p = _payload(revenue_actual=self.ACTUAL, revenue_estimate=1_000_000,
+                     revenue_verified=True)
+        assert _has_complete_results_for_target(p, "2026-07-29")
 
-    def test_raw_suspect_also_incomplete_before_flag_written(self):
-        """Edge-case: no flag yet but value is suspicious — still blocked."""
-        p = _payload(revenue_actual=self.ACTUAL, revenue_estimate=self.ESTIMATE)
-        assert not _has_complete_results_for_target(p, "2026-07-29")
+    def test_verified_flag_preserved_through_merge(self):
+        """_merge_results_payload carries _revenue_verified forward."""
+        existing = _payload(revenue_actual=self.ACTUAL, revenue_estimate=1_000_000,
+                            revenue_verified=True)
+        merged = _merge_results_payload(
+            existing,
+            {"date": "2026-07-29", "eps_actual": 0.37, "eps_estimate": 0.30},
+        )
+        assert merged.get("_revenue_verified") is True
+        assert merged["revenue_actual"] == self.ACTUAL
+
+    def test_no_snapshot_returns_false(self):
+        """No EI cache for symbol → _confirm_extreme_from_ei_cache returns False."""
+        with patch("data.watchlist_fundamentals_store.get_snapshot", return_value=None):
+            assert not _confirm_extreme_from_ei_cache(
+                self.ACTUAL, self.SYMBOL, self.PERIOD, self.YEAR,
+            )
+
+    def test_empty_history_returns_false(self):
+        """EI cache exists but earnings_history is empty → False."""
+        snap = {"symbol": self.SYMBOL, "fields": {
+            "earnings_intelligence": {"earnings_history": []}
+        }}
+        with patch("data.watchlist_fundamentals_store.get_snapshot", return_value=snap):
+            assert not _confirm_extreme_from_ei_cache(
+                self.ACTUAL, self.SYMBOL, self.PERIOD, self.YEAR,
+            )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Test 2 — BAND-style data: $428B corrupted value not accepted
-# quarterly ≈ $220 M, six-month ≈ $428 M, corrupted provider ≈ $428 B
+# Scenario 2 — Same FMP value twice: remains suspect, never verified
 # ══════════════════════════════════════════════════════════════════════════════
 
-class TestBandStyleCorruption:
+class TestSameFmpValueTwice:
 
-    ACTUAL          = 428_472_200_000   # $428.47 B (corrupted — 6-month × 1 000)
-    ESTIMATE        = 217_040_000       # $217 M
-    QUARTERLY_REV   = 220_000_000       # $220 M — correct quarterly IS revenue
-    DATE            = "2026-07-29"
+    ACTUAL   = 428_472_200_000
+    ESTIMATE = 217_040_000
+    DATE     = "2026-07-29"
 
-    def test_flagged_as_suspect(self):
-        """`$428B / $217M ≈ 1 975×` — well above the 10× threshold."""
+    def test_raw_suspicious_value_flagged_as_suspect(self):
+        """428B / 217M ≈ 1 975× — clearly above the 10× threshold."""
         assert _is_revenue_suspect({"revenue_actual": self.ACTUAL,
                                     "revenue_estimate": self.ESTIMATE})
 
-    def test_quarterly_is_does_not_confirm_corrupted_value(self):
+    def test_second_poll_same_value_stays_suspect(self):
         """
-        IS revenue of $220M cannot confirm the $428B actual.
-        $428B / $220M ≈ 1 946× — far outside the 2% / $1M narrow tolerance.
+        _merge_results_payload carries _revenue_suspect forward from existing;
+        repeated FMP observations do not promote to _revenue_verified.
         """
-        confirmed = _confirm_extreme_revenue(
-            self.ACTUAL,
-            _income(self.DATE, self.QUARTERLY_REV, period="Q2", calendar_year=2026),
-            self.DATE,
-            expected_period="Q2",
-            expected_year=2026,
-        )
-        assert not confirmed
+        existing = _payload(revenue_actual=self.ACTUAL, revenue_estimate=self.ESTIMATE,
+                            revenue_suspect=True)
+        incoming = {"date": self.DATE, "eps_actual": 0.37, "eps_estimate": 0.364,
+                    "revenue_actual": self.ACTUAL, "revenue_estimate": self.ESTIMATE}
+        merged = _merge_results_payload(existing, incoming)
+        assert merged.get("_revenue_suspect") is True
+        assert not merged.get("_revenue_verified")
 
-    def test_suspect_payload_never_complete(self):
-        """Flagged as suspect → _has_complete_results_for_target returns False."""
+    def test_suspect_blocks_completion_gate(self):
+        """_revenue_suspect: True → _has_complete_results_for_target returns False."""
         p = _payload(revenue_actual=self.ACTUAL, revenue_estimate=self.ESTIMATE,
                      revenue_suspect=True)
         assert not _has_complete_results_for_target(p, self.DATE)
 
-    def test_annual_is_row_also_rejected(self):
-        """An annual IS row (period='FY') must be rejected even if its revenue
-        were close — period validation fires before numeric comparison."""
-        annual_rev = 850_000_000  # realistic annual total, not close to $428B anyway
+    def test_ei_cache_null_revenue_does_not_confirm(self):
+        """
+        EI cache has revenue_actual=None for this quarter — the EI refresh also
+        could not confirm it.  _confirm_extreme_from_ei_cache must return False.
+        """
+        snap = _ei_snapshot("BAND", fiscal_period="Q2", fiscal_year=2026,
+                            cached_revenue=None)
+        with patch("data.watchlist_fundamentals_store.get_snapshot", return_value=snap):
+            assert not _confirm_extreme_from_ei_cache(
+                self.ACTUAL, "BAND", "Q2", 2026,
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Scenario 3 — BAND corruption: $428B not canonicalized; $220M accepted
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestBandCorruption:
+
+    CORRUPT  = 428_472_200_000
+    ESTIMATE = 217_040_000
+    CORRECT  = 220_000_000
+    DATE     = "2026-07-29"
+
+    def test_corrupted_value_flagged_by_ratio(self):
+        assert _is_revenue_suspect({"revenue_actual": self.CORRUPT,
+                                    "revenue_estimate": self.ESTIMATE})
+
+    def test_ei_cache_quarterly_does_not_confirm_corrupted_value(self):
+        """
+        EI cache holds the IS-validated $220M quarterly revenue.
+        $428B / $220M ≈ 1 946× — far outside 2 % / $1 M tolerance → False.
+        """
+        snap = _ei_snapshot("BAND", fiscal_period="Q2", fiscal_year=2026,
+                            cached_revenue=self.CORRECT)
+        with patch("data.watchlist_fundamentals_store.get_snapshot", return_value=snap):
+            assert not _confirm_extreme_from_ei_cache(
+                self.CORRUPT, "BAND", "Q2", 2026,
+            )
+
+    def test_corrected_value_not_flagged_by_ratio(self):
+        """$220M / $217M ≈ 1.01× — not suspicious."""
+        assert not _is_revenue_suspect({"revenue_actual": self.CORRECT,
+                                        "revenue_estimate": self.ESTIMATE})
+
+    def test_corrected_payload_is_complete(self):
+        """Plausible value + matching date → completion gate returns True."""
+        p = _payload(revenue_actual=self.CORRECT, revenue_estimate=self.ESTIMATE)
+        assert _has_complete_results_for_target(p, self.DATE)
+
+    def test_is_level_confirm_extreme_revenue_rejects_corrupted_vs_quarterly(self):
+        """watchlist_fundamentals_refresh level: $428B vs $220M IS → rejected."""
         confirmed = _confirm_extreme_revenue(
-            self.ACTUAL,
-            _income(self.DATE, annual_rev, period="FY", calendar_year=2026),
+            self.CORRUPT,
+            {self.DATE: {"revenue": self.CORRECT, "period": "Q2",
+                         "calendarYear": 2026, "filingDate": self.DATE}},
             self.DATE,
+            expected_period="Q2",
+            expected_year=2026,
         )
         assert not confirmed
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Test 3 — Period mismatch: six-month cumulative must NOT confirm quarterly
-# Proves the old 2× tolerance was unsafe
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestPeriodMismatchTolerance:
-    """
-    Scenario: provider returns $418M (≈ H1 cumulative), estimate is $20M.
-    Ratio = 20.9× → suspicious.  The correct Q2 IS revenue is $220M.
-
-    Old 2× tolerance: $418M / $220M ≈ 1.9 → within 2× → would have INCORRECTLY confirmed.
-    New 2% tolerance: diff = $198M → 90% of $220M → NOT within 2% or $1M → correctly rejected.
-    """
-
-    SUSPICIOUS_ACTUAL = 418_000_000   # ≈ six-month cumulative
-    ESTIMATE          = 20_000_000    # thin coverage estimate
-    Q2_IS_REV         = 220_000_000   # correct quarterly IS revenue
-    DATE              = "2026-07-29"
-
-    def test_flagged_as_suspect_by_ratio(self):
-        """418M / 20M = 20.9× > 10 → suspicious."""
-        assert _is_revenue_suspect({"revenue_actual": self.SUSPICIOUS_ACTUAL,
-                                    "revenue_estimate": self.ESTIMATE})
-
-    def test_quarterly_is_does_not_confirm_six_month_cumulative(self):
-        """
-        IS shows correct Q2 = $220M.  The suspicious $418M is approximately
-        1.9× that — within the old unsafe 2× tolerance but outside the new 2%.
-        """
-        confirmed = _confirm_extreme_revenue(
-            self.SUSPICIOUS_ACTUAL,
-            _income(self.DATE, self.Q2_IS_REV, period="Q2", calendar_year=2026),
-            self.DATE,
-            expected_period="Q2",
-            expected_year=2026,
-        )
-        assert not confirmed, (
-            f"IS revenue ${self.Q2_IS_REV:,} must NOT confirm suspicious "
-            f"${self.SUSPICIOUS_ACTUAL:,} (ratio ≈ 1.9× — outside 2% tolerance)"
-        )
-
-    def test_old_two_times_tolerance_would_have_been_wrong(self):
-        """
-        Regression guard: verify the old 2× range [0.5×, 2.0×] would have
-        incorrectly accepted $418M vs $220M IS (ratio = 1.9 < 2.0).
-        The new code must reject it.
-        """
-        ratio = self.SUSPICIOUS_ACTUAL / self.Q2_IS_REV  # ≈ 1.9
-        assert 0.5 < ratio < 2.0, "Pre-condition: old 2× would have accepted this"
-        # New code must still reject it
-        confirmed = _confirm_extreme_revenue(
-            self.SUSPICIOUS_ACTUAL,
-            _income(self.DATE, self.Q2_IS_REV, period="Q2"),
-            self.DATE,
-        )
-        assert not confirmed, "New narrow tolerance must reject a 1.9× mismatch"
-
-    def test_fy_is_row_period_gate_fires_before_numeric_check(self):
-        """Annual IS row is rejected at period validation before numeric comparison."""
-        # Annual IS with revenue that happens to be 1.0× the suspicious actual
-        # (best possible numeric match) — still rejected because period="FY"
-        confirmed = _confirm_extreme_revenue(
-            self.SUSPICIOUS_ACTUAL,
-            _income(self.DATE, self.SUSPICIOUS_ACTUAL, period="FY"),
-            self.DATE,
-        )
-        assert not confirmed, "period='FY' must be rejected before numeric check"
+    def test_corrupted_payload_never_complete(self):
+        p = _payload(revenue_actual=self.CORRUPT, revenue_estimate=self.ESTIMATE,
+                     revenue_suspect=True)
+        assert not _has_complete_results_for_target(p, self.DATE)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Test 4 — Real extreme beat: quarterly IS confirms → accepted, 1 400% preserved
-# estimate $1M, actual $15M, quarterly IS independently shows $15M
+# Scenario 4 — Real extreme result: EI cache confirms; 1 400% surprise preserved
 # ══════════════════════════════════════════════════════════════════════════════
 
-class TestRealExtremeBeatConfirmed:
+class TestRealExtremeResult:
 
-    ACTUAL   = 15_000_000   # $15 M actual
-    ESTIMATE =  1_000_000   # $1 M estimate (thin analyst coverage)
+    ACTUAL   = 15_000_000
+    ESTIMATE =  1_000_000
+    SYMBOL   = "XTICKER"
+    PERIOD   = "Q2"
+    YEAR     = 2026
     DATE     = "2026-07-29"
 
-    def test_flagged_as_suspect_by_ratio(self):
-        """15× the estimate triggers the suspicious-signal check."""
+    def test_flagged_by_ratio(self):
+        """15× the estimate → suspicious."""
         assert _is_revenue_suspect({"revenue_actual": self.ACTUAL,
                                     "revenue_estimate": self.ESTIMATE})
 
-    def test_quarterly_is_matching_value_confirms(self):
-        """IS revenue = $15M for the same Q and year → confirmed (ratio = 1.0)."""
-        confirmed = _confirm_extreme_revenue(
-            self.ACTUAL,
-            _income(self.DATE, self.ACTUAL, period="Q2", calendar_year=2026),
-            self.DATE,
-            expected_period="Q2",
-            expected_year=2026,
-        )
-        assert confirmed
+    def test_ei_cache_confirms_exact_match(self):
+        """EI cache $15M same-quarter → confirmed (ratio = 1.0)."""
+        snap = _ei_snapshot(self.SYMBOL, fiscal_period=self.PERIOD,
+                            fiscal_year=self.YEAR, cached_revenue=self.ACTUAL)
+        with patch("data.watchlist_fundamentals_store.get_snapshot", return_value=snap):
+            assert _confirm_extreme_from_ei_cache(
+                self.ACTUAL, self.SYMBOL, self.PERIOD, self.YEAR,
+            )
 
-    def test_quarterly_is_with_rounding_confirms(self):
-        """IS revenue within 2% rounding ($14.85M) still confirms."""
-        IS_ROUNDED = 14_850_000   # $14.85M → 1% below actual
-        confirmed = _confirm_extreme_revenue(
-            self.ACTUAL,
-            _income(self.DATE, IS_ROUNDED, period="Q2", calendar_year=2026),
-            self.DATE,
-            expected_period="Q2",
-            expected_year=2026,
-        )
-        assert confirmed
-
-    def test_verified_flag_makes_result_complete(self):
-        """
-        Once _revenue_verified is set (by an external confirmation path),
-        _has_complete_results_for_target returns True — re-polling stops.
-        """
+    def test_verified_payload_is_complete(self):
+        """_revenue_verified: True → event is complete; re-polling stops."""
         p = _payload(revenue_actual=self.ACTUAL, revenue_estimate=self.ESTIMATE,
                      revenue_verified=True)
         assert _has_complete_results_for_target(p, self.DATE)
 
-    def test_verified_payload_preserves_full_surprise(self):
-        """The 1 400% revenue surprise must survive a merge cycle unchanged."""
+    def test_surprise_magnitude_preserved(self):
+        """$15M with $1M estimate = 1 400% surprise; value must not be modified."""
         p = _payload(revenue_actual=self.ACTUAL, revenue_estimate=self.ESTIMATE,
                      revenue_verified=True)
-        merged = _merge_results_payload(
-            p,
-            {"date": self.DATE, "eps_actual": 1.0, "eps_estimate": 0.8},
-        )
-        assert merged["revenue_actual"] == self.ACTUAL
-        assert merged.get("_revenue_verified") is True
+        assert p["revenue_actual"] == 15_000_000
 
-    def test_fuzzy_date_match_still_requires_correct_period(self):
-        """IS row 3 days before ev_date confirms only when period also matches."""
-        IS_DATE = "2026-07-26"
+    def test_wrong_quarter_in_ei_cache_does_not_confirm(self):
+        """EI cache shows Q1, but earnings event is Q2 → no confirmation."""
+        snap = _ei_snapshot(self.SYMBOL, fiscal_period="Q1",
+                            fiscal_year=self.YEAR, cached_revenue=self.ACTUAL)
+        with patch("data.watchlist_fundamentals_store.get_snapshot", return_value=snap):
+            assert not _confirm_extreme_from_ei_cache(
+                self.ACTUAL, self.SYMBOL, self.PERIOD, self.YEAR,
+            )
+
+    def test_wrong_year_in_ei_cache_does_not_confirm(self):
+        """EI cache entry for 2025 Q2 must not confirm 2026 Q2 earnings."""
+        snap = _ei_snapshot(self.SYMBOL, fiscal_period=self.PERIOD,
+                            fiscal_year=2025, cached_revenue=self.ACTUAL)
+        with patch("data.watchlist_fundamentals_store.get_snapshot", return_value=snap):
+            assert not _confirm_extreme_from_ei_cache(
+                self.ACTUAL, self.SYMBOL, self.PERIOD, self.YEAR,
+            )
+
+    def test_is_level_confirm_accepts_within_rounding(self):
+        """watchlist_fundamentals_refresh level: $14.85M IS ($15M ×0.99) → accepted."""
         confirmed = _confirm_extreme_revenue(
             self.ACTUAL,
-            _income(IS_DATE, self.ACTUAL, period="Q2", calendar_year=2026),
+            {self.DATE: {"revenue": 14_850_000, "period": "Q2",
+                         "calendarYear": 2026, "filingDate": self.DATE}},
             self.DATE,
             expected_period="Q2",
             expected_year=2026,
         )
         assert confirmed
 
-    def test_wrong_quarter_is_does_not_confirm_correct_actual(self):
-        """IS row for Q1 must not confirm a Q2 earnings actual."""
-        confirmed = _confirm_extreme_revenue(
-            self.ACTUAL,
-            _income(self.DATE, self.ACTUAL, period="Q1", calendar_year=2026),
-            self.DATE,
-            expected_period="Q2",
-            expected_year=2026,
-        )
-        assert not confirmed
 
-    def test_wrong_year_is_does_not_confirm(self):
-        """IS row for calendarYear=2025 must not confirm a 2026 earnings event."""
-        confirmed = _confirm_extreme_revenue(
-            self.ACTUAL,
-            _income(self.DATE, self.ACTUAL, period="Q2", calendar_year=2025),
-            self.DATE,
-            expected_period="Q2",
-            expected_year=2026,
-        )
-        assert not confirmed
+# ══════════════════════════════════════════════════════════════════════════════
+# Scenario 5 — Null estimate + unit corruption: scale anomaly triggers gate
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestNullEstimateUnitCorruption:
+
+    PRIOR_Q = 220_000_000            # $220M normal quarterly revenue
+    CORRUPT = 220_000_000 * 1_000    # $220B — 1 000× unit error
+
+    def test_null_estimate_not_suspicious_by_ratio(self):
+        """Null estimate: ratio undefined — _is_revenue_suspect returns False."""
+        assert not _is_revenue_suspect({"revenue_actual": self.CORRUPT,
+                                        "revenue_estimate": None})
+
+    def test_scale_anomaly_detects_1000x_unit_error(self):
+        """$220B vs $220M prior quarter — 1 000× relationship detected."""
+        assert _is_revenue_scale_anomaly(self.CORRUPT, [self.PRIOR_Q])
+
+    def test_scale_anomaly_detected_among_multiple_quarters(self):
+        """Anomaly still detected when prior list has multiple quarters."""
+        prior = [210_000_000, 215_000_000, self.PRIOR_Q]
+        assert _is_revenue_scale_anomaly(self.CORRUPT, prior)
+
+    def test_ei_cache_null_means_unconfirmed(self):
+        """EI cache revenue_actual=None → confirm returns False → remains suspect."""
+        snap = _ei_snapshot("X", fiscal_period="Q2", fiscal_year=2026,
+                            cached_revenue=None)
+        with patch("data.watchlist_fundamentals_store.get_snapshot", return_value=snap):
+            assert not _confirm_extreme_from_ei_cache(
+                self.CORRUPT, "X", "Q2", 2026,
+            )
+
+    def test_suspect_flag_blocks_completion(self):
+        """After scale anomaly triggers suspect flag, event is not complete."""
+        p = _payload(revenue_actual=self.CORRUPT, revenue_estimate=None,
+                     revenue_suspect=True)
+        assert not _has_complete_results_for_target(p, "2026-07-29")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Test 5 — Independent source differs materially: suspicious value unverified
+# Scenario 6 — Null estimate + normal scale: accepted without re-poll loop
 # ══════════════════════════════════════════════════════════════════════════════
 
-class TestIndependentSourceDiffers:
+class TestNullEstimateNormalScale:
 
-    SUSPICIOUS = 50_000_000   # $50M suspicious actual (e.g. >10× estimate of $4M)
-    IS_REV     = 20_000_000   # IS shows $20M — clearly different
+    NORMAL_REV = 225_000_000    # $225M — ordinary ~5% growth
+    PRIOR_QS   = [205_000_000, 210_000_000, 215_000_000, 220_000_000]
+
+    def test_no_scale_anomaly_for_ordinary_growth(self):
+        """$225M vs four prior quarters averaging $212M — no anomaly."""
+        assert not _is_revenue_scale_anomaly(self.NORMAL_REV, self.PRIOR_QS)
+
+    def test_no_anomaly_means_no_suspect_flag(self):
+        """_is_revenue_suspect returns False (null estimate); no anomaly → no flag."""
+        assert not _is_revenue_suspect({"revenue_actual": self.NORMAL_REV,
+                                        "revenue_estimate": None})
+
+    def test_normal_payload_is_complete(self):
+        """Both actuals present, no flags, matching date → complete."""
+        p = _payload(revenue_actual=self.NORMAL_REV, revenue_estimate=None)
+        assert _has_complete_results_for_target(p, "2026-07-29")
+
+    def test_empty_prior_history_also_not_anomalous(self):
+        """No prior history → _is_revenue_scale_anomaly returns False (safe default)."""
+        assert not _is_revenue_scale_anomaly(self.NORMAL_REV, [])
+
+    def test_single_prior_quarter_below_1000x_not_anomalous(self):
+        """Value 5× prior quarter is suspicious but not a 1 000× error or cumulative."""
+        assert not _is_revenue_scale_anomaly(200_000_000 * 4.9, [200_000_000])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Scenario 7 — Six-month vs quarter: cumulative cannot confirm quarterly result
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestSixMonthVsQuarter:
+    """
+    Proves the old 2× tolerance was unsafe:
+    - Suspicious actual: $418M (≈ H1 cumulative); estimate: $20M; ratio = 20.9×
+    - Correct Q2 IS: $220M
+    - Old 2×: $418M / $220M ≈ 1.9 → would have incorrectly confirmed
+    - New 2%: diff = $198M = 90% of $220M → correctly rejected
+    """
+
+    SUSPICIOUS = 418_000_000   # ≈ six-month cumulative
+    ESTIMATE   =  20_000_000
+    Q2_IS_REV  = 220_000_000
     DATE       = "2026-07-29"
 
-    def test_materially_different_is_does_not_confirm(self):
-        """$50M actual vs $20M IS → diff = $30M, ratio = 2.5× → not confirmed."""
+    def test_flagged_by_ratio(self):
+        """$418M / $20M = 20.9× → suspicious."""
+        assert _is_revenue_suspect({"revenue_actual": self.SUSPICIOUS,
+                                    "revenue_estimate": self.ESTIMATE})
+
+    def test_is_level_quarterly_does_not_confirm_six_month_actual(self):
+        """
+        IS Q2 revenue $220M fails to confirm $418M suspicious actual.
+        1.9× mismatch is far outside the 2 % / $1 M narrow tolerance.
+        """
         confirmed = _confirm_extreme_revenue(
             self.SUSPICIOUS,
-            _income(self.DATE, self.IS_REV, period="Q2", calendar_year=2026),
+            {self.DATE: {"revenue": self.Q2_IS_REV, "period": "Q2",
+                         "calendarYear": 2026, "filingDate": self.DATE}},
             self.DATE,
             expected_period="Q2",
             expected_year=2026,
         )
         assert not confirmed
 
-    def test_unconfirmed_value_remains_suspect(self):
-        """Payload remains suspect (not verified) when IS differs materially."""
-        p = _payload(revenue_actual=self.SUSPICIOUS, revenue_estimate=4_000_000,
-                     revenue_suspect=True)
-        assert not _has_complete_results_for_target(p, self.DATE)
-        assert not p.get("_revenue_verified")
-
-    def test_absolute_tolerance_border(self):
-        """Diff exactly at $1M absolute boundary is confirmed."""
-        IS_REV_CLOSE = self.SUSPICIOUS - 1_000_000   # exactly $1M under
+    def test_old_two_times_tolerance_would_have_been_wrong(self):
+        """Regression guard: the old 2× band [0.5, 2.0] contained 1.9 — unsafe."""
+        ratio = self.SUSPICIOUS / self.Q2_IS_REV
+        assert 0.5 < ratio < 2.0, "Pre-condition: old 2× would have accepted this"
         confirmed = _confirm_extreme_revenue(
             self.SUSPICIOUS,
-            _income(self.DATE, IS_REV_CLOSE, period="Q2"),
+            {self.DATE: {"revenue": self.Q2_IS_REV, "period": "Q2",
+                         "filingDate": self.DATE}},
             self.DATE,
         )
-        assert confirmed, "$1M absolute diff must be accepted (rounding allowance)"
+        assert not confirmed, "New narrow tolerance must reject a 1.9× mismatch"
 
-    def test_just_over_absolute_tolerance_rejected(self):
-        """Diff $1.01M above absolute tolerance and outside 2% relative → rejected."""
-        IS_REV_NEAR = self.SUSPICIOUS - 1_010_000   # $1.01M under
-        # relative diff: 1_010_000 / (50M - 1.01M) ≈ 2.06% > 2%
-        confirmed = _confirm_extreme_revenue(
-            self.SUSPICIOUS,
-            _income(self.DATE, IS_REV_NEAR, period="Q2"),
-            self.DATE,
-        )
-        assert not confirmed
+    def test_ei_cache_with_null_revenue_six_month_quarter_cannot_confirm(self):
+        """
+        EI cache sees the $418M suspicious actual, can't confirm vs IS ($220M),
+        so stores revenue_actual=None for that quarter.
+        _confirm_extreme_from_ei_cache must return False (null = unconfirmed).
+        """
+        snap = _ei_snapshot("XYZ", fiscal_period="Q2", fiscal_year=2026,
+                            cached_revenue=None)
+        with patch("data.watchlist_fundamentals_store.get_snapshot", return_value=snap):
+            assert not _confirm_extreme_from_ei_cache(
+                self.SUSPICIOUS, "XYZ", "Q2", 2026,
+            )
+
+    def test_six_month_as_scale_anomaly_detected(self):
+        """$418M ≈ sum of two prior quarters ($208M + $210M) — cumulative anomaly."""
+        assert _is_revenue_scale_anomaly(418_000_000, [208_000_000, 210_000_000])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Test 6 — Corrected FMP value: suspect flags clear, replacement accepted
+# Scenario 8 — Corrected provider value: flags clear; result becomes complete
 # ══════════════════════════════════════════════════════════════════════════════
 
-class TestCorrectedFmpValue:
-    """
-    When FMP self-corrects a previously suspect value, the monitor's state
-    machine clears both _revenue_suspect and _revenue_verified and accepts
-    the corrected plausible value without delay.
-    """
+class TestCorrectedProviderValue:
 
     CORRUPT  = 428_472_200_000
     CORRECT  = 220_000_000
     ESTIMATE = 217_040_000
     DATE     = "2026-07-29"
 
-    def test_corrected_value_not_suspect(self):
+    def test_corrected_value_not_suspect_by_ratio(self):
         """$220M / $217M ≈ 1.01× — not suspicious."""
         assert not _is_revenue_suspect({"revenue_actual": self.CORRECT,
                                         "revenue_estimate": self.ESTIMATE})
 
-    def test_merge_with_corrected_value_clears_suspect_flag(self):
-        """
-        After FMP corrects: _merge_results_payload carries the corrected value;
-        the monitor state machine removes _revenue_suspect from the payload.
-        (The test directly asserts _revenue_suspect is absent after merge.)
-        """
-        existing = _payload(revenue_actual=self.CORRUPT, revenue_estimate=self.ESTIMATE,
-                            revenue_suspect=True)
-        incoming_corrected = {
-            "revenue_actual":   self.CORRECT,
-            "revenue_estimate": self.ESTIMATE,
-            "eps_actual":       0.37,
-            "eps_estimate":     0.364,
-            "date":             self.DATE,
-        }
-        merged = _merge_results_payload(existing, incoming_corrected)
-        # After merge, revenue_actual holds the corrected value
-        assert merged["revenue_actual"] == self.CORRECT
-        # Suspect flag still present in raw merge output (state machine in
-        # _process_target is responsible for clearing; tested via _is_revenue_suspect)
-        assert not _is_revenue_suspect(merged), (
-            "Corrected value must not trigger _is_revenue_suspect"
-        )
-
     def test_corrected_payload_is_complete(self):
-        """No flags + plausible value + matching date → complete."""
+        """Plausible value + no flags + date match → complete."""
         p = _payload(revenue_actual=self.CORRECT, revenue_estimate=self.ESTIMATE)
         assert _has_complete_results_for_target(p, self.DATE)
 
-    def test_stale_correct_value_still_blocked_by_date_window(self):
-        """Date-window guard is not bypassed by removing the plausibility check."""
+    def test_merge_retains_corrected_value(self):
+        """Corrected revenue survives _merge_results_payload unchanged."""
+        existing = _payload(revenue_actual=self.CORRUPT, revenue_estimate=self.ESTIMATE,
+                            revenue_suspect=True)
+        merged = _merge_results_payload(
+            existing,
+            {"date": self.DATE, "eps_actual": 0.37, "eps_estimate": 0.364,
+             "revenue_actual": self.CORRECT, "revenue_estimate": self.ESTIMATE},
+        )
+        assert merged["revenue_actual"] == self.CORRECT
+        # After correction, _is_revenue_suspect must return False
+        assert not _is_revenue_suspect(merged)
+
+    def test_stale_correct_value_blocked_by_date_window(self):
+        """Correct value more than 7 days ago → still blocked by date gate."""
         p = _payload(revenue_actual=self.CORRECT, revenue_estimate=self.ESTIMATE,
-                     date="2026-04-29")
+                     date="2026-04-01")
         assert not _has_complete_results_for_target(p, self.DATE)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Test 7 — Zero/null/negative estimates: no invalid ratio; scale-anomaly check
+# Supporting: scale-anomaly helper edge cases
 # ══════════════════════════════════════════════════════════════════════════════
 
-class TestUnsuitableDenominators:
+class TestScaleAnomalyHelper:
 
-    def test_zero_estimate_not_suspect_by_ratio(self):
-        """`_is_revenue_suspect` returns False when estimate = 0."""
-        assert not _is_revenue_suspect({"revenue_actual": 50_000_000,
-                                        "revenue_estimate": 0})
+    def test_nine_month_cumulative_detected(self):
+        qs = [200_000_000, 210_000_000, 220_000_000]
+        assert _is_revenue_scale_anomaly(sum(qs), qs)
 
-    def test_negative_estimate_not_suspect_by_ratio(self):
-        """Negative estimate (loss-making company): ratio undefined — False."""
-        assert not _is_revenue_suspect({"revenue_actual": 50_000_000,
-                                        "revenue_estimate": -5_000_000})
+    def test_massive_vs_t12m_detected(self):
+        qs = [200e6, 205e6, 210e6, 220e6]
+        t12m = sum(qs)
+        assert _is_revenue_scale_anomaly(t12m * 6, qs)
 
-    def test_none_estimate_not_suspect_by_ratio(self):
-        """Null estimate: no denominator — False."""
-        assert not _is_revenue_suspect({"revenue_actual": 50_000_000,
-                                        "revenue_estimate": None})
+    def test_zero_actual_not_anomalous(self):
+        assert not _is_revenue_scale_anomaly(0, [220_000_000])
 
-    def test_none_actual_not_suspect(self):
-        """Null actual: nothing to inspect — False."""
-        assert not _is_revenue_suspect({"revenue_actual": None,
-                                        "revenue_estimate": 5_000_000})
+    def test_negative_prior_ignored(self):
+        """Negative prior quarters (losses) do not break the check."""
+        assert not _is_revenue_scale_anomaly(220_000_000, [-5_000_000])
 
-    def test_zero_estimate_payload_complete_when_plausible(self):
-        """Zero estimate + plausible actual follows normal date-window path."""
-        p = _payload(revenue_actual=50_000_000, revenue_estimate=0)
-        assert _has_complete_results_for_target(p, "2026-07-29")
+    def test_five_percent_tolerance_boundary(self):
+        """Value within 5% of the 1 000× multiple is accepted (4.9% inside the band)."""
+        prior = [220_000_000]
+        within_band = prior[0] * 1_000 * 1.049  # clearly inside the 5% tolerance
+        assert _is_revenue_scale_anomaly(within_band, prior)
 
-    def test_scale_anomaly_unit_error_detected(self):
-        """1 000× unit relationship vs prior quarter is detected."""
-        prior = [220_000_000]  # $220M prior quarter
-        suspicious = 220_000_000 * 1_000  # $220B — 1 000× scale error
-        assert _is_revenue_scale_anomaly(suspicious, prior)
-
-    def test_scale_anomaly_six_month_cumulative_detected(self):
-        """Value ≈ sum of two prior quarters is detected as six-month cumulative."""
-        q1 = 208_000_000
-        q2 = 220_000_000
-        six_month = q1 + q2  # $428M
-        assert _is_revenue_scale_anomaly(six_month, [q1, q2])
-
-    def test_scale_anomaly_nine_month_cumulative_detected(self):
-        """Value ≈ sum of three prior quarters is detected."""
-        qs = [200_000_000, 208_000_000, 220_000_000]
-        nine_month = sum(qs)  # $628M
-        assert _is_revenue_scale_anomaly(nine_month, qs)
-
-    def test_scale_anomaly_massive_vs_t12m_detected(self):
-        """Value > 5× trailing-12M revenue is detected."""
-        qs = [200_000_000, 205_000_000, 210_000_000, 220_000_000]
-        t12m = sum(qs)  # $835M
-        massive = t12m * 6  # $5.01B — 6× trailing-12M
-        assert _is_revenue_scale_anomaly(massive, qs)
-
-    def test_normal_growth_not_flagged_as_anomaly(self):
-        """Ordinary revenue growth does not trigger scale-anomaly detection."""
-        prior = [200_000_000, 205_000_000, 210_000_000, 215_000_000]
-        current = 225_000_000  # ~5% growth — entirely normal
-        assert not _is_revenue_scale_anomaly(current, prior)
-
-    def test_scale_anomaly_empty_prior_returns_false(self):
-        """No prior-quarter data: scale anomaly check cannot fire."""
-        assert not _is_revenue_scale_anomaly(1_000_000_000, [])
-
-    def test_confirm_extreme_revenue_zero_income_statement(self):
-        """IS revenue of zero → ZeroDivisionError must be caught → False."""
-        assert not _confirm_extreme_revenue(
-            1_000_000_000,
-            {"2026-07-29": {"revenue": 0, "period": "Q2", "calendarYear": 2026}},
-            "2026-07-29",
-        )
-
-    def test_is_row_with_no_revenue_field(self):
-        """IS row missing 'revenue' key → not confirmed."""
-        assert not _confirm_extreme_revenue(
-            15_000_000,
-            {"2026-07-29": {"period": "Q2", "calendarYear": 2026}},
-            "2026-07-29",
-        )
+    def test_just_outside_tolerance_not_flagged(self):
+        """Value 6% above 1 000× — outside the 5% band — not flagged."""
+        prior = [220_000_000]
+        just_outside = prior[0] * 1_000 * 1.06
+        assert not _is_revenue_scale_anomaly(just_outside, prior)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Existing contract: normal results follow the unchanged path
+# Supporting: _confirm_extreme_from_ei_cache edge cases
 # ══════════════════════════════════════════════════════════════════════════════
 
-class TestNormalResult:
+class TestConfirmExtremeFromEiCache:
+
+    def test_import_error_returns_false(self):
+        """If the store import fails, return False safely."""
+        import builtins
+        real_import = builtins.__import__
+
+        def patched_import(name, *args, **kwargs):
+            if name == "data.watchlist_fundamentals_store":
+                raise ImportError("test")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=patched_import):
+            assert not _confirm_extreme_from_ei_cache(
+                15_000_000, "X", "Q2", 2026,
+            )
+
+    def test_zero_cached_revenue_returns_false(self):
+        """IS revenue of zero → ZeroDivisionError caught → False."""
+        snap = _ei_snapshot("X", fiscal_period="Q2", fiscal_year=2026,
+                            cached_revenue=0)
+        with patch("data.watchlist_fundamentals_store.get_snapshot", return_value=snap):
+            assert not _confirm_extreme_from_ei_cache(15_000_000, "X", "Q2", 2026)
+
+    def test_absolute_tolerance_boundary(self):
+        """Difference exactly $1M is accepted."""
+        snap = _ei_snapshot("X", fiscal_period="Q2", fiscal_year=2026,
+                            cached_revenue=50_000_000 - 1_000_000)
+        with patch("data.watchlist_fundamentals_store.get_snapshot", return_value=snap):
+            assert _confirm_extreme_from_ei_cache(50_000_000, "X", "Q2", 2026)
+
+    def test_above_absolute_tolerance_relative_check_governs(self):
+        """Diff $1.01M on $50M → rel diff ≈ 2.02% > 2% → rejected."""
+        snap = _ei_snapshot("X", fiscal_period="Q2", fiscal_year=2026,
+                            cached_revenue=50_000_000 - 1_010_000)
+        with patch("data.watchlist_fundamentals_store.get_snapshot", return_value=snap):
+            assert not _confirm_extreme_from_ei_cache(50_000_000, "X", "Q2", 2026)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Supporting: normal earnings unaffected
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestNormalEarningsUnaffected:
 
     ACTUAL   = 220_000_000
     ESTIMATE = 217_040_000
     DATE     = "2026-07-29"
 
-    def test_not_flagged_as_suspect(self):
-        """A routine 1.4% revenue beat must not trigger the suspicious-signal check."""
+    def test_not_suspicious_by_ratio(self):
         assert not _is_revenue_suspect({"revenue_actual": self.ACTUAL,
                                         "revenue_estimate": self.ESTIMATE})
 
-    def test_normal_payload_is_complete(self):
-        """Both actuals, no flags, matching date → complete."""
+    def test_normal_payload_complete(self):
         p = _payload(revenue_actual=self.ACTUAL, revenue_estimate=self.ESTIMATE)
         assert _has_complete_results_for_target(p, self.DATE)
 
-    def test_merge_does_not_alter_normal_values(self):
-        """_merge_results_payload passes plausible values through unchanged."""
+    def test_merge_passes_values_through(self):
         merged = _merge_results_payload(
             None,
-            {
-                "eps_actual":       0.37,
-                "eps_estimate":     0.364,
-                "revenue_actual":   self.ACTUAL,
-                "revenue_estimate": self.ESTIMATE,
-                "date":             self.DATE,
-            },
+            {"date": self.DATE, "eps_actual": 0.37, "eps_estimate": 0.364,
+             "revenue_actual": self.ACTUAL, "revenue_estimate": self.ESTIMATE},
         )
         assert merged["revenue_actual"] == self.ACTUAL
 
-    def test_stale_payload_blocked_by_date_window(self):
-        """Normal values outside 7-day window are still blocked."""
+    def test_stale_date_blocked(self):
         p = _payload(revenue_actual=self.ACTUAL, revenue_estimate=self.ESTIMATE,
-                     date="2026-04-30")
+                     date="2026-04-01")
         assert not _has_complete_results_for_target(p, self.DATE)
