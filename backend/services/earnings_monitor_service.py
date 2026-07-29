@@ -262,6 +262,34 @@ def _classify(eps_surprise: float | None, rev_surprise: float | None) -> str:
     return "mixed"
 
 
+def _is_revenue_suspect(payload: dict, *, threshold: float = 10.0) -> bool:
+    """
+    Return True when ``revenue_actual`` exceeds ``threshold`` × ``revenue_estimate``
+    in *payload*.
+
+    The 10× default (1 000 % implied beat) is intentionally conservative — genuine
+    earnings beats almost never reach that magnitude.  Values above the threshold are
+    treated as *suspicious*, not invalid: they trigger validation and re-polling rather
+    than outright rejection.
+
+    Returns False (never suspicious) when:
+      - either value is missing or None;
+      - ``revenue_estimate`` is zero, negative, or non-numeric — ratio-based
+        validation is undefined for those denominators (spec requirement).
+    """
+    rev_actual = payload.get("revenue_actual")
+    rev_est    = payload.get("revenue_estimate")
+    if rev_actual is None or rev_est is None:
+        return False
+    try:
+        e = float(rev_est)
+        if e <= 0:
+            return False
+        return float(rev_actual) > e * threshold
+    except (TypeError, ValueError):
+        return False
+
+
 # ── universe builder ──────────────────────────────────────────────────────────
 
 async def _build_universe() -> list[str]:
@@ -1030,6 +1058,42 @@ async def _process_target(
                     "date":               fmp_rec.get("date"),
                 }
                 rp = _merge_results_payload(existing_results, incoming_rp)
+
+                # ── Revenue verification state machine ────────────────────────
+                # When revenue_actual exceeds 10× revenue_estimate, one re-poll
+                # is needed before the result counts as complete.  A second
+                # consecutive sighting of the *same* extreme value from FMP is
+                # treated as sufficient provider-side confirmation (_revenue_verified).
+                # If FMP self-corrects on the re-poll, the plausible replacement
+                # value clears both flags and is accepted normally.
+                # Zero, null, or negative estimates bypass ratio validation.
+                _prior        = existing_results or {}
+                _prior_rev    = _prior.get("revenue_actual")
+                _prior_sus    = bool(_prior.get("_revenue_suspect"))
+                _prior_ver    = bool(_prior.get("_revenue_verified"))
+                _new_rev      = rp.get("revenue_actual")
+
+                if _is_revenue_suspect(rp):
+                    if _prior_ver and _new_rev == _prior_rev:
+                        # Value was already confirmed in a prior cycle — preserve.
+                        rp["_revenue_verified"] = True
+                        rp.pop("_revenue_suspect", None)
+                    elif _prior_sus and _new_rev == _prior_rev:
+                        # Second consecutive sighting of the same extreme value.
+                        # Promote: FMP is consistently reporting this figure.
+                        rp["_revenue_verified"] = True
+                        rp.pop("_revenue_suspect", None)
+                    else:
+                        # First detection, or value changed — flag as suspect.
+                        rp["_revenue_suspect"] = True
+                        rp.pop("_revenue_verified", None)
+                else:
+                    # Plausible value (or zero/null estimate) — clear both flags.
+                    # This branch fires when FMP self-corrects a previously
+                    # suspect value; the replacement is accepted without delay.
+                    rp.pop("_revenue_suspect", None)
+                    rp.pop("_revenue_verified", None)
+
                 new_checksum = _compute_checksum(rp)
                 has_eps = rp["eps_actual"] is not None
                 has_rev = rp["revenue_actual"] is not None
@@ -1214,31 +1278,47 @@ def _has_complete_results_for_target(
     payload: dict | None,
     expected_date: str | None,
 ) -> bool:
-    """True only for both actuals on the scheduled event, never a stale quarter.
+    """True only when both actuals are present, the date matches, and any
+    suspicious revenue value has been independently confirmed.
 
-    A results payload is considered complete only when:
-      - Both eps_actual and revenue_actual are non-null.
-      - The payload date is within 7 calendar days of expected_date.
-      - The revenue_actual passes a plausibility gate: actual must not exceed
-        10× the estimate.  A ratio > 10 (>1000 % beat) is a strong indicator of
-        a unit-normalization error in the upstream provider (e.g. FMP returning
-        a six-month cumulative value or a thousands-scaled value instead of the
-        correct quarterly dollar figure).  Rejecting such payloads forces a
-        re-poll on the next monitor tick so the provider can self-correct.
+    Completion rules
+    ----------------
+    1. Both ``eps_actual`` and ``revenue_actual`` must be non-null.
+    2. The payload ``date`` must fall within 7 calendar days of ``expected_date``.
+    3. Revenue plausibility — three cases (in priority order):
+
+       ``_revenue_verified = True``
+           A previous re-poll confirmed the extreme value (FMP returned it
+           consistently across two consecutive ticks).  The result is accepted
+           regardless of surprise magnitude.  Re-polling stops.
+
+       ``_revenue_suspect = True``
+           The value is pending confirmation.  Return False so the monitor
+           re-polls on the next tick.
+
+       Neither flag set, but ``_is_revenue_suspect`` fires
+           Edge-case guard for payloads written before the flag system existed
+           (e.g. a crash between merge and upsert on the very first detection).
+           Return False to force one re-poll, after which the flag will be set.
+
+       No flag, not suspicious
+           Normal path — no extra checks.
     """
     if not payload or payload.get("eps_actual") is None or payload.get("revenue_actual") is None:
         return False
     if not expected_date:
         return False
-    # Plausibility: revenue_actual > 10× estimate signals unit corruption.
-    rev_actual   = payload.get("revenue_actual")
-    rev_estimate = payload.get("revenue_estimate")
-    if rev_actual is not None and rev_estimate is not None:
-        try:
-            if float(rev_estimate) > 0 and float(rev_actual) > float(rev_estimate) * 10:
-                return False
-        except (TypeError, ValueError):
-            pass
+
+    if payload.get("_revenue_verified"):
+        # Independently confirmed — treat as complete regardless of magnitude.
+        pass
+    elif payload.get("_revenue_suspect"):
+        # Pending second-sighting confirmation — keep re-polling.
+        return False
+    elif _is_revenue_suspect(payload):
+        # Flag not yet written (first-poll edge-case) — force one re-poll.
+        return False
+
     try:
         from datetime import date as _date
         return abs((_date.fromisoformat(str(payload.get("date"))) -

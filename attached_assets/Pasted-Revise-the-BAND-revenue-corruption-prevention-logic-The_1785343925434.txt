@@ -1,0 +1,72 @@
+Revise the BAND revenue-corruption prevention logic.
+
+The immediate BAND data repair is correct and should remain. However, the new rule:
+
+revenue_actual > 10 × revenue_estimate
+
+must not be treated as proof that the value is invalid.
+
+A genuine extreme revenue surprise is rare but possible, especially with tiny or stale consensus estimates, limited analyst coverage, newly commercial companies, acquisitions, or accounting changes. The application must not suppress a real 1,000%+ beat merely because it is unusual.
+
+Required behavior
+
+1. Keep the 10× threshold only as a suspicious-data trigger.
+2. Do not permanently reject, null, or classify a result as incomplete solely because it exceeds that threshold.
+3. When triggered, use existing data paths to validate the result against available evidence:
+   - current provider re-poll
+   - previous-quarter revenue
+   - same quarter prior year
+   - trailing annual revenue
+   - existing income-statement data
+   - official earnings release or filing data already ingested
+   - fiscal period and duration
+   - source units
+4. If an independent reliable source confirms the extreme value, accept and display it even when it represents a 1,000%+ surprise.
+5. If it cannot yet be confirmed:
+   - do not cache or display it as authoritative
+   - keep it eligible for re-polling
+   - preserve the raw provider value for diagnostics if the existing payload supports that
+6. Do not fabricate a replacement value.
+7. Do not hardcode BAND.
+8. Do not introduce a broad new pipeline, provider, table, or worker.
+
+For _has_complete_results_for_target:
+
+- suspicious values should cause re-verification/re-polling
+- a value already independently confirmed must count as complete regardless of surprise magnitude
+- avoid an infinite hourly re-poll if the value has already been verified
+
+For watchlist_fundamentals_refresh:
+
+- do not write a suspicious unverified value into the canonical earnings cache
+- do write it once confirmed through an existing reliable source
+- do not silently turn a confirmed extraordinary result into null
+
+Tests
+
+Add cases proving:
+
+1. BAND-style corruption:
+   - estimate $217M
+   - provider actual $428B
+   - prior-quarter/filing evidence around $220M
+   - result is rejected pending correction
+
+2. Real extreme beat:
+   - estimate $1M
+   - actual $15M
+   - official quarterly source independently confirms $15M
+   - result is accepted and the 1,400% surprise is preserved
+
+3. Unconfirmed extreme result:
+   - remains pending verification
+   - is not cached as authoritative
+   - continues to be eligible for re-polling
+
+4. Normal result:
+   - follows the existing path unchanged
+
+5. Zero, null, or negative estimates:
+   - percentage-ratio validation is not used because the denominator is unsuitable
+
+Keep the correction surgical. The threshold is an anomaly signal, not a validity rule.

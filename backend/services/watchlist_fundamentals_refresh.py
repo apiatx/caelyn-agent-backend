@@ -306,6 +306,70 @@ def ei_ineligible_reason(symbol: str, snapshot: dict | None) -> str | None:
     return None
 
 
+def _confirm_extreme_revenue(
+    rev_actual: float,
+    income_by_filing: dict,
+    ev_date: str,
+    *,
+    tolerance: float = 2.0,
+) -> bool:
+    """
+    Return True when an income-statement row for *ev_date* (±7 days) independently
+    corroborates *rev_actual*.
+
+    An extreme ``revenue_actual`` (> 10× the provider estimate) is treated as
+    suspicious — a potential unit-normalization error — until an independent source
+    confirms it.  This function uses the quarterly income statement fetched in
+    batch A of ``_fetch_earnings_intelligence`` as that independent source.
+
+    Confirmation threshold
+    ----------------------
+    The income-statement ``revenue`` field must be within ±*tolerance*× of
+    ``rev_actual`` (default 2×, i.e. the ratio must lie in [0.5, 2.0]).
+
+    Returns False when
+    ------------------
+    - ``income_by_filing`` is empty (income statement fetch failed).
+    - No row matches ``ev_date`` (exact or within 7 calendar days).
+    - The matched row has no ``revenue`` value.
+    - The ratio falls outside the tolerance band (value contradicts IS data).
+
+    In all False cases the caller should treat the value as unconfirmed and
+    exclude it from the canonical earnings cache.  It remains eligible for
+    re-validation on the next EI refresh once income-statement data arrives.
+    """
+    if not income_by_filing or not ev_date:
+        return False
+
+    is_row = income_by_filing.get(ev_date)
+    if is_row is None:
+        from datetime import datetime as _dt
+        try:
+            ev_dt = _dt.strptime(ev_date, "%Y-%m-%d")
+        except ValueError:
+            return False
+        for fd, row in income_by_filing.items():
+            try:
+                if abs((ev_dt - _dt.strptime(fd, "%Y-%m-%d")).days) <= 7:
+                    is_row = row
+                    break
+            except (ValueError, TypeError):
+                continue
+
+    if is_row is None:
+        return False
+
+    inc_rev = is_row.get("revenue")
+    if inc_rev is None:
+        return False
+
+    try:
+        ratio = float(rev_actual) / float(inc_rev)
+        return (1.0 / tolerance) <= ratio <= tolerance
+    except (TypeError, ValueError, ZeroDivisionError):
+        return False
+
+
 class FmpFundamentalsRefresher:
     """
     Refreshes FMP fundamentals for a list of symbols.
@@ -1570,17 +1634,28 @@ class FmpFundamentalsRefresher:
             eps_est    = ev.get("epsEstimated")
             rev_actual = ev.get("revenueActual")
             rev_est    = ev.get("revenueEstimated")
-            # Plausibility: discard revenue_actual when it exceeds 10× the
-            # estimate.  A ratio above 10 (> 1000 % beat) is a strong signal
-            # of a provider unit-normalization error (e.g. FMP returning a
-            # six-month cumulative or a thousands-scaled value instead of the
-            # correct quarterly dollar figure).  Treating it as None prevents
-            # the corrupted value from being persisted in the EI cache and
-            # propagating to the ticker-detail earnings history display.
+            # Suspicious-revenue validation via income-statement cross-check.
+            # A ratio > 10× between actual and estimate is a possible provider
+            # unit-normalization error (e.g. FMP reporting six-month cumulative
+            # revenue, or a thousands-scaled value, instead of the correct
+            # quarterly dollar figure).  The threshold is a signal, not a
+            # validity rule.  We validate against the income-statement batch
+            # (already fetched in batch A) before caching.
+            #
+            # - Confirmed by IS (revenue within 2×): accept the extreme value;
+            #   a 1 000 %+ surprise can be real (acquisitions, new products,
+            #   stale or thin analyst coverage, accounting changes, etc.).
+            # - Not confirmed (IS absent, contradicts, or has no revenue):
+            #   set rev_actual = None — do NOT cache unverified extreme data.
+            #   The value remains eligible on the next EI refresh once the IS
+            #   data is available or corrected by the provider.
+            # - Zero, null, or negative estimates: percentage-ratio validation
+            #   is undefined; skip the check and use rev_actual as-is.
             if rev_actual is not None and rev_est is not None:
                 try:
                     if float(rev_est) > 0 and float(rev_actual) > float(rev_est) * 10:
-                        rev_actual = None
+                        if not _confirm_extreme_revenue(rev_actual, income_by_filing, ev_date):
+                            rev_actual = None
                 except (TypeError, ValueError):
                     pass
 
