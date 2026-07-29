@@ -372,11 +372,34 @@ async def sync_universe_background(
 # (which is always the default/first watchlist) so there is no cross-contamination.
 _BY_SYMS_UNIVERSE = "watchlist_by_syms"
 
-# In-flight guard: prevents concurrent duplicate FMP sync jobs for the same
-# universe key when repeated Watchlist polls, tab switches, or sort operations
-# arrive while a sync is already running.  Keyed by universe string.
-# Cleaned up unconditionally in a finally block inside _sync_for_explicit_symbols.
-_SYNC_INFLIGHT: set[str] = set()
+# ── Single-flight task registry ───────────────────────────────────────────────
+#
+# Replaces the boolean _SYNC_INFLIGHT set.  Semantics:
+#
+#   _SYNC_TASKS[universe]        — the active asyncio.Task wrapping the FMP
+#                                  fetch + Neon write for that universe.
+#                                  asyncio.Task is awaitable from multiple
+#                                  coroutines; all awaiters receive the same
+#                                  return value when the task completes.
+#
+#   _SYNC_TASK_SYMBOLS[universe] — the symbol set the active task was started
+#                                  with, used to detect whether a new request
+#                                  introduces symbols not yet covered.
+#
+#   _SYNC_PENDING[universe]      — symbols that arrived while a task was running
+#                                  but are not covered by it.  Consumed as a
+#                                  single follow-up expansion once the task is
+#                                  done.  The follow-up always covers the UNION
+#                                  of the completed-task symbols and the pending
+#                                  set, so the Neon universe never shrinks.
+#
+# All three dicts are keyed by the universe string (e.g. "watchlist_by_syms").
+# Entries are removed inside task.add_done_callback — guaranteed on success,
+# failure, and cancellation.
+#
+_SYNC_TASKS:        "dict[str, asyncio.Task[list[dict]]]" = {}  # type: ignore[type-arg]
+_SYNC_TASK_SYMBOLS: "dict[str, frozenset[str]]"           = {}
+_SYNC_PENDING:      "dict[str, set[str]]"                 = {}
 
 
 def _apply_monitor_timing(events: list[dict], timing_map: dict) -> list[dict]:
@@ -490,33 +513,64 @@ async def _sync_for_explicit_symbols(
     fmp_key:  str,
 ) -> list[dict]:
     """
-    Fetch FMP earnings for an explicit symbol set and cache under *universe*.
+    Awaitable single-flight FMP sync for *universe*.
 
-    FMP's earnings-calendar endpoint returns ALL companies for the date window
-    regardless of which symbols are passed.  The *symbols* param is forwarded
-    to _fetch_earnings_dates only for importance scoring; the actual filtering
-    to the requested symbol set is done here in Python.
+    Exactly one provider call runs per universe at a time:
 
-    Writes the filtered result to Neon under the given universe key.
-    Does NOT write if FMP returns zero events (transient API failure guard).
+    • If no task is active → creates a new asyncio.Task, registers it in
+      _SYNC_TASKS, and awaits it.  The task fetches FMP, filters to the
+      merged symbol set, and writes to Neon.
 
-    In-flight guard: returns [] immediately when another coroutine is already
-    syncing the same universe, preventing duplicate FMP calls from concurrent
-    Watchlist polls, tab switches, or sort operations.
+    • If a task is already active → awaits that same task.  All concurrent
+      callers — both synchronous (wait_for_sync=True) and background
+      (create_task path) — receive the task's actual return value.  No
+      duplicate FMP calls are made.
+
+    Symbol expansion: when the new *symbols* set introduces symbols not
+    covered by the in-flight task, the extras are recorded in _SYNC_PENDING.
+    After the task completes, _on_done schedules exactly one follow-up
+    expansion covering the full merged universe, so the Neon row is never
+    overwritten with a narrower symbol set.
+
+    Cleanup: _on_done runs unconditionally on success, failure, and
+    cancellation, clearing _SYNC_TASKS and _SYNC_TASK_SYMBOLS for this
+    universe so the next caller can start a fresh task.
     """
-    if universe in _SYNC_INFLIGHT:
-        print(
-            f"[user_earnings] _sync_for_explicit_symbols: {universe} already "
-            f"in-flight — skipping duplicate sync"
-        )
-        return []
-    _SYNC_INFLIGHT.add(universe)
-    try:
+    import asyncio as _aio_sf
+
+    # ── Re-use the existing task if one is already running ────────────────────
+    existing = _SYNC_TASKS.get(universe)
+    if existing is not None and not existing.done():
+        covered = _SYNC_TASK_SYMBOLS.get(universe, frozenset())
+        extra   = symbols - covered
+        if extra:
+            # Extra symbols not in the in-flight job: queue for follow-up.
+            _SYNC_PENDING.setdefault(universe, set()).update(symbols)
+            print(
+                f"[user_earnings] {universe}: {len(extra)} extra symbol(s) queued "
+                f"for follow-up expansion (in-flight covers {len(covered)})"
+            )
+        else:
+            print(
+                f"[user_earnings] {universe}: in-flight task covers all requested "
+                f"symbols — awaiting shared result"
+            )
+        # Await the shared task.  asyncio.Task is safe to await from multiple
+        # coroutines; all receive the same return value on completion.
+        return await existing
+
+    # ── Start a new task ──────────────────────────────────────────────────────
+    # Absorb any symbols already queued before this call.
+    pending_before = _SYNC_PENDING.pop(universe, set())
+    merged: frozenset[str] = frozenset(symbols | pending_before)
+    _SYNC_TASK_SYMBOLS[universe] = merged
+
+    async def _do() -> list[dict]:
         win_from = _today_str()
         win_to   = _window_end_str()
         print(
             f"[user_earnings] _sync_for_explicit_symbols universe={universe}: "
-            f"{len(symbols)} symbols, window={win_from}→{win_to}"
+            f"{len(merged)} symbols, window={win_from}→{win_to}"
         )
         try:
             from services.catalyst_calendar_service import (  # type: ignore
@@ -524,8 +578,8 @@ async def _sync_for_explicit_symbols(
                 _fetch_earnings_dates,
             )
             fmp = CatalystFMP(fmp_key)
-            # Pass requested symbols as *watchlist* — used for importance scoring only.
-            all_events = await _fetch_earnings_dates(fmp, win_from, win_to, symbols, set())
+            # Pass merged symbols as watchlist — used for importance scoring only.
+            all_events = await _fetch_earnings_dates(fmp, win_from, win_to, merged, set())
             if not all_events:
                 print(
                     f"[user_earnings] FMP returned 0 events (transient?) "
@@ -534,19 +588,51 @@ async def _sync_for_explicit_symbols(
                 return []
             filtered = [
                 ev for ev in all_events
-                if (ev.get("symbol") or "").upper() in symbols
+                if (ev.get("symbol") or "").upper() in merged
             ]
             print(
-                f"[user_earnings] _sync_for_explicit_symbols: "
-                f"{len(filtered)}/{len(all_events)} events match {len(symbols)} symbols"
+                f"[user_earnings] {universe}: "
+                f"{len(filtered)}/{len(all_events)} events match {len(merged)} symbols"
             )
-            _pg_write(universe, filtered, sorted(symbols), win_from, win_to)
+            _pg_write(universe, filtered, sorted(merged), win_from, win_to)
             return filtered
-        except Exception as e:
-            print(f"[user_earnings] _sync_for_explicit_symbols error (universe={universe}): {e}")
+        except Exception as _e:
+            print(f"[user_earnings] _sync_for_explicit_symbols error ({universe}): {_e}")
             return []
-    finally:
-        _SYNC_INFLIGHT.discard(universe)
+
+    try:
+        loop = _aio_sf.get_event_loop()
+    except RuntimeError:
+        loop = _aio_sf.new_event_loop()
+
+    task: "asyncio.Task[list[dict]]" = loop.create_task(_do())  # type: ignore[type-arg]
+    _SYNC_TASKS[universe] = task
+
+    def _on_done(t: "_aio_sf.Task[list[dict]]") -> None:  # type: ignore[type-arg]
+        # Always clear registry first so new callers see a clean slate.
+        _SYNC_TASKS.pop(universe, None)
+        _SYNC_TASK_SYMBOLS.pop(universe, None)
+        # Consume any symbols that arrived while this task was running.
+        pending_after = _SYNC_PENDING.pop(universe, set())
+        if pending_after and fmp_key and not t.cancelled():
+            extra_syms = pending_after - merged
+            if extra_syms:
+                # Schedule one follow-up covering all seen symbols.
+                # Uses the UNION so the Neon row is never narrowed.
+                all_syms: set[str] = set(merged) | pending_after
+                print(
+                    f"[user_earnings] {universe}: follow-up expansion for "
+                    f"{len(extra_syms)} new symbol(s) ({len(all_syms)} total)"
+                )
+                try:
+                    loop.create_task(
+                        _sync_for_explicit_symbols(universe, all_syms, fmp_key)
+                    )
+                except Exception as _cb_err:
+                    print(f"[user_earnings] {universe}: follow-up schedule error: {_cb_err}")
+
+    task.add_done_callback(_on_done)
+    return await task
 
 
 async def get_earnings_for_symbols(
