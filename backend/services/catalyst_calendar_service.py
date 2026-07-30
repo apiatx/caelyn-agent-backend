@@ -585,16 +585,22 @@ def _classify_event_family(
             return "treasury_snapshot"
         return "treasury_rate"
 
-    # 2. Treasury auctions (keyword before country — US-specific concept)
-    if re.search(r"\btreasury\s+(?:auction|bill|note|bond)\b", bag):
+    # 2. Treasury auctions (keyword before country — US-specific concept).
+    #    Requires explicit "auction" semantics so that "Treasury Bill Rate"
+    #    and "Treasury Bond Yield" do NOT classify as an auction.
+    if re.search(r"\bauction\b", bag):
         return "treasury_auction"
 
     # 3. Non-US events
     if country and country.upper() != "US":
         return "foreign"
 
-    # 4. FOMC / Fed (most specific first)
-    if re.search(r"\binterest\s+rate\s+decision\b", bag):
+    # 4. FOMC / Fed (most specific first).
+    #    Matches any "rate decision" — covers "Fed Rate Decision",
+    #    "Federal Funds Rate Decision", "FOMC Interest Rate Decision", etc.
+    #    Does NOT match "FOMC Minutes", "Fed Chair Press Conference", or
+    #    "Federal Reserve Beige Book" because those lack "rate decision".
+    if re.search(r"\brate\s+decision\b", bag):
         return "fomc_decision"
 
     if re.search(r"\bfomc\b", bag) and re.search(r"\bminutes\b", bag):

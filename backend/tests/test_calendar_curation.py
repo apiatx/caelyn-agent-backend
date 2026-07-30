@@ -200,6 +200,40 @@ def test_fomc_rate_decision_alt_title():
     assert tier == "critical"
 
 
+def test_fed_funds_rate_decision():
+    family, tier, _ = _fml("Federal Funds Rate Decision")
+    assert family == "fomc_decision"
+    assert tier == "critical"
+
+
+def test_fed_rate_decision():
+    family, tier, _ = _fml("Fed Rate Decision")
+    assert family == "fomc_decision"
+    assert tier == "critical"
+
+
+def test_fomc_rate_decision_no_interest():
+    family, tier, _ = _fml("FOMC Rate Decision")
+    assert family == "fomc_decision"
+    assert tier == "critical"
+
+
+def test_federal_reserve_rate_decision():
+    family, tier, _ = _fml("Federal Reserve Rate Decision")
+    assert family == "fomc_decision"
+    assert tier == "critical"
+
+
+def test_fomc_negative_not_decision():
+    """Titles with FOMC/Fed but no rate decision must NOT classify as fomc_decision."""
+    for title in ("FOMC Minutes", "FOMC Meeting Minutes",
+                  "Fed Chair Powell Speaks", "Fed Chair Press Conference",
+                  "Fed Barr Speech", "Federal Budget",
+                  "Federal Reserve Beige Book"):
+        family, _, _ = _fml(title)
+        assert family != "fomc_decision", f"got fomc_decision for {title!r}"
+
+
 def test_fomc_minutes():
     family, tier, reason = _fml("FOMC Minutes")
     assert family == "fomc_minutes"
@@ -431,6 +465,33 @@ def test_treasury_auction_bill():
     family, tier, _ = _fml("Treasury Bill Auction", country="US")
     assert family == "treasury_auction"
     assert tier == "major"
+
+
+def test_treasury_auction_20y_bond():
+    family, tier, _ = _fml("20-Year Bond Auction", country="US")
+    assert family == "treasury_auction"
+    assert tier == "major"
+
+
+def test_treasury_auction_5y_note():
+    family, tier, _ = _fml("5-Year Note Auction", country="US")
+    assert family == "treasury_auction"
+    assert tier == "major"
+
+
+def test_treasury_auction_of_bills():
+    family, tier, _ = _fml("Auction of 3-Month Treasury Bills", country="US")
+    assert family == "treasury_auction"
+    assert tier == "major"
+
+
+def test_treasury_not_auction_yield():
+    """Yield and rate observations must NOT classify as treasury_auction."""
+    for title in ("10-Year Treasury Yield", "Treasury Bond Yield",
+                  "2-Year Treasury Note Rate", "Treasury Bill Rate",
+                  "Treasury Note", "Treasury Bond"):
+        family, _, _ = _fml(title, country="US")
+        assert family != "treasury_auction", f"got treasury_auction for {title!r}"
 
 
 def test_treasury_rate_10y():
