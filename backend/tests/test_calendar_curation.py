@@ -234,6 +234,16 @@ def test_fomc_negative_not_decision():
         assert family != "fomc_decision", f"got fomc_decision for {title!r}"
 
 
+def test_generic_rate_decision_not_fomc():
+    """Generic rate decisions without Fed/FOMC context must NOT be fomc_decision."""
+    for title in ("Prime Rate Decision", "Mortgage Rate Decision",
+                  "Bank Lending Rate Decision"):
+        family, _, _ = _fml(title)
+        assert family != "fomc_decision", f"got fomc_decision for {title!r}"
+        # They should fall through to other_us (US, no keyword match)
+        assert family == "other_us", f"expected other_us, got {family} for {title!r}"
+
+
 def test_fomc_minutes():
     family, tier, reason = _fml("FOMC Minutes")
     assert family == "fomc_minutes"
@@ -483,6 +493,38 @@ def test_treasury_auction_of_bills():
     family, tier, _ = _fml("Auction of 3-Month Treasury Bills", country="US")
     assert family == "treasury_auction"
     assert tier == "major"
+
+
+def test_foreign_auction_german_bund():
+    """Foreign sovereign debt auction must classify as foreign, not treasury_auction."""
+    family, tier, _ = _fml("German 10-Year Bund Auction", country="DE")
+    assert family == "foreign"
+    assert tier == "context"
+
+
+def test_foreign_auction_uk_gilt():
+    family, tier, _ = _fml("UK Gilt Auction", country="GB")
+    assert family == "foreign"
+    assert tier == "context"
+
+
+def test_foreign_auction_japan_govt_bond():
+    family, tier, _ = _fml("Japanese Government Bond Auction", country="JP")
+    assert family == "foreign"
+    assert tier == "context"
+
+
+def test_foreign_auction_european_bond():
+    family, tier, _ = _fml("European Bond Auction", country="EU")
+    assert family == "foreign"
+    assert tier == "context"
+
+
+def test_corporate_bond_auction_not_treasury():
+    """US corporate bond auction must NOT classify as treasury_auction."""
+    family, _, _ = _fml("Corporate Bond Auction", country="US")
+    assert family != "treasury_auction", "corporate bond auction should not be treasury"
+    assert family == "other_us"
 
 
 def test_treasury_not_auction_yield():

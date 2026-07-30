@@ -585,22 +585,25 @@ def _classify_event_family(
             return "treasury_snapshot"
         return "treasury_rate"
 
-    # 2. Treasury auctions (keyword before country — US-specific concept).
-    #    Requires explicit "auction" semantics so that "Treasury Bill Rate"
-    #    and "Treasury Bond Yield" do NOT classify as an auction.
-    if re.search(r"\bauction\b", bag):
-        return "treasury_auction"
-
-    # 3. Non-US events
+    # 2. Non-US events (must run before treasury auction so foreign sovereign
+    #    debt auctions like "German 10-Year Bund Auction" classify as foreign).
     if country and country.upper() != "US":
         return "foreign"
 
+    # 3. US Treasury auctions. Requires explicit auction semantics and excludes
+    #    corporate bond auctions. Runs after the foreign gate so every event
+    #    reaching this check is a US event.
+    if re.search(r"\bauction\b", bag) and not re.search(r"\bcorporate\b", bag):
+        return "treasury_auction"
+
     # 4. FOMC / Fed (most specific first).
-    #    Matches any "rate decision" — covers "Fed Rate Decision",
-    #    "Federal Funds Rate Decision", "FOMC Interest Rate Decision", etc.
-    #    Does NOT match "FOMC Minutes", "Fed Chair Press Conference", or
-    #    "Federal Reserve Beige Book" because those lack "rate decision".
-    if re.search(r"\brate\s+decision\b", bag):
+    #    Requires BOTH "rate decision" semantics AND an explicit Fed/FOMC/
+    #    Federal Reserve / Federal Funds identifier so that generic rate
+    #    decisions like "Prime Rate Decision" or "Mortgage Rate Decision"
+    #    do NOT classify as FOMC.
+    if re.search(r"\brate\s+decision\b", bag) and re.search(
+        r"\b(?:fed\b|fomc\b|federal\s+(?:reserve|funds))\b", bag
+    ):
         return "fomc_decision"
 
     if re.search(r"\bfomc\b", bag) and re.search(r"\bminutes\b", bag):
