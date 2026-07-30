@@ -1,4 +1,32 @@
-# CaelynAI Backend — Codex Operating Rules
+# CaelynAI Backend — Coding Agent Operating Rules
+
+## Agent identity and report routing
+
+These rules apply to both:
+
+- Codex CLI
+- DeepSeek running through OpenCode
+
+Determine the active agent runtime from the environment in which you are
+operating.
+
+Use exactly one agent-specific final report path:
+
+- Codex CLI:
+  `/home/runner/workspace/.codex-reports/latest.md`
+- DeepSeek through OpenCode:
+  `/home/runner/workspace/.opencode-reports/latest.md`
+
+Never write to or overwrite the other agent's report file.
+
+The assigned report file is an operational artifact, not a production file.
+Never stage or commit it.
+
+The active agent may create its assigned report directory if it does not exist.
+
+Every completed task, including a read-only audit, must update the active
+agent's assigned `latest.md` report unless the user explicitly says not to
+create or update a report file.
 
 ## User authority and scope
 
@@ -54,8 +82,8 @@ Before editing:
 4. preserve all pre-existing user or agent work
 5. confirm local `main` is not behind or diverged from `origin/main`
 
-Codex may run `git fetch origin main --quiet` only to refresh remote tracking
-information before checking ahead/behind status.
+The active coding agent may run `git fetch origin main --quiet` only to refresh
+remote tracking information before checking ahead/behind status.
 
 If local `main` is behind or diverged, stop and report it. Do not create a
 workaround, clone, branch, worktree, merge, or alternate commit path.
@@ -64,16 +92,16 @@ workaround, clone, branch, worktree, merge, or alternate commit path.
 
 All edits must remain in the existing Replit working tree.
 
-Codex may:
+The active coding agent may:
 
 - inspect Git state
 - edit local files
 - run tests and validation
 - stage only exact approved task files
 - create exactly one local commit on `main`
-- write `.codex-reports/latest.md`
+- write its assigned agent-specific `latest.md` report
 
-Codex must never:
+The active coding agent must never:
 
 - push
 - pull
@@ -100,7 +128,7 @@ Before committing:
 2. stage exact paths only
 3. never use `git add .` or `git add -A`
 4. never stage runtime data, caches, logs, `.replit`, `.codex-reports`,
-   generated files, or unrelated dirty files
+   `.opencode-reports`, generated files, or unrelated dirty files
 5. show the staged file list and staged diff
 6. confirm only task-related files are staged
 
@@ -201,8 +229,8 @@ counts, and repeated structures.
 
 ## Database and persistent-state operations
 
-Codex may use existing database and application persistence paths when the
-requested task clearly requires them.
+The active coding agent may use existing database and application persistence
+paths when the requested task clearly requires them.
 
 The user's explicit task is sufficient authorization for ordinary, narrowly
 scoped writes required to complete that task.
@@ -280,9 +308,17 @@ Clearly distinguish task-related failures from unrelated pre-existing failures.
 
 ## Final report
 
-After the local commit, overwrite:
+After completing the task, overwrite the report assigned to the active agent:
 
-`/home/runner/workspace/.codex-reports/latest.md`
+- Codex CLI:
+  `/home/runner/workspace/.codex-reports/latest.md`
+- DeepSeek through OpenCode:
+  `/home/runner/workspace/.opencode-reports/latest.md`
+
+For an implementation task, write the report after the local commit.
+
+For an audit-only, read-only, or no-commit task, write the report after the
+audit and validation are complete. Do not create a commit.
 
 The report must contain:
 
@@ -300,6 +336,15 @@ The report must contain:
 - commit SHA and message
 - complete task commit diff
 
-Use the committed patch as the source of truth for the final diff.
+For an audit-only, read-only, or no-commit task:
 
-Stop after committing locally and writing the report. Never push.
+- include the exact files inspected
+- state that no production files were modified
+- mark the commit SHA and message as not applicable
+- mark the complete task commit diff as not applicable
+
+Use the committed patch as the source of truth for the final diff when a commit
+exists.
+
+Stop after writing the assigned report. For implementation tasks, this follows
+the local commit. Never push.

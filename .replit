@@ -11,6 +11,10 @@ localPort = 5001
 externalPort = 3000
 exposeLocalhost = true
 
+[[ports]]
+localPort = 6800
+externalPort = 6800
+
 [nix]
 packages = ["psmisc", "tmux"]
 channel = "stable-25_05"
