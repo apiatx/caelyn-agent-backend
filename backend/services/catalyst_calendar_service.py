@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -499,6 +500,169 @@ def _score_importance(
     return "low"
 
 
+# ── Macro signal classification helpers ──────────────────────────────────────
+# These add deterministic event_family, signal_tier, and signal_reason to
+# economic and Treasury calendar events so the frontend can distinguish
+# genuinely market-moving events from routine noise.
+
+_EVENT_FAMILY_TIERS: dict[str, str] = {
+    "fomc_decision":     "critical",
+    "cpi":               "major",
+    "ppi":               "major",
+    "pce":               "major",
+    "eci":               "major",
+    "payrolls":          "major",
+    "fomc_minutes":      "major",
+    "gdp":               "major",
+    "treasury_auction":  "major",
+    "fed_chair_speech":  "secondary",
+    "fed_speech":        "secondary",
+    "unemployment":      "secondary",
+    "jobless_claims":    "secondary",
+    "ism":               "secondary",
+    "pmi":               "secondary",
+    "retail_sales":      "secondary",
+    "consumer_sentiment":"secondary",
+    "housing":           "secondary",
+    "other_us":          "secondary",
+    "treasury_rate":     "context",
+    "treasury_snapshot": "context",
+    "foreign":           "context",
+}
+
+_EVENT_FAMILY_REASONS: dict[str, str] = {
+    "fomc_decision":     "Scheduled FOMC rate decision",
+    "fomc_minutes":      "FOMC meeting minutes",
+    "fed_chair_speech":  "Fed Chair policy remarks",
+    "fed_speech":        "Federal Reserve speech",
+    "cpi":               "Major consumer inflation release",
+    "ppi":               "Producer price inflation release",
+    "pce":               "Fed-preferred inflation measure",
+    "eci":               "Quarterly wage inflation measure",
+    "payrolls":          "Monthly payroll and labor-market release",
+    "unemployment":      "Unemployment rate release",
+    "jobless_claims":    "Weekly jobless claims",
+    "gdp":               "Gross domestic product release",
+    "ism":               "ISM business survey",
+    "pmi":               "Purchasing managers index",
+    "retail_sales":      "Retail sales release",
+    "consumer_sentiment":"Consumer sentiment survey",
+    "housing":           "Housing market data",
+    "treasury_auction":  "Treasury auction",
+    "treasury_rate":     "Routine Treasury yield observation",
+    "treasury_snapshot": "Treasury yield snapshot",
+    "other_us":          "US economic release",
+    "foreign":           "Foreign macro release",
+}
+
+
+def _classify_event_family(
+    event_type: str,
+    title: str,
+    event_name: str,
+    country: str,
+    maturity: str | None = None,
+    indicator_name: str | None = None,
+) -> str:
+    """
+    Classify a calendar event into a canonical family.
+
+    Precedence (most specific match runs first):
+      1. Treasury rate / snapshot (determined by eventType + title)
+      2. Treasury auction keyword
+      3. Non-US country → foreign
+      4. FOMC decision, minutes, Fed chair, Fed speech
+      5. Major indicators: CPI, PPI, PCE, ECI, payrolls, GDP
+      6. Secondary: unemployment, jobless claims, ISM, PMI, retail sales,
+         consumer sentiment, housing
+      7. Catch-all: other_us for US, foreign for non-US
+    """
+    bag = " ".join(filter(None, [title, event_name, indicator_name])).lower()
+
+    # 1. Treasury rate observations (eventType already set by fetcher)
+    if event_type == "treasury_rate":
+        if "treasury yield snapshot" in bag:
+            return "treasury_snapshot"
+        return "treasury_rate"
+
+    # 2. Treasury auctions (keyword before country — US-specific concept)
+    if re.search(r"\btreasury\s+(?:auction|bill|note|bond)\b", bag):
+        return "treasury_auction"
+
+    # 3. Non-US events
+    if country and country.upper() != "US":
+        return "foreign"
+
+    # 4. FOMC / Fed (most specific first)
+    if re.search(r"\binterest\s+rate\s+decision\b", bag):
+        return "fomc_decision"
+
+    if re.search(r"\bfomc\b", bag) and re.search(r"\bminutes\b", bag):
+        return "fomc_minutes"
+
+    if re.search(r"\bfed\s+chair\b", bag) or re.search(r"\bpowell\b", bag):
+        return "fed_chair_speech"
+
+    if re.search(r"\bfed\b", bag) and re.search(r"\b(?:speech|speaks|remarks|speaking)\b", bag):
+        return "fed_speech"
+
+    # 5. Major indicators
+    if re.search(r"\bcpi\b", bag) or re.search(r"\bconsumer\s+price\s+index\b", bag):
+        return "cpi"
+
+    if re.search(r"\bppi\b", bag) or re.search(r"\bproducer\s+price\s+index\b", bag):
+        return "ppi"
+
+    if re.search(r"\bpce\b", bag) or re.search(r"\bpersonal\s+consumption\s+expenditure\b", bag):
+        return "pce"
+
+    if re.search(r"\bemployment\s+cost\s+index\b", bag):
+        return "eci"
+
+    if re.search(r"\bnfp\b", bag) or re.search(r"\bnon-?farm\s+payroll", bag) or re.search(r"\bpayrolls?\s", bag):
+        return "payrolls"
+
+    if re.search(r"\bgdp\b", bag):
+        return "gdp"
+
+    # 6. Secondary indicators
+    if re.search(r"\bunemployment\s+rate\b", bag):
+        return "unemployment"
+
+    if re.search(r"\b(?:initial\s+)?jobless\s+claims\b", bag) or re.search(r"\binitial\s+claims\b", bag):
+        return "jobless_claims"
+
+    if re.search(r"\bism\b", bag):
+        return "ism"
+
+    if re.search(r"\bpmi\b", bag):
+        return "pmi"
+
+    if re.search(r"\bretail\s+sales\b", bag):
+        return "retail_sales"
+
+    if re.search(r"\bconsumer\s+(?:sentiment|confidence|expectations)\b", bag) or re.search(r"\bmichigan\b", bag):
+        return "consumer_sentiment"
+
+    if re.search(r"\b(?:housing|home\s+sales|building\s+permits)", bag):
+        return "housing"
+
+    return "other_us"
+
+
+def _compute_signal_tier(family: str) -> str:
+    """Return the signal importance tier for a given event family."""
+    return _EVENT_FAMILY_TIERS.get(family, "context")
+
+
+def _compute_signal_reason(family: str, country: str = "") -> str:
+    """Return a concise deterministic explanation for the event family."""
+    base = _EVENT_FAMILY_REASONS.get(family, "Economic release")
+    if family == "foreign" and country:
+        return f"Foreign macro release ({country})"
+    return base
+
+
 # Generic placeholder strings that must never appear as display_title.
 # If the resolution chain produces one of these, we escalate to richer fields.
 _GENERIC_DISPLAY_TITLES: frozenset[str] = frozenset({
@@ -610,6 +774,10 @@ def _build_event(**kw) -> dict:
         "value":              kw.get("value"),
         "previousValue":      kw.get("previousValue"),
         "indicatorName":      kw.get("indicatorName"),
+        # macro signal metadata (added February 2026)
+        "event_family":       kw.get("event_family"),
+        "signal_tier":        kw.get("signal_tier"),
+        "signal_reason":      kw.get("signal_reason"),
     }
 
 
@@ -1352,6 +1520,10 @@ async def _fetch_economic_releases(
             kd_parts.append(currency)
         key_details = " · ".join(kd_parts) or None
 
+        family = _classify_event_family("economic_release", title, title, country)
+        tier   = _compute_signal_tier(family)
+        reason = _compute_signal_reason(family, country)
+
         events.append(_build_event(
             id            = _event_id("economic_release", None, date, title[:30]),
             symbol        = "Macro",
@@ -1371,6 +1543,9 @@ async def _fetch_economic_releases(
             country       = country,
             eventName     = title,
             raw           = row,
+            event_family  = family,
+            signal_tier   = tier,
+            signal_reason = reason,
         ))
 
     print(f"[catalyst:debug] economic_releases raw={len(rows or [])} normalized={len(events)} skipped_date={missing_date}")
@@ -1426,6 +1601,8 @@ async def _fetch_treasury_macro(fmp: CatalystFMP) -> list[dict]:
         imp     = "high" if label in _TREASURY_HIGH_IMP else "medium"
         title   = f"{label} Treasury Rate"
         kd      = f"Yield: {val:.2f}%"
+
+        # Treasury rate observations are always context-level signal
         events.append(_build_event(
             id            = _event_id("treasury_rate", None, latest_date, label),
             symbol        = "Macro",
@@ -1443,6 +1620,9 @@ async def _fetch_treasury_macro(fmp: CatalystFMP) -> list[dict]:
             maturity      = label,
             indicatorName = f"{label} Treasury Rate",
             raw           = latest,
+            event_family  = "treasury_rate",
+            signal_tier   = "context",
+            signal_reason = "Routine Treasury yield observation",
         ))
 
     # ── Historical rows: one summary per date ──────────────────────────────────
@@ -1477,6 +1657,9 @@ async def _fetch_treasury_macro(fmp: CatalystFMP) -> list[dict]:
             maturity      = "10Y",
             indicatorName = "Treasury Yield Curve",
             raw           = row,
+            event_family  = "treasury_snapshot",
+            signal_tier   = "context",
+            signal_reason = "Treasury yield snapshot",
         ))
 
     print(f"[catalyst:debug] treasury_macro rows={len(rows)} emitted={len(events)}")

@@ -21,6 +21,12 @@ from services.calendar_curation import (
     curate_envelope,
     curate_events,
 )
+from services.catalyst_calendar_service import (
+    _classify_event_family,
+    _compute_signal_tier,
+    _compute_signal_reason,
+    _build_event,
+)
 
 
 def test_preferred_filter_drops_pa_pb_etc():
@@ -165,6 +171,359 @@ def test_cap_trims_to_top_n():
     ]
     out = curate_events("dividends", raw, cap=50)
     assert len(out) == 50
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Macro signal classification tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _fml(event_name: str, event_type: str = "economic_release", country: str = "US") -> tuple:
+    """Helper: classify and return (family, tier, reason)."""
+    family = _classify_event_family(event_type, event_name, event_name, country)
+    tier   = _compute_signal_tier(family)
+    reason = _compute_signal_reason(family, country)
+    return family, tier, reason
+
+
+# ── FOMC / Fed ───────────────────────────────────────────────────────────────
+
+def test_fomc_rate_decision():
+    family, tier, reason = _fml("Fed Interest Rate Decision")
+    assert family == "fomc_decision"
+    assert tier == "critical"
+    assert "FOMC" in reason or "rate decision" in reason
+
+
+def test_fomc_rate_decision_alt_title():
+    family, tier, reason = _fml("FOMC Interest Rate Decision")
+    assert family == "fomc_decision"
+    assert tier == "critical"
+
+
+def test_fomc_minutes():
+    family, tier, reason = _fml("FOMC Minutes")
+    assert family == "fomc_minutes"
+    assert tier == "major"
+    assert "minutes" in reason.lower()
+
+
+def test_fomc_minutes_alt():
+    family, tier, reason = _fml("FOMC Meeting Minutes")
+    assert family == "fomc_minutes"
+    assert tier == "major"
+
+
+def test_fed_chair_speech():
+    family, tier, reason = _fml("Fed Chair Powell Speaks")
+    assert family == "fed_chair_speech"
+    assert tier == "secondary"
+
+
+def test_fed_chair_speech_remarks():
+    family, tier, reason = _fml("Fed Chair Powell Remarks")
+    assert family == "fed_chair_speech"
+    assert tier == "secondary"
+
+
+def test_regional_fed_speech():
+    family, tier, reason = _fml("Fed Barr Speech")
+    assert family == "fed_speech"
+    assert tier == "secondary"
+
+
+def test_regional_fed_speaker():
+    family, tier, reason = _fml("Fed Williams Speaks")
+    assert family == "fed_speech"
+    assert tier == "secondary"
+
+
+def test_fed_speech_word_boundary():
+    """'Federal Budget' must NOT match fed_speech."""
+    family, tier, reason = _fml("Federal Budget Release")
+    assert family != "fed_speech", f"got {family}"
+
+    # FOMC without "minutes" should not match fomc_minutes
+    family2, _, _ = _fml("FOMC Press Conference")
+    assert family2 != "fomc_minutes"
+
+
+# ── Major inflation indicators ──────────────────────────────────────────────
+
+def test_cpi_headline():
+    family, tier, _ = _fml("CPI YoY")
+    assert family == "cpi"
+    assert tier == "major"
+
+
+def test_core_cpi_mom():
+    family, tier, _ = _fml("Core CPI MoM")
+    assert family == "cpi"
+    assert tier == "major"
+
+
+def test_cpi_consumer_price_index():
+    family, tier, _ = _fml("Consumer Price Index")
+    assert family == "cpi"
+    assert tier == "major"
+
+
+def test_ppi():
+    family, tier, _ = _fml("PPI MoM")
+    assert family == "ppi"
+    assert tier == "major"
+
+
+def test_core_ppi():
+    family, tier, _ = _fml("Core PPI MoM")
+    assert family == "ppi"
+    assert tier == "major"
+
+
+def test_pce_headline():
+    family, tier, _ = _fml("PCE Price Index")
+    assert family == "pce"
+    assert tier == "major"
+
+
+def test_core_pce():
+    family, tier, _ = _fml("Core PCE Price Index")
+    assert family == "pce"
+    assert tier == "major"
+
+
+def test_core_pce_mom():
+    family, tier, _ = _fml("Core PCE MoM")
+    assert family == "pce"
+    assert tier == "major"
+
+
+def test_eci():
+    family, tier, _ = _fml("Employment Cost Index")
+    assert family == "eci"
+    assert tier == "major"
+
+
+# ── Labor market ─────────────────────────────────────────────────────────────
+
+def test_nonfarm_payrolls():
+    family, tier, _ = _fml("Nonfarm Payrolls")
+    assert family == "payrolls"
+    assert tier == "major"
+
+
+def test_nfp():
+    family, tier, _ = _fml("NFP")
+    assert family == "payrolls"
+    assert tier == "major"
+
+
+def test_non_farm_payroll():
+    family, tier, _ = _fml("Non-Farm Payroll")
+    assert family == "payrolls"
+    assert tier == "major"
+
+
+def test_jobless_claims():
+    family, tier, _ = _fml("Initial Jobless Claims")
+    assert family == "jobless_claims"
+    assert tier == "secondary"
+
+
+def test_jobless_claims_short():
+    family, tier, _ = _fml("Initial Claims")
+    assert family == "jobless_claims"
+    assert tier == "secondary"
+
+
+def test_continuing_claims():
+    family, tier, _ = _fml("Continuing Jobless Claims")
+    assert family == "jobless_claims"
+    assert tier == "secondary"
+
+
+def test_unemployment_rate():
+    family, tier, _ = _fml("Unemployment Rate")
+    assert family == "unemployment"
+    assert tier == "secondary"
+
+
+# ── Growth ───────────────────────────────────────────────────────────────────
+
+def test_gdp():
+    family, tier, _ = _fml("GDP YoY")
+    assert family == "gdp"
+    assert tier == "major"
+
+
+def test_gdp_qoq():
+    family, tier, _ = _fml("GDP QoQ")
+    assert family == "gdp"
+    assert tier == "major"
+
+
+# ── Business surveys ─────────────────────────────────────────────────────────
+
+def test_ism_manufacturing():
+    family, tier, _ = _fml("ISM Manufacturing PMI")
+    assert family == "ism"
+    assert tier == "secondary"
+
+
+def test_ism_services():
+    family, tier, _ = _fml("ISM Services PMI")
+    assert family == "ism"
+    assert tier == "secondary"
+
+
+def test_pmi_manufacturing():
+    family, tier, _ = _fml("Manufacturing PMI")
+    assert family == "pmi"
+    assert tier == "secondary"
+
+
+# ── Consumer / housing ───────────────────────────────────────────────────────
+
+def test_retail_sales():
+    family, tier, _ = _fml("Retail Sales")
+    assert family == "retail_sales"
+    assert tier == "secondary"
+
+
+def test_consumer_sentiment():
+    family, tier, _ = _fml("Consumer Sentiment")
+    assert family == "consumer_sentiment"
+    assert tier == "secondary"
+
+
+def test_consumer_confidence():
+    family, tier, _ = _fml("Consumer Confidence")
+    assert family == "consumer_sentiment"
+    assert tier == "secondary"
+
+
+def test_housing_starts():
+    family, tier, _ = _fml("Housing Starts")
+    assert family == "housing"
+    assert tier == "secondary"
+
+
+def test_building_permits():
+    family, tier, _ = _fml("Building Permits")
+    assert family == "housing"
+    assert tier == "secondary"
+
+
+def test_existing_home_sales():
+    family, tier, _ = _fml("Existing Home Sales")
+    assert family == "housing"
+    assert tier == "secondary"
+
+
+# ── Treasury ─────────────────────────────────────────────────────────────────
+
+def test_treasury_auction():
+    family, tier, _ = _fml("10-Year Treasury Auction", country="US")
+    assert family == "treasury_auction"
+    assert tier == "major"
+
+
+def test_treasury_auction_bill():
+    family, tier, _ = _fml("Treasury Bill Auction", country="US")
+    assert family == "treasury_auction"
+    assert tier == "major"
+
+
+def test_treasury_rate_10y():
+    """Routine yield observation — context, not major."""
+    family, tier, _ = _fml("10Y Treasury Rate", event_type="treasury_rate")
+    assert family == "treasury_rate"
+    assert tier == "context"
+
+
+def test_treasury_rate_2y():
+    family, tier, _ = _fml("2Y Treasury Rate", event_type="treasury_rate")
+    assert family == "treasury_rate"
+    assert tier == "context"
+
+
+def test_treasury_yield_snapshot():
+    family, tier, _ = _fml("Treasury Yield Snapshot", event_type="treasury_rate")
+    assert family == "treasury_snapshot"
+    assert tier == "context"
+
+
+# ── Foreign ──────────────────────────────────────────────────────────────────
+
+def test_foreign_cpi():
+    family, tier, reason = _fml("CPI YoY", country="DE")
+    assert family == "foreign"
+    assert tier == "context"
+    assert "(DE)" in reason
+
+
+def test_foreign_eurozone():
+    family, tier, _ = _fml("CPI YoY", country="EU")
+    assert family == "foreign"
+    assert tier == "context"
+
+
+def test_foreign_no_country():
+    family, tier, _ = _fml("Some Release", country="JP")
+    assert family == "foreign"
+    assert tier == "context"
+
+
+# ── Catch-all ────────────────────────────────────────────────────────────────
+
+def test_other_us():
+    family, tier, _ = _fml("Some Lesser Follow-up Release")
+    assert family == "other_us"
+    assert tier == "secondary"
+
+
+def test_other_us_tier_not_context():
+    """US events that don't match any keyword still get secondary, not context."""
+    family, tier, _ = _fml("State Level Industrial Data")
+    assert family == "other_us"
+    assert tier == "secondary"
+
+
+# ── Existing importance and event contract ───────────────────────────────────
+
+def test_importance_unchanged():
+    """Verify the existing importance field is NOT changed by new fields."""
+    ev = _build_event(
+        id="test", eventType="economic_release", date="2026-05-01",
+        title="CPI YoY", country="US", importance="high",
+    )
+    assert ev["importance"] == "high"
+    assert "event_family" in ev
+    assert "signal_tier" in ev
+    assert "signal_reason" in ev
+
+
+def test_existing_keys_present():
+    """All canonical event keys must survive."""
+    ev = _build_event(
+        id="e1", eventType="economic_release", date="2026-05-01",
+        title="Test", country="US", importance="medium",
+    )
+    for k in ("id", "eventType", "date", "title", "importance", "country"):
+        assert k in ev, f"missing key {k}"
+    for k in ("event_family", "signal_tier", "signal_reason"):
+        assert k in ev, f"missing new key {k}"
+
+
+# ── No provider, schema, cache, or scheduler changes ────────────────────────
+
+def test_no_new_imports():
+    """The classification helpers must not import httpx, cache, or DB modules."""
+    import inspect
+    src = inspect.getsource(_classify_event_family)
+    assert "httpx" not in src
+    assert "cache" not in src
+    assert "psycopg" not in src
+    assert "neon" not in src.lower()
 
 
 if __name__ == "__main__":
