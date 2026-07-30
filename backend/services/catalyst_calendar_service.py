@@ -590,10 +590,19 @@ def _classify_event_family(
     if country and country.upper() != "US":
         return "foreign"
 
-    # 3. US Treasury auctions. Requires explicit auction semantics and excludes
-    #    corporate bond auctions. Runs after the foreign gate so every event
-    #    reaching this check is a US event.
-    if re.search(r"\bauction\b", bag) and not re.search(r"\bcorporate\b", bag):
+    # 3. US Treasury auctions. Requires explicit Treasury security semantics
+    #    (treasury, bill, note, or bond) together with auction semantics so
+    #    that generic auctions ("Oil Lease Auction", "Spectrum Auction") and
+    #    non-Treasury bond auctions ("Corporate Bond Auction", "Municipal Bond
+    #    Auction") do NOT classify as treasury_auction.
+    #    Runs after the foreign gate so every event reaching this check is US.
+    if (
+        (re.search(r"\btreasury\b", bag) and re.search(r"\bauction\b", bag))
+        or (
+            re.search(r"\b(?:bill\s+auction|note\s+auction|bond\s+auction)\b", bag)
+            and not re.search(r"\b(?:corporate|municipal)\b", bag)
+        )
+    ):
         return "treasury_auction"
 
     # 4. FOMC / Fed (most specific first).

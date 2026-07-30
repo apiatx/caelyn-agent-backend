@@ -495,6 +495,18 @@ def test_treasury_auction_of_bills():
     assert tier == "major"
 
 
+def test_treasury_auction_of_notes():
+    family, tier, _ = _fml("Auction of 10-Year Treasury Notes", country="US")
+    assert family == "treasury_auction"
+    assert tier == "major"
+
+
+def test_treasury_auction_of_bonds():
+    family, tier, _ = _fml("Auction of 30-Year Treasury Bonds", country="US")
+    assert family == "treasury_auction"
+    assert tier == "major"
+
+
 def test_foreign_auction_german_bund():
     """Foreign sovereign debt auction must classify as foreign, not treasury_auction."""
     family, tier, _ = _fml("German 10-Year Bund Auction", country="DE")
@@ -525,6 +537,20 @@ def test_corporate_bond_auction_not_treasury():
     family, _, _ = _fml("Corporate Bond Auction", country="US")
     assert family != "treasury_auction", "corporate bond auction should not be treasury"
     assert family == "other_us"
+
+
+def test_municipal_bond_auction_not_treasury():
+    family, _, _ = _fml("Municipal Bond Auction", country="US")
+    assert family != "treasury_auction"
+    assert family == "other_us"
+
+
+def test_generic_auction_not_treasury():
+    """Generic US auctions without Treasury security semantics must NOT classify as treasury_auction."""
+    for title in ("Oil Lease Auction", "Spectrum Auction", "Government Asset Auction"):
+        family, _, _ = _fml(title, country="US")
+        assert family != "treasury_auction", f"got treasury_auction for {title!r}"
+        assert family == "other_us", f"expected other_us, got {family} for {title!r}"
 
 
 def test_treasury_not_auction_yield():
