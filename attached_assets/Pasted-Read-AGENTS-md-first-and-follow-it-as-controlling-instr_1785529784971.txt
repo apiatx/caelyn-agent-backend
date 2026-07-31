@@ -1,0 +1,179 @@
+Read AGENTS.md first and follow it as controlling instructions.
+
+This is a focused deployment recovery task. Do not broadly refactor startup.
+
+We now have proven Git facts:
+
+- current HEAD: cdee8d3e
+- prior local commit: a5f5f926
+- origin/main: 4534397a
+- local main is ahead of origin/main by 2 commits
+- the startup fix has therefore not been pushed to origin/main
+- cdee8d3e has a suspicious message indicating backend cache/data synchronization
+
+Do not publish or push anything until the two local commits are audited.
+
+## Phase 1 — audit the two unpushed commits
+
+Run and report:
+
+git show --stat --oneline a5f5f926
+git show --name-status a5f5f926
+git show --stat --oneline cdee8d3e
+git show --name-status cdee8d3e
+git diff --name-status origin/main..main
+git diff --cached --name-only
+git status -sb
+
+For each commit, identify:
+
+- exact production files changed
+- runtime cache/data files changed
+- configuration files changed
+- whether the change is required for deployment startup
+- whether it is safe to push
+
+Do not push cdee8d3e if it contains runtime cache files, memory artifacts, report
+files, or unrelated data synchronization.
+
+## Phase 2 — verify the real pre-yield path
+
+The current code starts _heavy_import_task near line 459 but does not reach the
+actual lifespan yield until approximately line 1254.
+
+Audit every synchronous import or blocking call executed between:
+
+- creation of _heavy_import_task
+- the actual yield
+
+Specifically inspect all code between those points, not only the heavy-service
+import.
+
+Identify:
+
+- synchronous imports
+- filesystem reads
+- database calls
+- module initialization side effects
+- provider initialization
+- functions called directly
+- imports performed inside try blocks before yield
+
+Measure cold-style timing for each proven blocker.
+
+Important:
+
+asyncio.create_task(_post_yield_bootstrap()) before yield does not make the app
+ready. Starlette does not complete startup until the actual yield executes.
+
+The log line saying “healthcheck now active” before yield is misleading. Do not
+use that log as proof of readiness.
+
+## Phase 3 — determine the smallest safe deployment commit
+
+Preferred outcome:
+
+1. Preserve only the valid startup fix from a5f5f926.
+2. Exclude unrelated cache/data/config changes from cdee8d3e.
+3. If additional pre-yield blockers are proven, change only those exact imports
+   or calls.
+4. Do not create a second lifespan or startup framework.
+5. Do not move required core initialization after readiness without proving it
+   is optional.
+6. Do not dynamically hide failures or suppress tracebacks.
+
+If a5f5f926 alone is valid and sufficient:
+
+- create a clean commit containing only its required production changes
+- do not include cdee8d3e runtime data changes
+
+If a5f5f926 is already a clean standalone commit, it may be pushed after cold
+validation, but cdee8d3e must still be audited and excluded if unrelated.
+
+Do not reset, rebase, amend, or force-push without first reporting the exact safe
+plan.
+
+## Required cold-start validation
+
+Use the actual production run command from .replit.
+
+Test from a clean process, not a warm restart.
+
+Record timestamps for:
+
+- process start
+- uvicorn port bind
+- lifespan entry
+- actual lifespan yield
+- application startup complete
+- first HTTP 200 from GET /
+- heavy-service imports complete
+- post-yield bootstrap complete
+
+Probe repeatedly during startup:
+
+curl -sS -o /tmp/root.out -w "%{http_code}\n" \
+  --max-time 2 http://127.0.0.1:5000/
+
+The first HTTP 200 must happen only after the actual lifespan yield and within
+the Replit Autoscale health-check deadline.
+
+Also verify:
+
+- core routes function
+- insider/congressional/whale routes become available
+- post-yield failures print full tracebacks
+- no runtime data files are staged
+
+## Git restrictions
+
+Before staging, show:
+
+git diff --name-only
+git diff --cached --name-only
+git status -sb
+
+Stage exact production paths only.
+
+Never use:
+
+git add .
+git add -A
+
+Do not stage:
+
+- backend/data runtime caches
+- LKG files
+- snapshot files
+- AGENTS.md
+- .replit unless a proven deployment-command fix is required
+- report files
+- memory files
+
+Create one clean deployment-fix commit only after validation succeeds.
+
+Push only that clean commit to origin/main.
+
+Then verify:
+
+git log -3 --oneline --decorate
+git status -sb
+git log --oneline origin/main..main
+
+The final origin/main must contain the startup fix and must not contain unrelated
+runtime cache synchronization.
+
+## Final response
+
+Return only:
+
+1. exact latest failed deployment SHA
+2. whether it contained a5f5f926
+3. files in a5f5f926
+4. files in cdee8d3e
+5. whether cdee8d3e is safe or must be excluded
+6. exact remaining pre-yield blocker, if any
+7. cold-start time to actual yield
+8. time to first GET / 200
+9. clean commit SHA pushed to origin/main
+10. confirmation that no runtime cache/data files were pushed
