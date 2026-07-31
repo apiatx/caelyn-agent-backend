@@ -1086,7 +1086,7 @@ async def lifespan(app):
                 load_catalog_lkg as _d2x_load_lkg,
                 refresh_catalog  as _d2x_refresh_catalog,
             )
-            _d2x_load_lkg()
+            await asyncio.to_thread(_d2x_load_lkg)
 
             async def _defiance_2x_daily_loop():
                 await asyncio.sleep(120)
@@ -1107,7 +1107,7 @@ async def lifespan(app):
         _t = _bst.monotonic()
         try:
             from services.canonical_history_service import preload_index as _canon_preload
-            _canon_preload()
+            await asyncio.to_thread(_canon_preload)
             _BOOTSTRAP_STATE["steps"]["canon_preload"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
         except Exception as _e:
             print(f"[BOOTSTRAP] Canonical history index preload error: {_e}")
@@ -1120,7 +1120,7 @@ async def lifespan(app):
                 load_lkg                    as _wl_stage2_load,
                 warmup_stage2_all_watchlists as _wl_stage2_warmup,
             )
-            _wl_stage2_load()
+            await asyncio.to_thread(_wl_stage2_load)
             asyncio.create_task(_wl_stage2_warmup(startup_delay_s=60.0))
             _BOOTSTRAP_STATE["steps"]["stage2_lkg"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
         except Exception as _e:
@@ -1152,7 +1152,7 @@ async def lifespan(app):
         _t = _bst.monotonic()
         try:
             from data.options_screener_snapshot import load_state as _load_opt_snapshot
-            _load_opt_snapshot()
+            await asyncio.to_thread(_load_opt_snapshot)
             _BOOTSTRAP_STATE["steps"]["opt_snapshot"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
         except Exception as _e:
             print(f"[BOOTSTRAP] Options snapshot state load error: {_e}")
@@ -1165,7 +1165,7 @@ async def lifespan(app):
                 _load_all_earn_snaps_from_disk   as _load_earn_snaps,
                 _earnings_curated_precompute_loop as _earn_precompute_loop,
             )
-            _load_earn_snaps()
+            await asyncio.to_thread(_load_earn_snaps)
             asyncio.create_task(_earn_precompute_loop())
             _BOOTSTRAP_STATE["steps"]["earn_snaps"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
         except Exception as _e:
@@ -1176,10 +1176,12 @@ async def lifespan(app):
         #    immediately using saved Neon data. Zero Tradier calls. One DB round-trip.
         #    Recovers score/IV/OI/EM/signal for ~15-30 symbols that have saved contract
         #    snapshots; all others remain queued for the next regular-session scan.
+        #    NOTE: wrapped in asyncio.to_thread because the cold Neon connection can
+        #    take 5-10s and would block GET / if called directly on the event loop.
         _t = _bst.monotonic()
         try:
             from data.options_theme_supplement import run_neon_recovery_now as _neon_rec
-            _neon_rec()
+            await asyncio.to_thread(_neon_rec)
             _BOOTSTRAP_STATE["steps"]["neon_recovery"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
         except Exception as _e:
             print(f"[BOOTSTRAP] Neon snapshot recovery error (non-fatal): {_e}")
