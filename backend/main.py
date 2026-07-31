@@ -423,20 +423,40 @@ async def lifespan(app):
     # ── Lazy-load services that pull in heavy deps (edgar, psycopg2 pool) ────
     # Keeping these out of module-level imports cuts cold-start by ~3-5s.
     # Routes are registered here before the yield so all endpoints are live.
-    from services.insider_activity_service import (
-        router as _insider_router,
-        insider_activity_background_loop as _insider_bg_loop,
-    )
-    from services.congressional_trading_service import (
-        router as _cong_router,
-        congressional_trading_background_loop as _cong_bg_loop,
-    )
-    from services.whale_watch_service import (
-        router as _whale_router,
-        whale_watch_background_loop as _whale_bg_loop,
-        _create_tables as _whale_create_tables,
-        seed_whales as _seed_whales,
-    )
+    #
+    # CRITICAL: run imports in a thread so the asyncio event loop is NOT blocked.
+    # insider_activity_service alone takes ~8-9s on cold start (edgartools heavy
+    # dep).  Running these imports synchronously on the event loop prevents GET /
+    # from responding during that window, causing the autoscale health-check to
+    # return 500 / context-deadline-exceeded for the full import duration and
+    # ultimately failing the promote step.  asyncio.to_thread() offloads all
+    # three imports to a daemon thread; the event loop stays free to serve GET /
+    # while the imports run, so the first 200 arrives within ~1s of uvicorn
+    # binding port 5000 rather than ~9s later.
+    def _import_heavy_services():
+        from services.insider_activity_service import (
+            router as _ir,
+            insider_activity_background_loop as _ibg,
+        )
+        from services.congressional_trading_service import (
+            router as _cr,
+            congressional_trading_background_loop as _cbg,
+        )
+        from services.whale_watch_service import (
+            router as _wr,
+            whale_watch_background_loop as _wbg,
+            _create_tables as _wct,
+            seed_whales as _sw,
+        )
+        return _ir, _ibg, _cr, _cbg, _wr, _wbg, _wct, _sw
+
+    (
+        _insider_router, _insider_bg_loop,
+        _cong_router,   _cong_bg_loop,
+        _whale_router,  _whale_bg_loop,
+        _whale_create_tables, _seed_whales,
+    ) = await asyncio.to_thread(_import_heavy_services)
+
     app.include_router(_insider_router, prefix="/api")
     app.include_router(_cong_router, prefix="/api")
     app.include_router(_whale_router, prefix="/api")
