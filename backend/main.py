@@ -450,16 +450,15 @@ async def lifespan(app):
         )
         return _ir, _ibg, _cr, _cbg, _wr, _wbg, _wct, _sw
 
-    (
-        _insider_router, _insider_bg_loop,
-        _cong_router,   _cong_bg_loop,
-        _whale_router,  _whale_bg_loop,
-        _whale_create_tables, _seed_whales,
-    ) = await asyncio.to_thread(_import_heavy_services)
-
-    app.include_router(_insider_router, prefix="/api")
-    app.include_router(_cong_router, prefix="/api")
-    app.include_router(_whale_router, prefix="/api")
+    # Fire the heavy imports in the background WITHOUT awaiting here.
+    # Awaiting this thread before yield blocked the lifespan for 6-8s on a
+    # cold production container (edgartools + psycopg2 pool init), which caused
+    # the autoscale health-check probe to time out before GET / could be served.
+    # The task is awaited in _post_yield_bootstrap(), which runs after yield so
+    # the event loop is already free and GET / responds immediately.
+    _heavy_import_task: asyncio.Task = asyncio.create_task(
+        asyncio.to_thread(_import_heavy_services)
+    )
     # ── Deferred synchronous startup — background thread ────────────────────
     # All Neon DB calls and disk reads that previously ran inline here blocked
     # the lifespan event for ~12s AFTER a ~30s import phase (module-level Neon
@@ -692,20 +691,12 @@ async def lifespan(app):
     # The function is preserved below for reference.  Old /api/sector-rotation/dashboard and
     # /api/sectors/page-data endpoints still work lazily (populated on first request via sr:dashboard:v1).
     # asyncio.create_task(_sector_rotation_precompute_loop())
-    asyncio.create_task(_insider_bg_loop())
-    asyncio.create_task(_cong_bg_loop())
     try:
         from services.canonical_history_backfill import start_maintenance_scheduler as _canon_maint_start
         _canon_maint_start()
     except Exception as _canon_maint_err:
         print(f"[STARTUP] canonical history maintenance scheduler failed to start: {_canon_maint_err}")
     asyncio.create_task(_hl_boot_and_run(_hl_state))
-    try:
-        # _whale_create_tables() moved to _deferred_sync_startup() — cold Neon was adding 5-8s
-        asyncio.create_task(_seed_whales())
-    except Exception as _e:
-        print(f"[STARTUP] Whale Watch seed task error: {_e}")
-    asyncio.create_task(_whale_bg_loop())
     try:
         from services.bittensor.router import _dashboard_refresh_loop as _bittensor_refresh_loop
         asyncio.create_task(_bittensor_refresh_loop())
@@ -1028,6 +1019,31 @@ async def lifespan(app):
         _bt0 = _bst.monotonic()
         _BOOTSTRAP_STATE["started_at"] = _bt0
         print("[BOOTSTRAP] post-yield bootstrap starting")
+
+        # 0. Await the heavy service imports that were fired before yield and
+        #    register their routers now.  Doing this post-yield means GET / can
+        #    respond 200 immediately; these routes become available within the
+        #    time the imports take (~2-8s on cold start).
+        try:
+            (
+                _insider_router, _insider_bg_loop,
+                _cong_router,   _cong_bg_loop,
+                _whale_router,  _whale_bg_loop,
+                _whale_create_tables_pv, _seed_whales_pv,
+            ) = await _heavy_import_task
+            app.include_router(_insider_router, prefix="/api")
+            app.include_router(_cong_router, prefix="/api")
+            app.include_router(_whale_router, prefix="/api")
+            asyncio.create_task(_insider_bg_loop())
+            asyncio.create_task(_cong_bg_loop())
+            try:
+                asyncio.create_task(_seed_whales_pv())
+            except Exception as _sw_err:
+                print(f"[BOOTSTRAP] Whale Watch seed task error: {_sw_err}")
+            asyncio.create_task(_whale_bg_loop())
+            print("[BOOTSTRAP] insider/congressional/whale routers + background loops registered post-yield")
+        except Exception as _hv_err:
+            print(f"[BOOTSTRAP] Heavy service import failed (non-fatal): {_hv_err}")
 
         # 0a. Earnings tick loop — autoscale-native, always on, no env-var gate.
         #     Wakes every 60s, processes only due earnings_monitor_targets.

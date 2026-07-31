@@ -1,34 +1,46 @@
 ---
 name: Lifespan import event-loop block
-description: Heavy service imports inside async lifespan block asyncio event loop, causing autoscale health-check failures
+description: Heavy service imports inside async lifespan block the health-check window — must fire as background task, not awaited before yield
 ---
 
 ## The Rule
-Any synchronous `import` statement inside an `async def lifespan()` function blocks the asyncio event loop for its full duration. During that time, uvicorn cannot serve any HTTP requests — including the health-check probe at `GET /`.
+Never `await asyncio.to_thread(heavy_import)` before the `yield` in an `async def lifespan()`. Even though `asyncio.to_thread` runs the import in a thread (keeping the event loop technically free), Starlette does NOT serve HTTP requests until the lifespan yields. So the health-check probe at `GET /` gets no response for the entire await duration.
+
+**Correct pattern**: fire the import as `asyncio.create_task(asyncio.to_thread(...))` before yield, then `await` the task inside `_post_yield_bootstrap()` and register routers there.
 
 ## Why
-Python module imports are synchronous and CPU/IO-bound. They acquire the import lock on the calling thread (the event loop thread). While the import runs, no other coroutines can be scheduled. The autoscale proxy at port 1104 sees no HTTP response → returns 500 → opens its circuit breaker → continues returning 500 even after the import finishes, exhausting the health-check budget.
+- `await asyncio.to_thread(f)` before yield: event loop is free but Starlette holds incoming connections until yield. Health probe times out.
+- `asyncio.create_task(asyncio.to_thread(f))` before yield: same import runs in background; lifespan yields immediately; GET / responds 200 in <1s; routers available a few seconds later (acceptable).
+- In dev, warm `.pyc` files made the import take ~0.68s — health check passed by luck. In production cold start, the same import takes ~6s — health check deadline exceeded every time.
 
-`insider_activity_service` (pulls in `edgartools`) takes ~8.5s to import cold. Combined with other imports, the lifespan blocked for ~9s before yielding. The health-check window is ~40-77s total, but the proxy circuit-breaker cooldown consumed most of that budget.
+## Symptom Pattern
+Deploy logs (deployment_*.log):
+- "status 500" for first 30-40s (proxy returning 500 before uvicorn binds)
+- "context deadline exceeded" immediately after uvicorn starts
+- No `[UNHANDLED_500]` in app logs (FastAPI never got the request)
+- Build status: `failed` at promote step
 
 ## How to Apply
-Any service imported in the lifespan for route registration must be imported via `asyncio.to_thread()`:
 
 ```python
-def _import_heavy_services():
-    from services.insider_activity_service import router as _ir, ...
-    from services.congressional_trading_service import router as _cr, ...
-    from services.whale_watch_service import router as _wr, ...
-    return _ir, ..., _cr, ..., _wr, ...
+# WRONG — awaiting before yield blocks Starlette from serving GET /
+await asyncio.to_thread(_import_heavy_services)
+app.include_router(...)
+yield
 
-(
-    _insider_router, _insider_bg_loop,
-    _cong_router,   _cong_bg_loop,
-    _whale_router,  _whale_bg_loop,
-    _whale_create_tables, _seed_whales,
-) = await asyncio.to_thread(_import_heavy_services)
+# CORRECT — fire without awaiting; yield immediately; register routers post-yield
+_heavy_import_task = asyncio.create_task(asyncio.to_thread(_import_heavy_services))
+# ... other fast setup ...
+asyncio.create_task(_post_yield_bootstrap())
+yield
+
+async def _post_yield_bootstrap():
+    _ir, _bg, ... = await _heavy_import_task   # awaits here, after yield
+    app.include_router(_ir, prefix="/api")
+    asyncio.create_task(_bg())
+    # ... rest of bootstrap ...
 ```
 
-Result: lifespan yields in 0.68s instead of ~9s. GET / responds within ~1s of uvicorn binding port 5000.
+**Result**: lifespan yields in 0.01s. Bootstrap (including import) completes in ~2.74s. All routes available within ~3s of startup.
 
-**Symptom pattern**: deploy logs show "status 500" for entire promote window, no `[UNHANDLED_500]` log lines (the 500 comes from the proxy, not FastAPI), health-check never passes.
+**Why:** Any service with background loops must have those loops started in the same post-yield block where the router is registered — the loop functions are local to the import and unavailable outside that scope.
