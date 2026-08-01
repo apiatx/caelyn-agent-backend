@@ -502,10 +502,12 @@ def test_pce_variants_produce_one_macro_entry(monkeypatch):
             "current_week": [
                 _make_macro_ev(id="x1", title="PCE Price Index MoM",
                                event_family="pce", signal_tier="major",
-                               date="2026-04-30"),
+                               date="2026-04-30", actual=0.2, estimate=0.3,
+                               previous=0.1, unit="%"),
                 _make_macro_ev(id="x2", title="Core PCE Price Index MoM",
                                event_family="pce", signal_tier="major",
-                               date="2026-04-30"),
+                               date="2026-04-30", actual=0.1, estimate=0.2,
+                               previous=0.1, unit="%"),
             ],
             "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
             "status": "ready",
@@ -513,10 +515,17 @@ def test_pce_variants_produce_one_macro_entry(monkeypatch):
     })
     env = get_top_catalysts()
     macro_entries = [m for d in env["days"] for m in d["macro"]]
-    # PCE is NOT in the whitelist — should not appear at all
-    pce_entries = [m for m in macro_entries if
-                   "PCE" in (str(m.get("macroType") or "") + str(m.get("title") or ""))]
-    assert len(pce_entries) == 0
+    pce_entries = [m for m in macro_entries if m.get("macroType") == "PCE"]
+    assert len(pce_entries) == 1, f"expected 1 PCE entry, got {len(pce_entries)}"
+    entry = pce_entries[0]
+    assert entry["macroType"] == "PCE"
+    assert entry["type"] == "macro_family"
+    assert "children" in entry
+    assert entry["event_count"] == 2
+    assert entry["actual"] == 0.1  # Core PCE MoM lead
+    assert entry["estimate"] == 0.2
+    assert entry["previous"] == 0.1
+    assert entry.get("unit") == "%"
 
 
 def test_gdp_variants_produce_one_macro_entry(monkeypatch):
@@ -817,3 +826,158 @@ def test_existing_response_envelope_fields_unchanged(monkeypatch):
     assert "last_updated" in env
     assert "status" in env
     assert len(env["days"]) == 5
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PCE / ECI Top Catalysts integration tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_eci_variants_produce_one_entry(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="e1", title="Employment Cost Index QoQ",
+                               event_family="eci", signal_tier="major",
+                               date="2026-04-29", actual=0.9, estimate=1.0,
+                               previous=0.8, unit="%"),
+                _make_macro_ev(id="e2", title="Employment Cost Index YoY",
+                               event_family="eci", signal_tier="major",
+                               date="2026-04-29", actual=3.5, unit="%"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    macro_entries = [m for d in env["days"] for m in d["macro"]]
+    eci_entries = [m for m in macro_entries if m.get("macroType") == "ECI"]
+    assert len(eci_entries) == 1, f"expected 1 ECI entry, got {len(eci_entries)}"
+    entry = eci_entries[0]
+    assert entry["macroType"] == "ECI"
+    assert entry["type"] == "macro_family"
+    assert entry["event_count"] == 2
+    assert entry["actual"] == 0.9  # ECI QoQ lead
+    assert entry["estimate"] == 1.0
+    assert entry["previous"] == 0.8
+    assert entry.get("unit") == "%"
+
+
+def test_eci_children_preserved(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="e1", title="Employment Cost Index QoQ",
+                               event_family="eci", signal_tier="major",
+                               date="2026-04-29"),
+                _make_macro_ev(id="e2", title="Employment Cost Index YoY",
+                               event_family="eci", signal_tier="major",
+                               date="2026-04-29"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    eci_entries = [m for d in env["days"] for m in d["macro"] if m.get("macroType") == "ECI"]
+    assert len(eci_entries) == 1
+    entry = eci_entries[0]
+    assert "children" in entry
+    assert isinstance(entry["children"], list)
+    assert entry["event_count"] == 2
+
+
+def test_foreign_pce_excluded(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="fp1", title="PCE Price Index MoM",
+                               event_family="pce", signal_tier="major",
+                               date="2026-04-29", country="EU"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    macro_entries = [m for d in env["days"] for m in d["macro"]]
+    assert len(macro_entries) == 0
+
+
+def test_foreign_eci_excluded(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="fe1", title="Employment Cost Index",
+                               event_family="eci", signal_tier="major",
+                               date="2026-04-29", country="JP"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    macro_entries = [m for d in env["days"] for m in d["macro"]]
+    assert len(macro_entries) == 0
+
+
+def test_pce_cpi_ppi_gdp_eci_counts_with_families(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="c1", title="CPI MoM", event_family="cpi",
+                               signal_tier="major", date="2026-04-29"),
+                _make_macro_ev(id="c2", title="Core CPI MoM", event_family="cpi",
+                               signal_tier="major", date="2026-04-29"),
+                _make_macro_ev(id="p1", title="PPI MoM", event_family="ppi",
+                               signal_tier="major", date="2026-04-29"),
+                _make_macro_ev(id="x1", title="PCE Price Index MoM",
+                               event_family="pce", signal_tier="major",
+                               date="2026-04-30"),
+                _make_macro_ev(id="x2", title="Core PCE MoM",
+                               event_family="pce", signal_tier="major",
+                               date="2026-04-30"),
+                _make_macro_ev(id="e1", title="Employment Cost Index QoQ",
+                               event_family="eci", signal_tier="major",
+                               date="2026-04-29"),
+                _make_macro_ev(id="g1", title="GDP Growth Rate QoQ",
+                               event_family="gdp", signal_tier="major",
+                               date="2026-04-30"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    macro_entries = [m for d in env["days"] for m in d["macro"]]
+    macro_types = [m["macroType"] for m in macro_entries]
+    assert "CPI" in macro_types
+    assert "PPI" in macro_types
+    assert "PCE" in macro_types
+    assert "ECI" in macro_types
+    assert "GDP" in macro_types
+    assert len(macro_entries) == 5, f"expected 5 family entries, got {len(macro_entries)}"

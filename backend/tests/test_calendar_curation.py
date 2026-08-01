@@ -1020,6 +1020,89 @@ def test_family_id_is_stable():
     assert result1[0]["id"] == result2[0]["id"]
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# PPI lead-metric precedence correction tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_ppi_all_four_variants_selects_core_mom():
+    evs = [
+        _make_econ(id="pp1", title="Core PPI MoM", event_family="ppi",
+                   signal_tier="major", actual=0.1, unit="%"),
+        _make_econ(id="pp2", title="PPI MoM", event_family="ppi",
+                   signal_tier="major", actual=0.2, unit="%"),
+        _make_econ(id="pp3", title="Core PPI YoY", event_family="ppi",
+                   signal_tier="major", actual=2.0, unit="%"),
+        _make_econ(id="pp4", title="PPI YoY", event_family="ppi",
+                   signal_tier="major", actual=2.5, unit="%"),
+    ]
+    result = group_economic_events_to_families(evs)
+    card = result[0]
+    assert card["lead_metric"] == "Core Ppi Mom"
+    assert card["actual"] == 0.1
+
+
+def test_ppi_without_core_mom_selects_ppi_mom():
+    evs = [
+        _make_econ(id="pp1", title="PPI MoM", event_family="ppi",
+                   signal_tier="major", actual=0.2, unit="%"),
+        _make_econ(id="pp2", title="Core PPI YoY", event_family="ppi",
+                   signal_tier="major", actual=2.0, unit="%"),
+        _make_econ(id="pp3", title="PPI YoY", event_family="ppi",
+                   signal_tier="major", actual=2.5, unit="%"),
+    ]
+    result = group_economic_events_to_families(evs)
+    card = result[0]
+    assert card["lead_metric"] == "Ppi Mom"
+    assert card["actual"] == 0.2
+
+
+def test_ppi_only_yoy_selects_core_yoy():
+    evs = [
+        _make_econ(id="pp1", title="Core PPI YoY", event_family="ppi",
+                   signal_tier="major", actual=2.0, unit="%"),
+        _make_econ(id="pp2", title="PPI YoY", event_family="ppi",
+                   signal_tier="major", actual=2.5, unit="%"),
+    ]
+    result = group_economic_events_to_families(evs)
+    card = result[0]
+    assert card["lead_metric"] == "Core Ppi Yoy"
+    assert card["actual"] == 2.0
+
+
+def test_ppi_children_unchanged():
+    evs = [
+        _make_econ(id="pp1", title="PPI MoM", event_family="ppi", signal_tier="major"),
+        _make_econ(id="pp2", title="Core PPI YoY", event_family="ppi", signal_tier="major"),
+    ]
+    result = group_economic_events_to_families(evs)
+    card = result[0]
+    assert len(card["children"]) == 2
+    assert card["children"][0]["id"] == "pp1"
+    assert card["children"][1]["id"] == "pp2"
+
+
+def test_ppi_grouping_deterministic():
+    evs = [
+        _make_econ(id="pp1", title="PPI MoM", event_family="ppi", signal_tier="major"),
+        _make_econ(id="pp2", title="Core PPI YoY", event_family="ppi", signal_tier="major"),
+    ]
+    result1 = group_economic_events_to_families(evs)
+    result2 = group_economic_events_to_families(evs)
+    assert result1[0]["lead_metric"] == result2[0]["lead_metric"]
+    assert result1[0]["actual"] == result2[0]["actual"]
+
+
+def test_ppi_no_source_mutation():
+    evs = [
+        _make_econ(id="pp1", title="PPI MoM", event_family="ppi", signal_tier="major"),
+        _make_econ(id="pp2", title="Core PPI YoY", event_family="ppi", signal_tier="major"),
+    ]
+    before = [dict(ev) for ev in evs]
+    group_economic_events_to_families(evs)
+    for i, ev in enumerate(evs):
+        assert ev == before[i]
+
+
 if __name__ == "__main__":
     # Tiny self-running mode without pytest.
     fns = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]

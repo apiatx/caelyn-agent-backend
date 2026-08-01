@@ -90,13 +90,17 @@ _MACRO_WHITELIST_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
      re.compile(r"\b(?:cpi|consumer\s+price\s+index|inflation\s+rate)\b", re.I)),
     ("PPI",
      re.compile(r"\b(?:ppi|producer\s+price\s+index)\b", re.I)),
+    ("PCE",
+     re.compile(r"\b(?:pce|personal\s+consumption\s+expenditure)\b", re.I)),
+    ("ECI",
+     re.compile(r"\b(?:eci|employment\s+cost\s+index)\b", re.I)),
     ("NFP",
      re.compile(r"(?:\bnfp\b|non[-\s]?farm\s+payroll|nonfarm\s+payroll|"
-                r"employment\s+change|payrolls?\s+report)", re.I)),
+                 r"employment\s+change|payrolls?\s+report)", re.I)),
     ("FOMC",
      re.compile(r"\b(?:fomc|federal\s+reserve|fed(?:\s+funds)?(?:\s+rate)?\s+"
-                r"decision|interest\s+rate\s+decision|fed\s+chair|"
-                r"fed\s+minutes)\b", re.I)),
+                 r"decision|interest\s+rate\s+decision|fed\s+chair|"
+                 r"fed\s+minutes)\b", re.I)),
     ("GDP",
      re.compile(r"\bgdp\b", re.I)),
     ("Treasury Auctions",
@@ -494,6 +498,8 @@ def _normalize_macro_event(ev: dict, tag: str) -> dict:
 _FAMILY_TO_TOP_TAG: dict[str, str] = {
     "cpi": "CPI",
     "ppi": "PPI",
+    "pce": "PCE",
+    "eci": "ECI",
     "gdp": "GDP",
 }
 

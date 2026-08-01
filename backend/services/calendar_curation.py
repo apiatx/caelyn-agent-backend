@@ -514,8 +514,8 @@ _LEAD_PRECEDENCE: dict[str, list[str]] = {
     ],
     "ppi": [
         "core ppi mom",
-        "core ppi yoy",
         "ppi mom",
+        "core ppi yoy",
         "ppi yoy",
     ],
     "pce": [
