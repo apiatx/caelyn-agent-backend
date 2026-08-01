@@ -22,6 +22,7 @@ from services.home_top_catalysts import (
     _effective_tier_val,
     _is_us_macro,
     _logical_event_name,
+    _normalize_date,
     _normalize_time,
     _resolve_parent_reason,
     _resolve_parent_tier,
@@ -469,6 +470,66 @@ def test_lower_tier_child_never_provides_reason():
                         date="2026-04-28")
     reason = _resolve_parent_reason([second, major], "major")
     assert reason == "major_reason"
+
+
+def test_normalize_date_valid_vs_none():
+    assert _normalize_date("2026-04-29") < _normalize_date(None)
+    assert _normalize_date(None) == "~"
+
+
+def test_normalize_date_valid_vs_empty():
+    assert _normalize_date("2026-04-29") < _normalize_date("")
+    assert _normalize_date("") == "~"
+
+
+def test_normalize_date_valid_vs_whitespace():
+    assert _normalize_date("2026-04-29") < _normalize_date("   ")
+    assert _normalize_date("   ") == "~"
+
+
+def test_normalize_date_valid_vs_malformed():
+    assert _normalize_date("2026-04-29") < _normalize_date("not-a-date")
+
+
+def test_normalize_date_earlier_wins():
+    assert _normalize_date("2026-04-28") < _normalize_date("2026-04-29")
+
+
+def test_dated_beats_undated_same_tier():
+    undated = _make_econ(id="ud1", title="No Date Event", eventName="No Date",
+                         country="US", signal_tier="major",
+                         signal_reason="undated", date=None, importance="high")
+    dated = _make_econ(id="dd1", title="Dated Event", eventName="Dated",
+                       country="US", signal_tier="major",
+                       signal_reason="dated", date="2026-04-29", importance="high")
+    reason = _resolve_parent_reason([undated, dated], "major")
+    assert reason == "dated"
+
+
+def test_dated_beats_blank_date_same_tier():
+    blank = _make_econ(id="bl1", title="Blank Date", eventName="Blank",
+                       country="US", signal_tier="major",
+                       signal_reason="blank", date="", importance="high")
+    dated = _make_econ(id="bd1", title="Dated Event", eventName="Dated",
+                       country="US", signal_tier="major",
+                       signal_reason="dated", date="2026-04-29", importance="high")
+    reason = _resolve_parent_reason([blank, dated], "major")
+    assert reason == "dated"
+
+
+def test_undated_critical_beats_dated_major():
+    undated_crit = _make_econ(id="uc1", title="Critical No Date", eventName="Crit",
+                              country="US", signal_tier="critical",
+                              signal_reason="critical_undated", date=None)
+    dated_major = _make_econ(id="dm1", title="Major Dated", eventName="Major",
+                             country="US", signal_tier="major",
+                             signal_reason="major_dated", date="2026-04-29")
+    reason = _resolve_parent_reason([undated_crit, dated_major], "critical")
+    assert reason == "critical_undated"
+
+
+def test_normalize_date_iso_truncated():
+    assert _normalize_date("2026-04-29T08:30:00")[:10] < _normalize_date(None)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

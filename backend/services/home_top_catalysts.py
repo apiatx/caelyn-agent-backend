@@ -474,6 +474,18 @@ def _normalize_time(t: object) -> str:
     return str(t).strip()
 
 
+def _normalize_date(d: object) -> str:
+    """Push missing / malformed dates to end so valid dates sort first."""
+    if d is None:
+        return "~"
+    s = str(d).strip()
+    if s == "":
+        return "~"
+    if len(s) >= 10 and s[:10].startswith(("202", "201", "200", "199")):
+        return s[:10]
+    return "~"
+
+
 def _resolve_parent_tier(children: list[dict]) -> str:
     """Return the strongest effective signal_tier across children."""
     best_val = -1
@@ -491,8 +503,8 @@ def _resolve_parent_reason(children: list[dict], best_tier: str) -> str:
     Return the signal_reason from the strongest / earliest child.
     Tie-breaking (deterministic):
       1.  strongest effective signal tier  (critical > major > secondary > context)
-      2.  earliest event date
-      3.  earliest normalized event time (missing → last)
+      2.  valid event date before missing date; then earliest date
+      3.  valid event time before missing time; then earliest time
       4.  original source order (enumerate before sort)
       5.  lexical title (only if source order is unavailable)
     """
@@ -500,7 +512,7 @@ def _resolve_parent_reason(children: list[dict], best_tier: str) -> str:
     indexed.sort(
         key=lambda pair: (
             -_effective_tier_val(pair[1]),
-            pair[1].get("date") or "",
+            _normalize_date(pair[1].get("date")),
             _normalize_time(pair[1].get("time")),
             pair[0],
             _logical_event_name(pair[1]).lower(),
@@ -569,7 +581,7 @@ def _build_macro_group(cat_id: str, events: list[dict], week_start: str) -> dict
         events,
         key=lambda e: (
             -_TIER_ORDER.get((e.get("signal_tier") or "").lower(), 0),
-            e.get("date") or "",
+            _normalize_date(e.get("date")),
         ),
     )
 
