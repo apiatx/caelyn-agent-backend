@@ -405,10 +405,13 @@ def _snapshot_is_stale(slot: Optional[dict], tab: str) -> bool:
 
     Rules:
     • No slot or empty current_week → always stale.
-    • For horizon tabs: if events exist, also check horizon_end covers
-      the current ET Friday.  A snapshot with a recent last_updated but
-      an insufficient horizon_end is stale.
-    • For ALL tabs: expected window starts on ET Monday (the current
+    • For horizon tabs: if events exist, staleness is driven ONLY by
+      horizon_end covering the current ET Friday.  A snapshot with a recent
+      last_updated but an insufficient horizon_end is stale.  A horizon tab
+      that covers Friday is NOT stale even though its stored window.from is
+      the horizon start (today - past_days), which is intentionally before
+      the current week Monday.
+    • For all other tabs: expected window starts on ET Monday (the current
       Mon–Fri calendar week). Stale if stored_from is before that date.
     Do NOT compare against last_updated / snapshot date — compare only
     against the window.from date that was recorded when the data was fetched.
@@ -431,11 +434,12 @@ def _snapshot_is_stale(slot: Optional[dict], tab: str) -> bool:
             horizon_end = meta.get("horizon_end") or ""
             if not horizon_end or horizon_end < friday.strftime("%Y-%m-%d"):
                 return True
-            # Horizon covers Friday — only stale if current_week is empty
-            # AND stored_from is outdated (no events from events in this window).
-            if not cw:
-                return True
-            return stored_from < expected_from.strftime("%Y-%m-%d")
+            # Rolling horizon covers Friday → fresh.  For horizon tabs,
+            # stored_from is the horizon START (today - past_days), not the
+            # current week Monday, so the legacy week-rotation comparison
+            # below does NOT apply here.  A complete horizon means the
+            # current week is always within the cached collection.
+            return False
         # No events — fall through to legacy check.
         if not cw:
             return True

@@ -245,6 +245,87 @@ def test_horizon_tab_stale_when_horizon_end_before_friday():
     assert _snapshot_is_stale(slot, "economic_releases") is True
 
 
+def test_fresh_horizon_tab_not_stale():
+    """
+    A freshly refreshed horizon tab is NOT stale even though window.from is
+    the horizon start (today - past_days), which precedes the current Monday.
+    Regression: the legacy stored_from < Monday comparison must not apply
+    to horizon tabs, otherwise every request triggered a background FMP refresh.
+    """
+    from services.calendar_snapshot_service import (
+        _et_now, _horizon_window_for,
+    )
+    today = _et_now().date()
+    monday = today - timedelta(days=today.weekday())
+    friday = monday + timedelta(days=4)
+    hfrom, hto = _horizon_window_for()
+    assert hfrom < monday.isoformat()  # horizon start is before this week Monday
+    assert hto >= friday.isoformat()   # horizon covers the current Friday
+    slot = {
+        "current_week": [_make_econ(monday.isoformat())],
+        "previous_week": [],
+        "events": [_make_econ(monday.isoformat())],
+        "meta": {
+            "window": {"from": hfrom, "to": hto},
+            "horizon_start": hfrom,
+            "horizon_end": hto,
+        },
+    }
+    assert _snapshot_is_stale(slot, "economic_releases") is False
+
+
+def test_horizon_tab_not_stale_when_end_equals_friday():
+    """horizon_end exactly on the current Friday is not stale."""
+    from services.calendar_snapshot_service import _et_now
+    today = _et_now().date()
+    monday = today - timedelta(days=today.weekday())
+    friday = monday + timedelta(days=4)
+    slot = {
+        "current_week": [_make_econ(monday.isoformat())],
+        "previous_week": [],
+        "events": [_make_econ(monday.isoformat())],
+        "meta": {
+            "window": {"from": monday.isoformat()},
+            "horizon_end": friday.isoformat(),
+        },
+    }
+    assert _snapshot_is_stale(slot, "economic_releases") is False
+
+
+def test_horizon_tab_stale_when_end_is_day_before_friday():
+    """horizon_end one day before the current Friday is stale."""
+    from services.calendar_snapshot_service import _et_now
+    today = _et_now().date()
+    monday = today - timedelta(days=today.weekday())
+    friday = monday + timedelta(days=4)
+    slot = {
+        "current_week": [_make_econ(monday.isoformat())],
+        "previous_week": [],
+        "events": [_make_econ(monday.isoformat())],
+        "meta": {
+            "window": {"from": monday.isoformat()},
+            "horizon_end": (friday - timedelta(days=1)).isoformat(),
+        },
+    }
+    assert _snapshot_is_stale(slot, "economic_releases") is True
+
+
+def test_horizon_tab_stale_when_no_horizon_end():
+    """A horizon tab with events but no horizon_end meta is stale."""
+    from services.calendar_snapshot_service import _et_now
+    today = _et_now().date()
+    monday = today - timedelta(days=today.weekday())
+    slot = {
+        "current_week": [_make_econ(monday.isoformat())],
+        "previous_week": [],
+        "events": [_make_econ(monday.isoformat())],
+        "meta": {
+            "window": {"from": monday.isoformat()},
+        },
+    }
+    assert _snapshot_is_stale(slot, "economic_releases") is True
+
+
 # ── Horizon tab identity ────────────────────────────────────────────────────
 
 def test_economic_releases_has_horizon():
