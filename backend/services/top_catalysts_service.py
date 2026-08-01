@@ -91,7 +91,7 @@ _MACRO_WHITELIST_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("PPI",
      re.compile(r"\b(?:ppi|producer\s+price\s+index)\b", re.I)),
     ("PCE",
-     re.compile(r"\b(?:pce|personal\s+consumption\s+expenditure)\b", re.I)),
+     re.compile(r"\b(?:pce|personal\s+consumption\s+expenditures?)\b", re.I)),
     ("ECI",
      re.compile(r"\b(?:eci|employment\s+cost\s+index)\b", re.I)),
     ("NFP",

@@ -981,3 +981,98 @@ def test_pce_cpi_ppi_gdp_eci_counts_with_families(monkeypatch):
     assert "ECI" in macro_types
     assert "GDP" in macro_types
     assert len(macro_entries) == 5, f"expected 5 family entries, got {len(macro_entries)}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PCE plural regex correction tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_pce_singular_expenditure_classified():
+    assert _classify_macro({"eventName": "Personal Consumption Expenditure"}) == "PCE"
+
+
+def test_pce_plural_expenditures_classified():
+    assert _classify_macro({"eventName": "Personal Consumption Expenditures"}) == "PCE"
+
+
+def test_core_pce_price_index_remains_classified():
+    assert _classify_macro({"eventName": "Core PCE Price Index MoM"}) == "PCE"
+
+
+def test_plural_pce_provider_label_appears_in_top_catalysts(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="pp1", title="Personal Consumption Expenditures",
+                               event_family="pce", signal_tier="major",
+                               date="2026-04-29", country="US"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    macro_entries = [m for d in env["days"] for m in d["macro"]]
+    pce_entries = [m for m in macro_entries if m.get("macroType") == "PCE"]
+    assert len(pce_entries) == 1
+
+
+def test_plural_pce_foreign_label_excluded(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="fp1", title="Personal Consumption Expenditures",
+                               event_family="pce", signal_tier="major",
+                               date="2026-04-29", country="EU"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    macro_entries = [m for d in env["days"] for m in d["macro"]]
+    assert len(macro_entries) == 0
+
+
+def test_consumption_alone_does_not_match_pce():
+    assert _classify_macro({"eventName": "Energy Consumption Report"}) is None
+    assert _classify_macro({"eventName": "Household Consumption Data"}) is None
+
+
+def test_pce_family_card_still_produced_after_regex_fix(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="x1", title="PCE Price Index MoM",
+                               event_family="pce", signal_tier="major",
+                               date="2026-04-30", actual=0.2, unit="%"),
+                _make_macro_ev(id="x2", title="Core PCE Price Index MoM",
+                               event_family="pce", signal_tier="major",
+                               date="2026-04-30", actual=0.1, unit="%"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    pce_entries = [m for d in env["days"] for m in d["macro"] if m.get("macroType") == "PCE"]
+    assert len(pce_entries) == 1
+    entry = pce_entries[0]
+    assert entry["type"] == "macro_family"
+    assert entry["event_count"] == 2
+    assert entry["actual"] == 0.1
