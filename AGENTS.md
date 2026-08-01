@@ -79,14 +79,52 @@ Before editing:
 1. confirm `git rev-parse --show-toplevel` is `/home/runner/workspace`
 2. confirm `git branch --show-current` is `main`
 3. run `git status -sb`
-4. preserve all pre-existing user or agent work
-5. confirm local `main` is not behind or diverged from `origin/main`
+4. run `git log -3 --oneline --decorate`
+5. run `git diff --cached --name-only`
+6. preserve all pre-existing user or agent work
 
 The active coding agent may run `git fetch origin main --quiet` only to refresh
-remote tracking information before checking ahead/behind status.
+remote tracking information.
 
-If local `main` is behind or diverged, stop and report it. Do not create a
-workaround, clone, branch, worktree, merge, or alternate commit path.
+## Git handling in Replit
+
+Replit may automatically create `Published your App` commits and may modify or
+commit runtime, cache, LKG, report, generated-data, or OpenCode state files.
+
+These conditions are not task blockers.
+
+Continue normally when:
+
+- the production files authorized for the current task are not already modified
+  by unrelated work
+- there is no merge conflict
+- there is no conflicting uncommitted or unpushed production-code change in the
+  same task files
+
+Do not stop merely because:
+
+- local `main` is ahead of or behind `origin/main`
+- `origin/main` contains a Replit `Published your App` commit
+- runtime, cache, LKG, report, generated-data, or OpenCode files are dirty
+- unrelated generated files were automatically committed by Replit
+- local and remote differ only through non-conflicting commits
+
+Do not reset, rebase, revert, clean, restore, amend, or rewrite Git history
+merely to make the branch clean or exactly even with `origin/main`.
+
+Preserve all unrelated files and commits exactly as they are.
+
+Stop and report only when:
+
+- an authorized production file contains unrelated existing modifications
+- there is an actual merge conflict
+- local and remote contain conflicting production-code changes affecting the
+  current task
+- proceeding would require a destructive Git operation
+- the required previous production implementation is genuinely absent
+
+Do not create a workaround, alternate clone, branch, worktree, merge path, or
+temporary repository.
 
 ## Git workflow
 
