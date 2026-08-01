@@ -665,6 +665,242 @@ def group_economic_events_to_families(events: list[dict]) -> list[dict]:
     return result
 
 
+# ── Release-package grouping (display-layer only) ────────────────────────────
+
+# Approved display release groups.  These are NOT persisted to Neon and
+# operate as a display-layer concept only.  Source event_family values are
+# never rewritten.
+
+_RELEASE_GROUPS: frozenset[str] = frozenset({
+    "employment_report",
+    "jobless_claims_report",
+    "jolts_report",
+    "ism_manufacturing_report",
+    "ism_services_report",
+    "factory_orders_report",
+})
+
+_RELEASE_GROUP_DISPLAY_TITLES: dict[str, str] = {
+    "employment_report":        "Employment Report",
+    "jobless_claims_report":   "Jobless Claims Report",
+    "jolts_report":             "JOLTS Report",
+    "ism_manufacturing_report": "ISM Manufacturing Report",
+    "ism_services_report":      "ISM Services Report",
+    "factory_orders_report":    "Factory Orders Report",
+}
+
+# Lead-metric precedence for each release group.  Matched case-insensitively
+# against the child eventName/title.  First match wins; tie-breaking uses
+# earlier source order then lexical order.
+_RELEASE_GROUP_LEAD_PRECEDENCE: dict[str, list[str]] = {
+    "employment_report": [
+        "non farm payroll", "nonfarm payroll",
+        "unemployment rate",
+        "average hourly earnings mom",
+        "average hourly earnings yoy",
+        "labor force participation rate",
+    ],
+    "jobless_claims_report": [
+        "initial jobless claims",
+        "continuing jobless claims",
+        "jobless claims 4-week",
+    ],
+    "jolts_report": [
+        "jolts job openings",
+        "jolts job quits",
+        "jolts hires",
+    ],
+    "ism_manufacturing_report": [
+        "ism manufacturing pmi",
+        "ism manufacturing new orders",
+        "ism manufacturing prices",
+        "ism manufacturing employment",
+    ],
+    "ism_services_report": [
+        "ism services pmi",
+        "ism non-manufacturing pmi",
+        "ism services business activity",
+        "ism non-manufacturing business activity",
+        "ism services new orders",
+        "ism non-manufacturing new orders",
+        "ism services prices",
+        "ism non-manufacturing prices",
+        "ism services employment",
+        "ism non-manufacturing employment",
+    ],
+    "factory_orders_report": [
+        "factory orders mom",
+        "factory orders ex transportation",
+    ],
+}
+
+# Regex patterns for matching release groups.
+# Order is important: more-specific patterns must be checked first so that
+# e.g. ISM Manufacturing subclassifiers win before generic ISM.
+_EMPLOYMENT_REPORT_RE = re.compile(
+    r"\b(?:non[\s-]?farm\s+payroll|nfp\b|unemployment\s+rate\b|"
+    r"average\s+hourly\s+earnings|labor\s+force\s+participation|"
+    r"government\s+payroll|u[\s-]?6\s+unemployment)",
+    re.I,
+)
+
+_JOBLESS_CLAIMS_RE = re.compile(
+    r"\b(?:initial\s+jobless\s+claims|continuing\s+jobless\s+claims|"
+    r"jobless\s+claims\s+4[\s-]?week)",
+    re.I,
+)
+
+_JOLTS_RE = re.compile(
+    r"\bjolts?\s+(?:job\s+openings|job\s+quits|hires)",
+    re.I,
+)
+
+_ISM_MANUFACTURING_RE = re.compile(
+    r"\bism\s+manufacturing\b",
+    re.I,
+)
+
+_ISM_SERVICES_RE = re.compile(
+    r"\bism\s+(?:services|non[\s-]?manufacturing)\b",
+    re.I,
+)
+
+_FACTORY_ORDERS_RE = re.compile(
+    r"\bfactory\s+orders\b",
+    re.I,
+)
+
+
+def _determine_release_group(ev: dict) -> str | None:
+    name = ((ev.get("eventName") or ev.get("title") or "") + " " +
+            (ev.get("indicatorName") or "")).lower()
+    if not name.strip():
+        return None
+
+    # Check most-specific patterns first.
+    if _ISM_MANUFACTURING_RE.search(name):
+        return "ism_manufacturing_report"
+    if _ISM_SERVICES_RE.search(name):
+        return "ism_services_report"
+    if _JOBLESS_CLAIMS_RE.search(name):
+        return "jobless_claims_report"
+    if _JOLTS_RE.search(name):
+        return "jolts_report"
+    if _FACTORY_ORDERS_RE.search(name):
+        return "factory_orders_report"
+    if _EMPLOYMENT_REPORT_RE.search(name):
+        return "employment_report"
+
+    return None
+
+
+def _make_release_package_id(
+    release_group: str, country: str, date: str, time_val: str,
+) -> str:
+    raw = f"release_pkg:{release_group}:{country}:{date}:{time_val or ''}"
+    return hashlib.md5(raw.encode()).hexdigest()[:16]
+
+
+def _build_release_package_card(
+    release_group: str, children: list[dict], date: str, time_val: str | None,
+) -> dict:
+    lead = _resolve_lead(children, _RELEASE_GROUP_LEAD_PRECEDENCE.get(release_group, []))
+    tier = _strongest_tier(children)
+    reason = _resolve_signal_reason(children, lead)
+    display = _RELEASE_GROUP_DISPLAY_TITLES.get(
+        release_group, release_group.replace("_", " ").title(),
+    )
+
+    return {
+        "id":            _make_release_package_id(release_group, "US", date, time_val or ""),
+        "type":          "macro_family",
+        "eventType":     "economic_release",
+        "eventCategory": "macro",
+        "symbol":        "Macro",
+        "event_family":  release_group,
+        "release_group": release_group,
+        "display_title": display,
+        "title":         display,
+        "subtitle":      lead.get("subtitle"),
+        "keyDetails":    lead.get("keyDetails"),
+        "date":          date,
+        "time":          time_val,
+        "country":       "US",
+        "signal_tier":   tier,
+        "signal_reason": reason,
+        "importance":    lead.get("importance"),
+        "lead_metric":   _child_name(lead).title() or (lead.get("eventName") or lead.get("title") or ""),
+        "actual":        lead.get("actual"),
+        "estimate":      lead.get("estimate"),
+        "previous":      lead.get("previous"),
+        "unit":          lead.get("unit") or (lead.get("raw") or {}).get("unit"),
+        "children":      children,
+        "event_count":   len(children),
+        "source":        lead.get("source") or "fmp",
+        "raw":           None,
+    }
+
+
+def group_events_to_release_packages(events: list[dict]) -> list[dict]:
+    """
+    Group remaining multi-row US economic-release packages (Employment Report,
+    Jobless Claims Report, JOLTS Report, ISM Manufacturing Report, ISM Services
+    Report, Factory Orders Report) into display-level package cards.
+
+    Operates AFTER ``group_economic_events_to_families()``.  Family cards
+    (type == "macro_family") pass through unchanged.  Discrete US events that
+    match a release-group pattern are grouped by (release_group, date, time).
+    Source events are never mutated.
+
+    Grouping key: (release_group, date, time, country=US).
+    """
+    if not events:
+        return []
+
+    family_cards: list[dict] = []
+    discrete: list[dict] = []
+    for ev in events:
+        if ev.get("type") == "macro_family":
+            family_cards.append(ev)
+        else:
+            discrete.append(ev)
+
+    groups: dict[tuple, list[dict]] = {}
+    group_order: list[tuple] = []
+    ungrouped: list[dict] = []
+
+    for ev in discrete:
+        country = (ev.get("country") or "").upper()
+        if country != "US":
+            ungrouped.append(ev)
+            continue
+
+        rg = _determine_release_group(ev)
+        if rg is None:
+            ungrouped.append(ev)
+            continue
+
+        date = ev.get("date") or ""
+        time_val = ev.get("time") or ""
+        key = (rg, date, time_val)
+        if key not in groups:
+            groups[key] = []
+            group_order.append(key)
+        groups[key].append(ev)
+
+    result: list[dict] = list(family_cards)
+
+    for key in group_order:
+        children = groups[key]
+        rg, date, time_val = key
+        result.append(
+            _build_release_package_card(rg, children, date, time_val if time_val else None),
+        )
+
+    result.extend(ungrouped)
+    return result
+
+
 # ── Public entry point ─────────────────────────────────────────────────────
 
 def curate_events(

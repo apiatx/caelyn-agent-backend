@@ -1103,6 +1103,344 @@ def test_ppi_no_source_mutation():
         assert ev == before[i]
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Release-package grouping tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from services.calendar_curation import group_events_to_release_packages
+
+
+# ── Employment Report ───────────────────────────────────────────────────────
+
+def test_employment_report_groups_payroll_unemployment_and_earnings():
+    evs = [
+        _make_econ(id="e1", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="Monthly payroll and labor-market release",
+                   date="2026-05-01", time="08:30:00"),
+        _make_econ(id="e2", title="Unemployment Rate", eventName="Unemployment Rate",
+                   event_family="unemployment", signal_tier="secondary",
+                   signal_reason="Unemployment rate release",
+                   date="2026-05-01", time="08:30:00"),
+        _make_econ(id="e3", title="Average Hourly Earnings MoM", eventName="Average Hourly Earnings MoM",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="Monthly payroll and labor-market release",
+                   date="2026-05-01", time="08:30:00"),
+    ]
+    result = group_events_to_release_packages(evs)
+    cards = [e for e in result if e.get("release_group") == "employment_report"]
+    assert len(cards) == 1
+    card = cards[0]
+    assert card["display_title"] == "Employment Report"
+    assert card["event_count"] == 3
+    assert len(card["children"]) == 3
+    child_ids = {c["id"] for c in card["children"]}
+    assert child_ids == {"e1", "e2", "e3"}
+
+
+def test_adp_does_not_merge_into_employment_report():
+    evs = [
+        _make_econ(id="pay", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="Monthly payroll release",
+                   date="2026-05-01", time="08:30:00"),
+        _make_econ(id="adp", title="ADP Employment Change", eventName="ADP Employment Change",
+                   event_family="payrolls", signal_tier="secondary",
+                   signal_reason="ADP national employment report",
+                   date="2026-05-01", time="08:15:00"),
+    ]
+    result = group_events_to_release_packages(evs)
+    cards = [e for e in result if e.get("release_group") == "employment_report"]
+    assert len(cards) >= 1
+    if cards:
+        child_ids = {c["id"] for c in cards[0]["children"]}
+        assert "adp" not in child_ids
+
+
+def test_jobless_claims_group_as_one_report():
+    evs = [
+        _make_econ(id="jc1", title="Initial Jobless Claims", eventName="Initial Jobless Claims",
+                   event_family="jobless_claims", signal_tier="secondary",
+                   signal_reason="Weekly jobless claims",
+                   date="2026-05-01", time="08:30:00"),
+        _make_econ(id="jc2", title="Continuing Jobless Claims", eventName="Continuing Jobless Claims",
+                   event_family="jobless_claims", signal_tier="secondary",
+                   signal_reason="Weekly jobless claims",
+                   date="2026-05-01", time="08:30:00"),
+        _make_econ(id="jc3", title="Jobless Claims 4-Week Average",
+                   eventName="Jobless Claims 4-Week Average",
+                   event_family="jobless_claims", signal_tier="secondary",
+                   signal_reason="Weekly jobless claims",
+                   date="2026-05-01", time="08:30:00"),
+    ]
+    result = group_events_to_release_packages(evs)
+    cards = [e for e in result if e.get("release_group") == "jobless_claims_report"]
+    assert len(cards) == 1
+    card = cards[0]
+    assert card["display_title"] == "Jobless Claims Report"
+    assert card["event_count"] == 3
+
+
+def test_jolts_groups_into_one_report():
+    evs = [
+        _make_econ(id="jo1", title="JOLTs Job Openings", eventName="JOLTs Job Openings",
+                   event_family="other_us", signal_tier="secondary",
+                   signal_reason="JOLTS job openings report",
+                   date="2026-05-01", time="10:00:00"),
+        _make_econ(id="jo2", title="JOLTs Job Quits", eventName="JOLTs Job Quits",
+                   event_family="other_us", signal_tier="secondary",
+                   signal_reason="JOLTS job quits report",
+                   date="2026-05-01", time="10:00:00"),
+        _make_econ(id="jo3", title="JOLTs Hires", eventName="JOLTs Hires",
+                   event_family="other_us", signal_tier="secondary",
+                   signal_reason="JOLTS hires report",
+                   date="2026-05-01", time="10:00:00"),
+    ]
+    result = group_events_to_release_packages(evs)
+    cards = [e for e in result if e.get("release_group") == "jolts_report"]
+    assert len(cards) == 1
+    card = cards[0]
+    assert card["display_title"] == "JOLTS Report"
+    assert card["event_count"] == 3
+
+
+def test_ism_manufacturing_groups_components():
+    evs = [
+        _make_econ(id="im1", title="ISM Manufacturing PMI", eventName="ISM Manufacturing PMI",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="ISM business survey",
+                   date="2026-05-01", time="10:00:00"),
+        _make_econ(id="im2", title="ISM Manufacturing Prices", eventName="ISM Manufacturing Prices",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="ISM business survey",
+                   date="2026-05-01", time="10:00:00"),
+        _make_econ(id="im3", title="ISM Manufacturing Employment",
+                   eventName="ISM Manufacturing Employment",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="ISM business survey",
+                   date="2026-05-01", time="10:00:00"),
+        _make_econ(id="im4", title="ISM Manufacturing New Orders",
+                   eventName="ISM Manufacturing New Orders",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="ISM business survey",
+                   date="2026-05-01", time="10:00:00"),
+    ]
+    result = group_events_to_release_packages(evs)
+    cards = [e for e in result if e.get("release_group") == "ism_manufacturing_report"]
+    assert len(cards) == 1
+    card = cards[0]
+    assert card["display_title"] == "ISM Manufacturing Report"
+    assert card["event_count"] == 4
+
+
+def test_ism_services_groups_services_and_non_manufacturing_aliases():
+    evs = [
+        _make_econ(id="is1", title="ISM Services PMI", eventName="ISM Services PMI",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="ISM business survey",
+                   date="2026-05-01", time="10:00:00"),
+        _make_econ(id="is2", title="ISM Non-Manufacturing PMI",
+                   eventName="ISM Non-Manufacturing PMI",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="ISM business survey",
+                   date="2026-05-01", time="10:00:00"),
+        _make_econ(id="is3", title="ISM Services Business Activity",
+                   eventName="ISM Services Business Activity",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="ISM business survey",
+                   date="2026-05-01", time="10:00:00"),
+        _make_econ(id="is4", title="ISM Non-Manufacturing Employment",
+                   eventName="ISM Non-Manufacturing Employment",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="ISM business survey",
+                   date="2026-05-01", time="10:00:00"),
+    ]
+    result = group_events_to_release_packages(evs)
+    cards = [e for e in result if e.get("release_group") == "ism_services_report"]
+    assert len(cards) == 1
+    card = cards[0]
+    assert card["display_title"] == "ISM Services Report"
+    assert card["event_count"] == 4
+
+
+def test_factory_orders_groups_mom_and_ex_transportation():
+    evs = [
+        _make_econ(id="fo1", title="Factory Orders MoM", eventName="Factory Orders MoM",
+                   event_family="other_us", signal_tier="secondary",
+                   signal_reason="Factory orders release",
+                   date="2026-05-01", time="10:00:00"),
+        _make_econ(id="fo2", title="Factory Orders ex Transportation",
+                   eventName="Factory Orders ex Transportation",
+                   event_family="other_us", signal_tier="secondary",
+                   signal_reason="Factory orders release",
+                   date="2026-05-01", time="10:00:00"),
+    ]
+    result = group_events_to_release_packages(evs)
+    cards = [e for e in result if e.get("release_group") == "factory_orders_report"]
+    assert len(cards) == 1
+    card = cards[0]
+    assert card["display_title"] == "Factory Orders Report"
+    assert card["event_count"] == 2
+
+
+def test_different_dates_do_not_merge_release_packages():
+    evs = [
+        _make_econ(id="d1", title="ISM Manufacturing PMI", eventName="ISM Manufacturing PMI",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="ISM business survey",
+                   date="2026-05-01", time="10:00:00"),
+        _make_econ(id="d2", title="ISM Manufacturing Prices", eventName="ISM Manufacturing Prices",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="ISM business survey",
+                   date="2026-05-02", time="10:00:00"),
+    ]
+    result = group_events_to_release_packages(evs)
+    cards = [e for e in result if e.get("release_group") == "ism_manufacturing_report"]
+    assert len(cards) == 2
+
+
+def test_different_times_do_not_merge_release_packages():
+    evs = [
+        _make_econ(id="t1", title="ISM Manufacturing PMI", eventName="ISM Manufacturing PMI",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="ISM business survey",
+                   date="2026-05-01", time="10:00:00"),
+        _make_econ(id="t2", title="ISM Manufacturing Prices", eventName="ISM Manufacturing Prices",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="ISM business survey",
+                   date="2026-05-01", time="14:00:00"),
+    ]
+    result = group_events_to_release_packages(evs)
+    cards = [e for e in result if e.get("release_group") == "ism_manufacturing_report"]
+    assert len(cards) == 2
+
+
+def test_foreign_events_do_not_group_into_release_packages():
+    evs = [
+        _make_econ(id="f1", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="Monthly payroll release",
+                   country="DE", date="2026-05-01", time="08:30:00"),
+        _make_econ(id="f2", title="Unemployment Rate", eventName="Unemployment Rate",
+                   event_family="unemployment", signal_tier="secondary",
+                   signal_reason="Unemployment rate release",
+                   country="DE", date="2026-05-01", time="08:30:00"),
+    ]
+    result = group_events_to_release_packages(evs)
+    cards = [e for e in result if e.get("release_group") == "employment_report"]
+    assert len(cards) == 0
+
+
+def test_lead_precedence_employment_report():
+    evs = [
+        _make_econ(id="l1", title="Unemployment Rate", eventName="Unemployment Rate",
+                   event_family="unemployment", signal_tier="secondary",
+                   signal_reason="Unemployment rate release",
+                   actual=4.0, date="2026-05-01", time="08:30:00"),
+        _make_econ(id="l2", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="Monthly payroll and labor-market release",
+                   actual=250, date="2026-05-01", time="08:30:00"),
+    ]
+    result = group_events_to_release_packages(evs)
+    card = [c for c in result if c.get("release_group") == "employment_report"][0]
+    assert "nonfarm" in card["lead_metric"].lower() or "non farm" in card["lead_metric"].lower()
+    assert card["actual"] == 250
+
+
+def test_children_preserve_all_source_events():
+    evs = [
+        _make_econ(id="c1", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="r1", actual=250, date="2026-05-01", time="08:30:00"),
+        _make_econ(id="c2", title="Unemployment Rate", eventName="Unemployment Rate",
+                   event_family="unemployment", signal_tier="secondary",
+                   signal_reason="r2", actual=4.0, date="2026-05-01", time="08:30:00"),
+        _make_econ(id="c3", title="Average Hourly Earnings MoM",
+                   eventName="Average Hourly Earnings MoM",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="r3", actual=0.3, date="2026-05-01", time="08:30:00"),
+    ]
+    result = group_events_to_release_packages(evs)
+    card = [c for c in result if c.get("release_group") == "employment_report"][0]
+    assert len(card["children"]) == 3
+    assert {c["id"] for c in card["children"]} == {"c1", "c2", "c3"}
+
+
+def test_event_count_is_exact_release_package():
+    evs = [
+        _make_econ(id="ec1", title="ISM Manufacturing PMI", eventName="ISM Manufacturing PMI",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="r", date="2026-05-01", time="10:00:00"),
+        _make_econ(id="ec2", title="ISM Manufacturing Prices", eventName="ISM Manufacturing Prices",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="r", date="2026-05-01", time="10:00:00"),
+    ]
+    result = group_events_to_release_packages(evs)
+    card = [c for c in result if c.get("release_group") == "ism_manufacturing_report"][0]
+    assert card["event_count"] == 2
+    assert len(card["children"]) == 2
+
+
+def test_source_events_not_mutated_release_package():
+    evs = [
+        _make_econ(id="m1", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="r", date="2026-05-01", time="08:30:00"),
+        _make_econ(id="m2", title="Unemployment Rate", eventName="Unemployment Rate",
+                   event_family="unemployment", signal_tier="secondary",
+                   signal_reason="r", date="2026-05-01", time="08:30:00"),
+    ]
+    before = [dict(ev) for ev in evs]
+    group_events_to_release_packages(evs)
+    for i, ev in enumerate(evs):
+        assert ev == before[i]
+
+
+def test_release_package_ids_are_stable():
+    evs = [
+        _make_econ(id="s1", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="r", date="2026-05-01", time="08:30:00"),
+        _make_econ(id="s2", title="Unemployment Rate", eventName="Unemployment Rate",
+                   event_family="unemployment", signal_tier="secondary",
+                   signal_reason="r", date="2026-05-01", time="08:30:00"),
+    ]
+    result1 = group_events_to_release_packages(evs)
+    result2 = group_events_to_release_packages(evs)
+    card1 = [c for c in result1 if c.get("release_group") == "employment_report"][0]
+    card2 = [c for c in result2 if c.get("release_group") == "employment_report"][0]
+    assert card1["id"] == card2["id"]
+
+
+def test_family_cards_pass_through_unchanged():
+    cpi_evs = [
+        _make_econ(id="c1", title="CPI MoM", event_family="cpi", signal_tier="major",
+                   signal_reason="r", date="2026-05-01"),
+        _make_econ(id="c2", title="Core CPI MoM", event_family="cpi", signal_tier="major",
+                   signal_reason="r", date="2026-05-01"),
+    ]
+    cpi_card = group_economic_events_to_families(cpi_evs)[0]
+    assert cpi_card["type"] == "macro_family"
+
+    payroll_ev = _make_econ(id="p1", title="Nonfarm Payrolls", event_family="payrolls",
+                            signal_tier="major", signal_reason="r",
+                            date="2026-05-01", time="08:30:00")
+    unemp_ev = _make_econ(id="p2", title="Unemployment Rate", event_family="unemployment",
+                          signal_tier="secondary", signal_reason="r",
+                          date="2026-05-01", time="08:30:00")
+    mixed = [cpi_card, payroll_ev, unemp_ev]
+    result = group_events_to_release_packages(mixed)
+
+    cpi_cards = [c for c in result if c.get("event_family") == "cpi"]
+    assert len(cpi_cards) == 1
+    assert cpi_cards[0] is cpi_card
+
+    emp_cards = [c for c in result if c.get("release_group") == "employment_report"]
+    assert len(emp_cards) == 1
+    assert emp_cards[0]["event_count"] == 2
+
+
 if __name__ == "__main__":
     # Tiny self-running mode without pytest.
     fns = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]

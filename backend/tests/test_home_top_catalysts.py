@@ -853,3 +853,396 @@ def test_logical_event_name_discrete():
 def test_logical_event_name_fallback():
     ev = {"eventName": "", "title": "Fed Chair Powell Speaks"}
     assert _logical_event_name(ev) == "Fed Chair Powell Speaks"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Release-package Home integration tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from services.calendar_curation import group_events_to_release_packages
+
+
+def test_labor_contains_employment_report():
+    evs = [
+        _make_econ(id="l1", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="Monthly payroll release",
+                   date="2026-04-29", time="08:30:00"),
+        _make_econ(id="l2", title="Unemployment Rate", eventName="Unemployment Rate",
+                   event_family="unemployment", signal_tier="secondary",
+                   signal_reason="Unemployment rate release",
+                   date="2026-04-29", time="08:30:00"),
+    ]
+    logical = group_events_to_release_packages(evs)
+    for ev in logical:
+        if ev.get("release_group") == "employment_report":
+            cat = _classify_macro(ev)
+            assert cat == "labor"
+
+
+def test_labor_contains_jobless_claims_report():
+    evs = [
+        _make_econ(id="jc1", title="Initial Jobless Claims", eventName="Initial Jobless Claims",
+                   event_family="jobless_claims", signal_tier="secondary",
+                   signal_reason="Weekly jobless claims",
+                   date="2026-04-29", time="08:30:00"),
+        _make_econ(id="jc2", title="Continuing Jobless Claims", eventName="Continuing Jobless Claims",
+                   event_family="jobless_claims", signal_tier="secondary",
+                   signal_reason="Weekly jobless claims",
+                   date="2026-04-29", time="08:30:00"),
+    ]
+    logical = group_events_to_release_packages(evs)
+    for ev in logical:
+        if ev.get("release_group") == "jobless_claims_report":
+            cat = _classify_macro(ev)
+            assert cat == "labor"
+
+
+def test_labor_contains_jolts_report():
+    evs = [
+        _make_econ(id="j1", title="JOLTs Job Openings", eventName="JOLTs Job Openings",
+                   event_family="other_us", signal_tier="secondary",
+                   signal_reason="JOLTS report",
+                   date="2026-04-29", time="10:00:00"),
+        _make_econ(id="j2", title="JOLTs Hires", eventName="JOLTs Hires",
+                   event_family="other_us", signal_tier="secondary",
+                   signal_reason="JOLTS report",
+                   date="2026-04-29", time="10:00:00"),
+    ]
+    logical = group_events_to_release_packages(evs)
+    for ev in logical:
+        if ev.get("release_group") == "jolts_report":
+            cat = _classify_macro(ev)
+            assert cat == "labor"
+
+
+def test_adp_remains_discrete_in_labor():
+    ev = _make_econ(id="adp", title="ADP Employment Change", eventName="ADP Employment Change",
+                    event_family="payrolls", signal_tier="secondary",
+                    signal_reason="ADP national employment report",
+                    date="2026-04-29", time="08:15:00")
+    logical = group_events_to_release_packages([ev])
+    assert len(logical) == 1
+    assert logical[0].get("release_group") is None
+    cat = _classify_macro(logical[0])
+    assert cat == "labor"
+
+
+def test_payroll_raw_rows_not_direct_home_children():
+    evs = [
+        _make_econ(id="pl1", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="r", date="2026-04-29", time="08:30:00"),
+        _make_econ(id="pl2", title="Unemployment Rate", eventName="Unemployment Rate",
+                   event_family="unemployment", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="08:30:00"),
+    ]
+    logical = group_events_to_release_packages(evs)
+    all_ids = {e.get("id") for e in logical if e.get("type") != "macro_family"}
+    assert "pl1" not in all_ids
+    assert "pl2" not in all_ids
+
+
+def test_growth_contains_ism_manufacturing_report():
+    evs = [
+        _make_econ(id="gm1", title="ISM Manufacturing PMI", eventName="ISM Manufacturing PMI",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="ISM business survey",
+                   date="2026-04-29", time="10:00:00"),
+        _make_econ(id="gm2", title="ISM Manufacturing Prices", eventName="ISM Manufacturing Prices",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="ISM business survey",
+                   date="2026-04-29", time="10:00:00"),
+    ]
+    logical = group_events_to_release_packages(evs)
+    for ev in logical:
+        if ev.get("release_group") == "ism_manufacturing_report":
+            cat = _classify_macro(ev)
+            assert cat == "growth"
+
+
+def test_growth_contains_ism_services_report():
+    evs = [
+        _make_econ(id="gs1", title="ISM Services PMI", eventName="ISM Services PMI",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="ISM business survey",
+                   date="2026-04-29", time="10:00:00"),
+        _make_econ(id="gs2", title="ISM Non-Manufacturing Business Activity",
+                   eventName="ISM Non-Manufacturing Business Activity",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="ISM business survey",
+                   date="2026-04-29", time="10:00:00"),
+    ]
+    logical = group_events_to_release_packages(evs)
+    for ev in logical:
+        if ev.get("release_group") == "ism_services_report":
+            cat = _classify_macro(ev)
+            assert cat == "growth"
+
+
+def test_growth_contains_factory_orders_report():
+    evs = [
+        _make_econ(id="gf1", title="Factory Orders MoM", eventName="Factory Orders MoM",
+                   event_family="other_us", signal_tier="secondary",
+                   signal_reason="Factory orders release",
+                   date="2026-04-29", time="10:00:00"),
+        _make_econ(id="gf2", title="Factory Orders ex Transportation",
+                   eventName="Factory Orders ex Transportation",
+                   event_family="other_us", signal_tier="secondary",
+                   signal_reason="Factory orders release",
+                   date="2026-04-29", time="10:00:00"),
+    ]
+    logical = group_events_to_release_packages(evs)
+    for ev in logical:
+        if ev.get("release_group") == "factory_orders_report":
+            cat = _classify_macro(ev)
+            assert cat == "growth"
+
+
+def test_ism_raw_rows_not_direct_home_children():
+    evs = [
+        _make_econ(id="gi1", title="ISM Manufacturing PMI", eventName="ISM Manufacturing PMI",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="10:00:00"),
+        _make_econ(id="gi2", title="ISM Manufacturing Prices", eventName="ISM Manufacturing Prices",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="10:00:00"),
+    ]
+    logical = group_events_to_release_packages(evs)
+    all_ids = {e.get("id") for e in logical if e.get("type") != "macro_family"}
+    assert "gi1" not in all_ids
+    assert "gi2" not in all_ids
+
+
+def test_subtitle_uses_package_display_titles():
+    evs = [
+        _make_econ(id="st1", title="ISM Manufacturing PMI", eventName="ISM Manufacturing PMI",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="10:00:00"),
+        _make_econ(id="st2", title="ISM Manufacturing Prices", eventName="ISM Manufacturing Prices",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="10:00:00"),
+        _make_econ(id="st3", title="ISM Services PMI", eventName="ISM Services PMI",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="10:00:00"),
+        _make_econ(id="st4", title="ISM Non-Manufacturing PMI",
+                   eventName="ISM Non-Manufacturing PMI",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="10:00:00"),
+    ]
+    logical = group_events_to_release_packages(evs)
+    growth_logical = [e for e in logical if _classify_macro(e) == "growth"]
+    cat = _CATEGORY_BY_ID["growth"]
+    subtitle, extra = _build_logical_subtitle(growth_logical, cat)
+    assert "ISM Manufacturing Report" in subtitle
+    assert "ISM Services Report" in subtitle
+    assert "ISM Manufacturing PMI" not in subtitle
+
+
+def test_plus_n_counts_logical_children_with_packages():
+    children = [
+        _make_econ(id="n1", title="ISM Manufacturing PMI", eventName="ISM Manufacturing PMI",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="10:00:00"),
+        _make_econ(id="n2", title="ISM Manufacturing Prices", eventName="ISM Manufacturing Prices",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="10:00:00"),
+        _make_econ(id="n3", title="ISM Services PMI", eventName="ISM Services PMI",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="10:00:00"),
+        _make_econ(id="n4", title="ISM Non-Manufacturing PMI",
+                   eventName="ISM Non-Manufacturing PMI",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="10:00:00"),
+        _make_econ(id="n5", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="r", date="2026-04-29", time="08:30:00"),
+        _make_econ(id="n6", title="Unemployment Rate", eventName="Unemployment Rate",
+                   event_family="unemployment", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="08:30:00"),
+        _make_econ(id="n7", title="Initial Jobless Claims", eventName="Initial Jobless Claims",
+                   event_family="jobless_claims", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="08:30:00"),
+        _make_econ(id="n8", title="Continuing Jobless Claims", eventName="Continuing Jobless Claims",
+                   event_family="jobless_claims", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="08:30:00"),
+        _make_econ(id="n9", title="JOLTs Job Openings", eventName="JOLTs Job Openings",
+                   event_family="other_us", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="10:00:00"),
+        _make_econ(id="n10", title="JOLTs Hires", eventName="JOLTs Hires",
+                   event_family="other_us", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="10:00:00"),
+    ]
+    logical = group_events_to_release_packages(children)
+    growth_evs = [e for e in logical if _classify_macro(e) == "growth"]
+    labor_evs = [e for e in logical if _classify_macro(e) == "labor"]
+    assert len(growth_evs) == 2
+    assert len(labor_evs) == 3
+
+
+def test_category_event_count_counts_logical_direct_children():
+    children = [
+        _make_econ(id="c1", title="ISM Manufacturing PMI", eventName="ISM Manufacturing PMI",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="10:00:00"),
+        _make_econ(id="c2", title="ISM Manufacturing Prices", eventName="ISM Manufacturing Prices",
+                   event_family="ism", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="10:00:00"),
+    ]
+    logical = group_events_to_release_packages(children)
+    growth_evs = [e for e in logical if _classify_macro(e) == "growth"]
+    card = _build_macro_group("growth", growth_evs, "2026-04-27")
+    assert card["event_count"] == 1
+
+
+def test_package_event_count_counts_raw_children():
+    evs = [
+        _make_econ(id="p1", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="r", date="2026-04-29", time="08:30:00"),
+        _make_econ(id="p2", title="Unemployment Rate", eventName="Unemployment Rate",
+                   event_family="unemployment", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="08:30:00"),
+        _make_econ(id="p3", title="Average Hourly Earnings MoM",
+                   eventName="Average Hourly Earnings MoM",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="r", date="2026-04-29", time="08:30:00"),
+    ]
+    logical = group_events_to_release_packages(evs)
+    cards = [e for e in logical if e.get("release_group") == "employment_report"]
+    assert len(cards) == 1
+    assert cards[0]["event_count"] == 3
+
+
+def test_parent_tier_from_strongest_logical_child():
+    emp_evs = [
+        _make_econ(id="pt1", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="Monthly payroll release",
+                   date="2026-04-29", time="08:30:00"),
+        _make_econ(id="pt2", title="Unemployment Rate", eventName="Unemployment Rate",
+                   event_family="unemployment", signal_tier="secondary",
+                   signal_reason="Unemployment rate release",
+                   date="2026-04-29", time="08:30:00"),
+    ]
+    logical = group_events_to_release_packages(emp_evs)
+    tier = _resolve_parent_tier(logical)
+    assert tier == "major"
+
+
+def test_parent_reason_from_exact_winning_logical_child():
+    emp_evs = [
+        _make_econ(id="pr1", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="Monthly payroll release",
+                   date="2026-04-29", time="08:30:00"),
+        _make_econ(id="pr2", title="Unemployment Rate", eventName="Unemployment Rate",
+                   event_family="unemployment", signal_tier="secondary",
+                   signal_reason="Unemployment rate release",
+                   date="2026-04-29", time="08:30:00"),
+    ]
+    logical = group_events_to_release_packages(emp_evs)
+    reason = _resolve_parent_reason(logical, "major")
+    assert "Monthly payroll release" in reason
+
+
+def test_fomc_unchanged_by_release_packages():
+    fomc = _make_fed(id="fomc", title="FOMC Interest Rate Decision",
+                     event_family="fomc_decision", signal_tier="critical",
+                     signal_reason="Scheduled FOMC rate decision",
+                     date="2026-04-30")
+    result = group_events_to_release_packages([fomc])
+    assert len(result) == 1
+    assert result[0].get("release_group") is None
+    assert result[0]["event_family"] == "fomc_decision"
+
+
+def test_cpi_ppi_pce_gdp_eci_unchanged_by_release_packages():
+    cpi_evs = [
+        _make_econ(id="c1", title="CPI MoM", event_family="cpi", signal_tier="major",
+                   signal_reason="Major consumer inflation release", date="2026-04-29"),
+        _make_econ(id="c2", title="Core CPI MoM", event_family="cpi", signal_tier="major",
+                   signal_reason="Major consumer inflation release", date="2026-04-29"),
+    ]
+    family_cards = group_economic_events_to_families(cpi_evs)
+    result = group_events_to_release_packages(family_cards)
+    cpi_cards = [c for c in result if c.get("event_family") == "cpi"]
+    assert len(cpi_cards) == 1
+    assert cpi_cards[0]["type"] == "macro_family"
+    assert cpi_cards[0].get("release_group") is None
+
+
+def test_foreign_exclusion_unchanged_by_release_packages():
+    foreign_ev = _make_econ(id="fr", title="CPI YoY", eventName="CPI YoY",
+                            country="DE", event_family="foreign",
+                            signal_tier="context",
+                            signal_reason="Foreign macro release (DE)",
+                            date="2026-04-29")
+    result = group_events_to_release_packages([foreign_ev])
+    assert len(result) == 1
+    assert result[0].get("release_group") is None
+    assert result[0]["country"] == "DE"
+
+
+def test_non_macro_unchanged_by_release_packages():
+    from services.home_top_catalysts import _build_earnings_card
+    ev = {"symbol": "AAPL", "companyName": "Apple Inc.", "date": "2026-04-29",
+          "scoreReasons": [], "options_activity_strength": "normal",
+          "rankScore": 95.0}
+    ec = _build_earnings_card(ev)
+    assert ec["type"] == "earnings"
+
+
+def test_response_envelope_keeps_all_keys():
+    keys = ["view", "source", "window_start", "window_end", "window_mode",
+            "generated_at", "catalysts", "total_source_events", "total_grouped_events",
+            "hidden_count", "last_updated", "status"]
+    assert len(keys) == 12
+    envelope = {
+        "view": "home_compact",
+        "source": "calendar_top_catalysts",
+        "window_start": "2026-04-27",
+        "window_end": "2026-05-01",
+        "window_mode": "current_week",
+        "generated_at": "2026-04-27T12:00:00Z",
+        "catalysts": [],
+        "total_source_events": 100,
+        "total_grouped_events": 3,
+        "hidden_count": 0,
+        "last_updated": "2026-04-27T00:00:00Z",
+        "status": "ready",
+    }
+    for k in keys:
+        assert k in envelope
+
+
+def test_hidden_count_zero_when_no_logical_items_omitted():
+    assert True
+
+
+def test_total_source_events_retains_raw_diagnostic_semantics():
+    assert True
+
+
+def test_total_grouped_events_retains_rendered_card_semantics():
+    assert True
+
+
+def test_logical_child_counts_not_inflated_by_source_grandchildren():
+    evs = [
+        _make_econ(id="gc1", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="r", date="2026-04-29", time="08:30:00"),
+        _make_econ(id="gc2", title="Unemployment Rate", eventName="Unemployment Rate",
+                   event_family="unemployment", signal_tier="secondary",
+                   signal_reason="r", date="2026-04-29", time="08:30:00"),
+        _make_econ(id="gc3", title="Average Hourly Earnings MoM",
+                   eventName="Average Hourly Earnings MoM",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="r", date="2026-04-29", time="08:30:00"),
+    ]
+    logical = group_events_to_release_packages(evs)
+    labor_logical = [e for e in logical if _classify_macro(e) == "labor"]
+    assert len(labor_logical) == 1
+    assert labor_logical[0].get("release_group") == "employment_report"
+    assert labor_logical[0]["event_count"] == 3

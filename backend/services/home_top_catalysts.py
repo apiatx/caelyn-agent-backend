@@ -24,7 +24,10 @@ import time as _time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
-from services.calendar_curation import group_economic_events_to_families
+from services.calendar_curation import (
+    group_economic_events_to_families,
+    group_events_to_release_packages,
+)
 
 
 # ── Tier ordering (reused from calendar_curation; local copy for independence) ─
@@ -249,10 +252,17 @@ def _date_label(start: str, end: str) -> str:
 
 def _classify_macro(ev: dict) -> Optional[str]:
     """Return the home macro category id, or None if no match."""
+    rg = ev.get("release_group")
+    if rg:
+        if rg in ("employment_report", "jobless_claims_report", "jolts_report"):
+            return "labor"
+        if rg in ("ism_manufacturing_report", "ism_services_report", "factory_orders_report"):
+            return "growth"
+
     bag = " ".join(
         str(ev.get(k) or "")
-        for k in ("eventName", "indicatorName", "title", "display_title")
-    )
+        for k in ("eventName", "indicatorName", "title", "display_title", "event_family")
+    ).replace("_", " ")
     if not bag.strip():
         return None
     for cat in _MACRO_CATEGORIES:
@@ -820,7 +830,13 @@ async def build_home_top_catalysts(
     #    3b. Pass eligible US economic events through the family grouper.
     macro_logical = group_economic_events_to_families(macro_us)
 
-    #    3c. Classify each logical event (family card or discrete) into categories.
+    #    3c. Group remaining multi-row US release packages (Employment Report,
+    #        Jobless Claims, JOLTS, ISM Manufacturing/Services, Factory Orders)
+    #        into display-level package cards.
+    macro_logical = group_events_to_release_packages(macro_logical)
+
+    #    3d. Classify each logical event (family card, package card, or
+    #        discrete) into Home categories.
     events_by_cat: dict[str, list[dict]] = {}
     for ev in macro_logical:
         cat_id = _classify_macro(ev)
@@ -866,7 +882,13 @@ async def build_home_top_catalysts(
     remaining = _MAX_TOTAL - len(final)
     final.extend(other_cards[:remaining])
 
-    hidden = max(0, total_source - len(final))
+    # hidden_count counts omitted logical Home category cards / direct children
+    # — NOT raw source events.  Grouping many FMP rows into a single package
+    # card is noise reduction, not omission.
+    omitted_macro = max(0, len(all_macro_cards) - len(selected_macro))
+    omitted_earnings = max(0, len(earnings_flat) - _MAX_EARNINGS)
+    omitted_other = max(0, len(other_flat) - _MAX_OTHER)
+    hidden = omitted_macro + omitted_earnings + omitted_other
 
     print(
         f"[home_top_catalysts] mode={window_mode} week={week_start}/{week_end} "
