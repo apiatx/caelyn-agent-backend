@@ -28,6 +28,7 @@ from services.calendar_curation import (
     group_economic_events_to_families,
     group_events_to_release_packages,
 )
+from services.calendar_snapshot_service import HORIZON_TABS as _HORIZON_TABS
 
 
 # ── Tier ordering (reused from calendar_curation; local copy for independence) ─
@@ -798,8 +799,12 @@ async def build_home_top_catalysts(
                 if stored_horizon_end and (not horizon_end or stored_horizon_end > horizon_end):
                     horizon_end = stored_horizon_end
 
-                # Check coverage: horizon must cover the planning Friday.
-                if stored_horizon_end and stored_horizon_end < week_end:
+                # Check coverage: horizon must cover the planning week.
+                h_start = (horizon.get("horizon_start") or "")
+                if (
+                    (stored_horizon_end and stored_horizon_end < week_end)
+                    or (h_start and h_start > week_start)
+                ):
                     coverage_complete = False
             else:
                 # Fall back to current_week for old snapshots without events.
@@ -811,7 +816,14 @@ async def build_home_top_catalysts(
                     if d and monday <= d <= friday:
                         found_legacy.append(ev)
                 macro_raw.extend(found_legacy)
-                if not found_legacy and _parse_date(stored_horizon_end):
+                if not found_legacy and tab in _HORIZON_TABS:
+                    # A legacy snapshot without a broad horizon only covers the
+                    # current (and previous) week.  A planning window outside
+                    # that span is not covered by cached data — report it so a
+                    # refresh is requested instead of a false empty state.
+                    # Non-horizon tabs (e.g. treasury_macro) are point-in-time
+                    # and never cover a future planning week, so they must not
+                    # flip the coverage flag.
                     coverage_complete = False
 
             stored = (env.get("window") or {})

@@ -76,6 +76,10 @@ TARGET_TABS: list[str] = [
 # snapshot window rotates.
 _TABS_WITH_HORIZON: frozenset[str] = frozenset({"economic_releases"})
 
+# Public alias for routes/consumers that need to know which tabs support
+# requested-window serving (day / week / month) from the broad horizon.
+HORIZON_TABS = _TABS_WITH_HORIZON
+
 _HORIZON_PAST_DAYS   = 14
 _HORIZON_FUTURE_DAYS = 89
 
@@ -242,6 +246,11 @@ def get_snapshot(tab: str) -> dict:
         cw = _select_events_for_window(evts, req_from_str, req_to_str)
         prev_from, prev_to = _previous_week_window_for(tab)
         pw = _select_events_for_window(evts, prev_from, prev_to)
+        # The rolling-horizon fetch caps the stored collection; if the derived
+        # previous-week slice is empty, keep the persisted previous_week so the
+        # Recent view does not lose its historical events.
+        if not pw:
+            pw = slot.get("previous_week") or []
 
     # Cache age in hours
     cache_age_hours: Optional[float] = None
@@ -516,6 +525,244 @@ def _select_events_for_window(events: list[dict], from_date: str, to_date: str) 
         e for e in events
         if from_date <= (e.get("date") or "")[:10] <= to_date
     ]
+
+
+# ── Requested-window read API (horizon tabs) ────────────────────────────────
+
+_HORIZON_VIEWS = ("recent", "day", "week", "month")
+
+
+def _parse_iso_date(s: Optional[str]) -> Optional[date]:
+    """Parse a YYYY-MM-DD anchor. Returns None on any parse error."""
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(s[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_window(
+    view: Optional[str],
+    anchor: Optional[str],
+    from_date: Optional[str],
+    to_date: Optional[str],
+    tab: str,
+) -> tuple[str, str]:
+    """
+    Derive the inclusive [window_start, window_end] (ISO YYYY-MM-DD) for a request.
+
+    An explicit from/to override wins.  Otherwise the `view` is resolved around
+    the ET anchor date (`date`, defaulting to today):
+
+      • day    → the anchor day
+      • week   → Monday–Friday of the anchor week (current/previous/future)
+      • month  → first calendar day through last calendar day of the anchor month
+      • recent → the snapshot's existing previous-week window (current Recent view)
+
+    Unknown views fall back to the Mon–Fri week containing the anchor.  All
+    conventions are America/New_York, matching the rest of the snapshot service.
+    """
+    today = _et_now().date()
+
+    if from_date or to_date:
+        f = _parse_iso_date(from_date) or _parse_iso_date(anchor) or today
+        t = _parse_iso_date(to_date) or f
+        if t < f:
+            f, t = t, f
+        return f.isoformat(), t.isoformat()
+
+    v = (view or "week").strip().lower()
+    if v == "recent":
+        return _previous_week_window_for(tab)
+
+    anchor_date = _parse_iso_date(anchor) or today
+
+    if v == "day":
+        return anchor_date.isoformat(), anchor_date.isoformat()
+
+    if v == "month":
+        first = anchor_date.replace(day=1)
+        if first.month == 12:
+            nxt = date(first.year + 1, 1, 1)
+        else:
+            nxt = date(first.year, first.month + 1, 1)
+        return first.isoformat(), (nxt - timedelta(days=1)).isoformat()
+
+    # week (default)
+    monday = anchor_date - timedelta(days=anchor_date.weekday())
+    friday = monday + timedelta(days=4)
+    return monday.isoformat(), friday.isoformat()
+
+
+def _window_horizon_bounds(
+    env: dict, broad: list[dict],
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Return the stored horizon [start, end] used for coverage reporting.
+    Prefers the horizon meta fields; falls back to the stored window and to the
+    broad events' actual date span so old rows remain truthful.
+    """
+    horizon = env.get("horizon") or {}
+    stored_window = env.get("window") or {}
+    h_start = horizon.get("horizon_start") or stored_window.get("stored_from")
+    h_end = horizon.get("horizon_end") or stored_window.get("stored_to")
+    if broad:
+        dates = sorted(
+            (e.get("date") or "")[:10] for e in broad
+            if (e.get("date") or "")[:10]
+        )
+        if dates:
+            h_start = h_start or dates[0]
+            h_end = h_end or dates[-1]
+    return (h_start or None), (h_end or None)
+
+
+def _actual_bounds(events: list[dict]) -> tuple[Optional[str], Optional[str]]:
+    """
+    Return the [min_date, max_date] span actually covered by the persisted
+    events. This is the ground-truth horizon used for coverage: the meta
+    horizon_start/horizon_end describe the intended fetch window, while the
+    persisted collection may be narrower (e.g. capped fetches).
+    """
+    dates = sorted(
+        (e.get("date") or "")[:10] for e in events
+        if (e.get("date") or "")[:10]
+    )
+    if not dates:
+        return None, None
+    return dates[0], dates[-1]
+
+
+def _window_covered(
+    horizon_start: Optional[str],
+    horizon_end: Optional[str],
+    win_from: str,
+    win_to: str,
+) -> bool:
+    """True when the stored horizon covers [win_from, win_to] inclusive."""
+    if not horizon_end:
+        return False
+    if horizon_start and win_from < horizon_start:
+        return False
+    return win_to <= horizon_end
+
+
+def _window_empty_reason(
+    coverage_complete: bool,
+    selected: list[dict],
+    source: str,
+) -> Optional[str]:
+    """
+    Truthful empty-state classification for a requested window.
+
+      • events present                     → None
+      • snapshot has no events at all      → "snapshot_empty"
+      • window outside cached horizon      → "outside_horizon"
+      • old snapshot without broad events  → "legacy_snapshot_without_horizon"
+      • covered window with no events      → "no_events_in_window"
+    """
+    if selected:
+        return None
+    if source == "none":
+        return "snapshot_empty"
+    if not coverage_complete:
+        if source == "legacy":
+            return "legacy_snapshot_without_horizon"
+        return "outside_horizon"
+    return "no_events_in_window"
+
+
+def get_snapshot_window(
+    tab: str,
+    view: Optional[str] = None,
+    date: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+) -> dict:
+    """
+    Serve a requested day/week/month window from the persisted rolling horizon.
+
+    Additive to get_snapshot(): every existing envelope field is preserved, and
+    `events` carries the SELECTED window (never the full rolling horizon), so a
+    Week/Day response does not include all ~90 days.  Window and coverage
+    metadata describe the requested window truthfully.
+
+    Selection:
+      • Prefers the canonical broad `events` collection when present.
+      • Falls back to legacy `current_week` / `previous_week` for old snapshots
+        that predate the rolling horizon.
+      • No provider calls. No fabricated data. Windows outside the stored
+        horizon report incomplete coverage truthfully.
+    """
+    env = get_snapshot(tab)
+
+    broad = env.get("events") or []
+    legacy = (env.get("current_week") or []) + (env.get("previous_week") or [])
+
+    win_from, win_to = _resolve_window(view, date, from_date, to_date, tab)
+    v = (view or "week").strip().lower()
+
+    if v == "recent":
+        # Recent preserves the existing previous-week semantics exactly.  It
+        # returns the envelope's previous_week slice directly (derived from the
+        # broad horizon when possible, else the persisted previous_week) so the
+        # historical display is unchanged even when the broad collection is
+        # capped.  Window metadata reflects the actual span of that data.
+        source = "previous_week"
+        pool = env.get("previous_week") or []
+        selected = list(pool)
+        if pool:
+            coverage_complete = True
+            empty_reason = None if selected else "no_events_in_window"
+            r_start, r_end = _actual_bounds(pool)
+            if r_start:
+                win_from, win_to = r_start, r_end
+        else:
+            coverage_complete = False
+            empty_reason = "snapshot_empty"
+    else:
+        source = "horizon" if broad else ("legacy" if legacy else "none")
+        pool = broad if broad else legacy
+        selected = _select_events_for_window(pool, win_from, win_to)
+        # Coverage is judged against the ACTUAL persisted event span (ground
+        # truth).  The meta horizon fields describe the intended fetch window;
+        # the persisted collection may be narrower (e.g. capped fetches), and
+        # that narrower span is what truly covers a requested window.
+        actual_start, actual_end = _actual_bounds(pool)
+        coverage_complete = _window_covered(actual_start, actual_end, win_from, win_to)
+        empty_reason = _window_empty_reason(coverage_complete, selected, source)
+
+    horizon_start, horizon_end = _window_horizon_bounds(env, broad)
+
+    out = dict(env)
+    if from_date or to_date:
+        out["view"] = (view or "range").strip().lower()
+    else:
+        out["view"] = (view or "week").strip().lower()
+    out["requested_date"] = date
+    out["window_start"] = win_from
+    out["window_end"] = win_to
+    out["events"] = selected
+    out["event_count"] = len(selected)
+    out["coverage_complete"] = coverage_complete
+    out["horizon_start"] = horizon_start
+    out["horizon_end"] = horizon_end
+    out["empty_reason"] = empty_reason
+
+    coverage = dict(out.get("coverage") or {})
+    coverage["complete"] = coverage_complete
+    coverage["requested_start"] = win_from
+    coverage["requested_end"] = win_to
+    out["coverage"] = coverage
+
+    print(
+        f"[calendar_snapshot] get_snapshot_window tab={tab} view={out['view']} "
+        f"window={win_from}→{win_to} source={source} "
+        f"selected={len(selected)} coverage_complete={coverage_complete} "
+        f"empty_reason={empty_reason} horizon={horizon_start}→{horizon_end}"
+    )
+    return out
 
 
 async def refresh_tab(tab: str, fmp_key: str) -> dict:

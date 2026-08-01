@@ -37,9 +37,11 @@ from services.catalyst_calendar_service import (
     get_overview,
 )
 from services.calendar_snapshot_service import (
+    HORIZON_TABS as _HORIZON_TABS,
     TARGET_TABS as _SNAPSHOT_TABS,
     get_read_source as _get_read_source,
     get_snapshot as _get_snapshot,
+    get_snapshot_window as _get_snapshot_window,
 )
 from services.calendar_curation import (
     CURATED_TABS as _CURATED_TABS,
@@ -57,6 +59,10 @@ from services.top_catalysts_service import (
 router = APIRouter(tags=["catalyst_calendar"])
 
 _AUTH_HEADER = "X-API-Key"
+
+# Month view keeps a larger curation cap so all matching horizon events are
+# returned (per-view; week/day/recent keep the normal display cap).
+_MONTH_VIEW_CAP = 500
 
 
 def _check_key(api_key: Optional[str]) -> Optional[JSONResponse]:
@@ -128,6 +134,18 @@ async def catalyst_events(
         description="End date YYYY-MM-DD. Overrides mode default window.",
         alias="to",
     ),
+    view: Optional[str] = Query(
+        default=None,
+        description=(
+            "Requested window for horizon tabs (economic_releases): "
+            "'recent' | 'day' | 'week' | 'month'. Anchored at `date` (ET). "
+            "Ignored for non-horizon snapshot tabs."
+        ),
+    ),
+    date: Optional[str] = Query(
+        default=None,
+        description="Anchor date YYYY-MM-DD for the requested view window (ET).",
+    ),
     symbols: Optional[str] = Query(
         default=None,
         description="Comma-separated symbol list for explicit filtering.",
@@ -195,7 +213,21 @@ async def catalyst_events(
     # exclusively from the persistent weekly snapshot. They MUST NOT trigger
     # a live FMP fetch on request, regardless of mode. Earnings is excluded.
     if tab in _SNAPSHOT_TABS:
-        snap = _get_snapshot(tab)
+        # For horizon tabs (economic_releases) a requested window (view/date/
+        # from/to) selects the matching day/week/month slice from the persisted
+        # rolling `events` horizon, with truthful coverage metadata. Without a
+        # requested window the existing full envelope is served unchanged.
+        window_requested = bool(view or date or from_date or to_date)
+        if window_requested and tab in _HORIZON_TABS:
+            snap = _get_snapshot_window(
+                tab,
+                view=view,
+                date=date,
+                from_date=from_date,
+                to_date=to_date,
+            )
+        else:
+            snap = _get_snapshot(tab)
         # Display-layer curation. Raw Neon storage is unchanged; this only
         # trims/dedupes/re-ranks the response payload. Uses already-cached
         # event fields only — no FMP, no profile enrichment, no DB lookups
@@ -214,6 +246,21 @@ async def catalyst_events(
             snap = _curate_envelope(
                 tab, snap, cap=_CURATION_CAP, watchlist=wl, portfolio=pf,
             )
+            if window_requested and tab in _HORIZON_TABS:
+                # Curate the selected window the same way current_week is
+                # curated (hard filter, dedup, family grouping, scoring).
+                # Month keeps a larger cap so it returns all matching events.
+                from services.calendar_curation import curate_events as _curate_events
+                win_cap = (
+                    _MONTH_VIEW_CAP
+                    if (view or "").strip().lower() == "month"
+                    else _CURATION_CAP
+                )
+                snap["events"] = _curate_events(
+                    tab, snap.get("events") or [],
+                    cap=win_cap, watchlist=wl, portfolio=pf,
+                )
+                snap["event_count"] = len(snap["events"])
 
         # If the snapshot is stale (wrong week), trigger a background refresh
         # so the NEXT request gets current data. This handles restarts that
@@ -227,9 +274,26 @@ async def catalyst_events(
             except Exception as _rte:
                 print(f"[catalyst] request-time stale refresh error tab={tab}: {_rte}")
 
+        # Additive window metadata (horizon tabs, requested-window path only).
+        _window_fields = (
+            {
+                "view":              snap.get("view"),
+                "requested_date":    snap.get("requested_date"),
+                "window_start":      snap.get("window_start"),
+                "window_end":        snap.get("window_end"),
+                "event_count":       snap.get("event_count"),
+                "coverage_complete": snap.get("coverage_complete"),
+                "horizon_start":     snap.get("horizon_start"),
+                "horizon_end":       snap.get("horizon_end"),
+                "empty_reason":      snap.get("empty_reason"),
+            }
+            if window_requested and tab in _HORIZON_TABS else {}
+        )
+
         return JSONResponse(content={
             "tab":           tab,
             "mode":          mode,
+            **_window_fields,
             "current_week":  snap["current_week"],
             "previous_week": snap["previous_week"],
             "last_updated":  snap["last_updated"],

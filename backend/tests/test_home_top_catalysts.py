@@ -32,6 +32,8 @@ from services.home_top_catalysts import (
     _MACRO_CATEGORIES,
     _CATEGORY_BY_ID,
     _TIER_ORDER,
+    _planning_window,
+    build_home_top_catalysts,
 )
 
 
@@ -1246,3 +1248,270 @@ def test_logical_child_counts_not_inflated_by_source_grandchildren():
     assert len(labor_logical) == 1
     assert labor_logical[0].get("release_group") == "employment_report"
     assert labor_logical[0]["event_count"] == 3
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Home next-week planning integration (Sat Aug 1 → Mon Aug 3 – Fri Aug 7)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+import asyncio
+from unittest import mock
+
+
+def _home_snapshot(events, horizon_start="2026-07-18", horizon_end="2026-10-29"):
+    """Fixture get_snapshot envelope for a horizon tab (economic_releases)."""
+    return {
+        "current_week":  [],
+        "previous_week": [],
+        "last_updated":  "2026-08-01T12:00:00+00:00",
+        "status":        "ready",
+        "is_stale":      False,
+        "window": {
+            "requested_from": "2026-07-27",
+            "requested_to":   "2026-07-31",
+            "stored_from":    horizon_start,
+            "stored_to":      horizon_end,
+        },
+        "diagnostics": {},
+        "events": events,
+        "horizon": {
+            "horizon_start": horizon_start,
+            "horizon_end":   horizon_end,
+            "event_count":   len(events),
+        },
+        "coverage": {
+            "complete":     True,
+            "horizon_end":  horizon_end,
+            "requested_end": "2026-07-31",
+        },
+    }
+
+
+def _home_legacy_snapshot(cw, pw, horizon_end=""):
+    """Fixture get_snapshot envelope for a legacy (pre-horizon) snapshot."""
+    return {
+        "current_week":  cw,
+        "previous_week": pw,
+        "last_updated":  "2026-07-31T14:24:25+00:00",
+        "status":        "ready",
+        "is_stale":      False,
+        "window": {
+            "requested_from": "2026-07-27",
+            "requested_to":   "2026-07-31",
+            "stored_from":    "2026-07-27",
+            "stored_to":      "2026-07-31",
+        },
+        "diagnostics": {},
+        "coverage": {
+            "complete":     False,
+            "horizon_end":  "2026-07-31",
+            "requested_end": "2026-07-31",
+        },
+    }
+
+
+def _empty_top_catalysts():
+    return {
+        "tab": "top_catalysts", "mode": "weekly", "week": "2026-07-27/2026-07-31",
+        "days": [], "current_week": [], "previous_week": [],
+        "last_updated": None, "status": "empty",
+    }
+
+
+def _patch_home_sources(econ_env, treasury_env=None):
+    """Patch get_top_catalysts (empty) and get_snapshot per planning tab."""
+    snap_getter = mock.MagicMock()
+    snap_getter.side_effect = lambda tab: {
+        "economic_releases": econ_env,
+        "treasury_macro": treasury_env if treasury_env is not None else _home_legacy_snapshot([], []),
+    }.get(tab, _home_legacy_snapshot([], []))
+    patches = [
+        mock.patch("services.top_catalysts_service.get_top_catalysts", return_value=_empty_top_catalysts()),
+        mock.patch("services.calendar_snapshot_service.get_snapshot", side_effect=snap_getter.side_effect),
+    ]
+    return patches
+
+
+def _run_home(today, econ_env, treasury_env=None):
+    patches = _patch_home_sources(econ_env, treasury_env)
+    for p in patches:
+        p.start()
+    try:
+        return asyncio.run(build_home_top_catalysts(today_override=today))
+    finally:
+        for p in patches:
+            p.stop()
+
+
+# ── Planning window rule ─────────────────────────────────────────────────────
+
+def test_saturday_aug_1_selects_aug_3_7():
+    monday, friday, mode = _planning_window(date(2026, 8, 1))
+    assert mode == "next_week_planning"
+    assert monday.isoformat() == "2026-08-03"
+    assert friday.isoformat() == "2026-08-07"
+
+
+def test_sunday_selects_following_monday_friday():
+    monday, friday, mode = _planning_window(date(2026, 8, 2))
+    assert mode == "next_week_planning"
+    assert monday.isoformat() == "2026-08-03"
+    assert friday.isoformat() == "2026-08-07"
+
+
+def test_weekday_selects_current_week():
+    monday, friday, mode = _planning_window(date(2026, 8, 5))
+    assert mode == "current_week"
+    assert monday.isoformat() == "2026-08-03"
+    assert friday.isoformat() == "2026-08-07"
+
+
+# ── Home reads broad horizon (not current_week) ─────────────────────────────
+
+def test_home_selects_aug_3_7_events_from_broad_horizon():
+    events = [
+        _make_econ(id="nfp", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="Monthly payroll release",
+                   country="US", date="2026-08-07", time="08:30:00"),
+        _make_econ(id="cpi", title="CPI MoM", eventName="CPI MoM",
+                   event_family="cpi", signal_tier="major",
+                   signal_reason="Consumer inflation report",
+                   country="US", date="2026-08-05", time="08:30:00"),
+    ]
+    result = _run_home(date(2026, 8, 1), _home_snapshot(events))
+    assert result["window_mode"] == "next_week_planning"
+    assert result["window_start"] == "2026-08-03"
+    assert result["window_end"] == "2026-08-07"
+    assert result["coverage_complete"] is True
+    assert result["empty_reason"] is None
+    assert len(result["catalysts"]) > 0
+
+
+def test_home_does_not_depend_on_current_week_equaling_aug_3_7():
+    """Home selects from the broad horizon even when current_week is another week."""
+    events = [
+        _make_econ(id="cpi", title="CPI MoM", eventName="CPI MoM",
+                   event_family="cpi", signal_tier="major",
+                   signal_reason="Consumer inflation report",
+                   country="US", date="2026-08-05", time="08:30:00"),
+    ]
+    env = _home_snapshot(events)
+    env["current_week"] = [
+        _make_econ(id="jul_only", title="CPI MoM", eventName="CPI MoM",
+                   event_family="cpi", signal_tier="major",
+                   signal_reason="r", country="US", date="2026-07-29"),
+    ]
+    result = _run_home(date(2026, 8, 1), env)
+    assert result["empty_reason"] is None
+    assert result["coverage_complete"] is True
+    assert len(result["catalysts"]) > 0
+    all_ids = [c["id"] for c in result["catalysts"]]
+    assert not any("jul_only" in cid for cid in all_ids)
+
+
+# ── US-only filtering ────────────────────────────────────────────────────────
+
+def test_foreign_events_excluded_from_home_catalysts():
+    events = [
+        _make_econ(id="us_cpi", title="CPI MoM", eventName="CPI MoM",
+                   event_family="cpi", signal_tier="major",
+                   signal_reason="Consumer inflation report",
+                   country="US", date="2026-08-05", time="08:30:00"),
+        _make_econ(id="de_cpi", title="CPI YoY", eventName="CPI YoY",
+                   event_family="cpi", signal_tier="major",
+                   signal_reason="Foreign release",
+                   country="DE", date="2026-08-05", time="08:30:00"),
+    ]
+    result = _run_home(date(2026, 8, 1), _home_snapshot(events))
+    assert result["empty_reason"] is None
+    assert len(result["catalysts"]) > 0
+
+
+# ── Grouping on Home catalysts ───────────────────────────────────────────────
+
+def test_home_family_grouping_intact():
+    events = [
+        _make_econ(id="c1", title="CPI MoM", eventName="CPI MoM",
+                   event_family="cpi", signal_tier="major",
+                   signal_reason="Consumer inflation report",
+                   country="US", date="2026-08-05", time="08:30:00"),
+        _make_econ(id="c2", title="Core CPI MoM", eventName="Core CPI MoM",
+                   event_family="cpi", signal_tier="major",
+                   signal_reason="Consumer inflation report",
+                   country="US", date="2026-08-05", time="08:30:00"),
+    ]
+    result = _run_home(date(2026, 8, 1), _home_snapshot(events))
+    inflation = [c for c in result["catalysts"] if c.get("category") == "inflation"]
+    assert inflation, result["catalysts"]
+    assert inflation[0]["event_count"] == 1  # one logical family card child
+    assert inflation[0]["children"][0]["type"] == "macro_family"
+    assert inflation[0]["children"][0]["event_family"] == "cpi"
+
+
+def test_home_release_package_grouping_intact():
+    events = [
+        _make_econ(id="p1", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="Monthly payroll release",
+                   country="US", date="2026-08-07", time="08:30:00"),
+        _make_econ(id="p2", title="Unemployment Rate", eventName="Unemployment Rate",
+                   event_family="unemployment", signal_tier="secondary",
+                   signal_reason="Unemployment rate release",
+                   country="US", date="2026-08-07", time="08:30:00"),
+    ]
+    result = _run_home(date(2026, 8, 1), _home_snapshot(events))
+    labor = [c for c in result["catalysts"] if c.get("category") == "labor"]
+    assert labor, result["catalysts"]
+    pkg = labor[0]["children"][0]
+    assert pkg.get("release_group") == "employment_report"
+    assert pkg["event_count"] == 2
+
+
+def test_home_count_semantics_preserved():
+    events = [
+        _make_econ(id="c1", title="CPI MoM", eventName="CPI MoM",
+                   event_family="cpi", signal_tier="major",
+                   signal_reason="Consumer inflation report",
+                   country="US", date="2026-08-05", time="08:30:00"),
+        _make_econ(id="nfp", title="Nonfarm Payrolls", eventName="Nonfarm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="Monthly payroll release",
+                   country="US", date="2026-08-07", time="08:30:00"),
+    ]
+    result = _run_home(date(2026, 8, 1), _home_snapshot(events))
+    assert result["total_source_events"] >= 2
+    assert result["total_grouped_events"] == len(result["catalysts"])
+
+
+# ── Coverage / empty-state / refresh ────────────────────────────────────────
+
+def test_home_legacy_snapshot_incomplete_for_future_week():
+    """A legacy snapshot without broad events cannot cover a future planning week."""
+    cw = [_make_econ(id="jul", title="CPI MoM", eventName="CPI MoM",
+                     event_family="cpi", signal_tier="major",
+                     signal_reason="r", country="US", date="2026-07-29")]
+    econ_env = _home_legacy_snapshot(cw=cw, pw=[])
+    with mock.patch("config.FMP_API_KEY", None):
+        result = _run_home(date(2026, 8, 1), econ_env)
+    assert result["coverage_complete"] is False
+    assert result["empty_reason"] == "snapshot_horizon_incomplete"
+    assert len(result["catalysts"]) == 0
+
+
+def test_home_no_provider_fetch_when_horizon_complete():
+    """No refresh_tab (provider) call is made when the horizon covers planning."""
+    events = [
+        _make_econ(id="cpi", title="CPI MoM", eventName="CPI MoM",
+                   event_family="cpi", signal_tier="major",
+                   signal_reason="Consumer inflation report",
+                   country="US", date="2026-08-05", time="08:30:00"),
+    ]
+    with mock.patch(
+        "services.calendar_snapshot_service.refresh_tab",
+        new=mock.AsyncMock(),
+    ) as rt:
+        result = _run_home(date(2026, 8, 1), _home_snapshot(events))
+    assert rt.call_count == 0
+    assert result["refresh_attempted"] is False
+    assert result["coverage_complete"] is True
