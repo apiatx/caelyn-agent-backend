@@ -765,60 +765,100 @@ async def build_home_top_catalysts(
     earnings_flat.sort(key=lambda e: -float(e.get("rankScore") or 0))
 
     # ── 2. Macro pool ────────────────────────────────────────────────────────
-    # Mon–Fri: read from existing Neon-backed calendar snapshots (zero API call).
-    # Sat/Sun: snapshots hold prior-week data → fetch next-week data on-demand
-    #          into process-local memory (does NOT overwrite Neon slots).
+    # Read from the snapshot's broad-horizon `events` collection (preferred)
+    # or fall back to `current_week` for backward compatibility.  No separate
+    # FMP call is made from Home — the snapshot already caches the rolling
+    # forward horizon.
     macro_raw: list[dict] = []
     snapshot_source_windows: dict[str, str] = {}
+    coverage_complete = True
+    horizon_start: Optional[str] = None
+    horizon_end: Optional[str] = None
 
-    # First try snapshots (may already have next-week data if warmup ran)
     for tab in _PLANNING_TABS:
         try:
             env = _get_snapshot(tab) or {}
-            found = []
-            for ev in (env.get("current_week") or []):
-                if not isinstance(ev, dict):
-                    continue
-                d = _parse_date(ev.get("date"))
-                if d and monday <= d <= friday:
-                    found.append(ev)
-            macro_raw.extend(found)
+            horizon = env.get("horizon") or {}
+            stored_horizon_end = (horizon.get("horizon_end") or "")
+
+            # Prefer broad events collection (rolling horizon).
+            all_evts = env.get("events") or []
+            if all_evts:
+                found = []
+                for ev in all_evts:
+                    if not isinstance(ev, dict):
+                        continue
+                    d = _parse_date(ev.get("date"))
+                    if d and monday <= d <= friday:
+                        found.append(ev)
+                macro_raw.extend(found)
+
+                if horizon.get("horizon_start") and not horizon_start:
+                    horizon_start = horizon.get("horizon_start")
+                if stored_horizon_end and (not horizon_end or stored_horizon_end > horizon_end):
+                    horizon_end = stored_horizon_end
+
+                # Check coverage: horizon must cover the planning Friday.
+                if stored_horizon_end and stored_horizon_end < week_end:
+                    coverage_complete = False
+            else:
+                # Fall back to current_week for old snapshots without events.
+                found_legacy = []
+                for ev in (env.get("current_week") or []):
+                    if not isinstance(ev, dict):
+                        continue
+                    d = _parse_date(ev.get("date"))
+                    if d and monday <= d <= friday:
+                        found_legacy.append(ev)
+                macro_raw.extend(found_legacy)
+                if not found_legacy and _parse_date(stored_horizon_end):
+                    coverage_complete = False
+
             stored = (env.get("window") or {})
+            cov = env.get("coverage") or {}
             snapshot_source_windows[tab] = (
                 f"{stored.get('stored_from','?')}→{stored.get('stored_to','?')}"
+                f" horizon_end={stored_horizon_end or 'N/A'}"
+                f" coverage={'ok' if cov.get('complete') else 'incomplete'}"
             )
         except Exception as exc:
             print(f"[home_top_catalysts] snapshot read failed tab={tab}: {exc}")
 
-    # On Sat/Sun with empty macro: fetch next-week data on-demand
+    # On Sat/Sun with no planning-window events: if coverage is incomplete,
+    # the snapshot needs a refresh.  Trigger it via the snapshot service's
+    # existing guarded path (not a direct FMP call from Home).  The stale
+    # snapshot's status (with empty_reason) is returned to the caller.
     if window_mode == "next_week_planning" and not macro_raw:
-        try:
-            from config import FMP_API_KEY as _fmp_key
-        except Exception:
-            _fmp_key = None
-
-        if _fmp_key:
-            print(
-                f"[home_top_catalysts] next_week_planning: snapshots empty for "
-                f"{week_start}→{week_end}, fetching on-demand"
-            )
-            planning_events, planning_diag = await _ensure_planning_data(
-                monday, friday, _fmp_key,
-            )
-            macro_raw = planning_events
-            refresh_attempted = planning_diag.get("refresh_attempted", False)
-            refresh_succeeded = planning_diag.get("refresh_succeeded", False)
-            cache_statuses    = planning_diag
-            if not macro_raw:
-                empty_reason = "planning_fetch_returned_no_events"
+        if not coverage_complete:
+            # Snapshot horizon doesn't reach the planning Friday.
+            # Trigger a request-time background refresh through the snapshot
+            # service (same guarded path as /api/catalysts/events).
+            try:
+                from config import FMP_API_KEY as _fmp_key
+            except Exception:
+                _fmp_key = None
+            if _fmp_key:
+                print(
+                    f"[home_top_catalysts] next_week_planning: snapshots incomplete "
+                    f"for {week_start}→{week_end}, requesting snapshot refresh"
+                )
+                refresh_attempted = True
+                import asyncio as _aio
+                from services.calendar_snapshot_service import refresh_tab as _rt
+                for tab in _PLANNING_TABS:
+                    try:
+                        _aio.create_task(_rt(tab, _fmp_key))
+                    except Exception as _rte:
+                        print(f"[home_top_catalysts] snapshot refresh trigger error tab={tab}: {_rte}")
+                        refresh_succeeded = False
+                    else:
+                        refresh_succeeded = True if not refresh_succeeded else refresh_succeeded
+            empty_reason = "snapshot_horizon_incomplete"
         else:
-            empty_reason = "next_week_planning_no_fmp_key"
+            # Complete horizon but genuinely zero events in the planning window.
+            empty_reason = "no_events_in_planning_window"
 
-    elif window_mode == "next_week_planning" and macro_raw:
-        # Snapshot already had next-week data (e.g. warmup ran earlier)
-        cache_statuses = {tab: {"cache_status": "snapshot_hit"} for tab in _PLANNING_TABS}
-
-    if not macro_raw and window_mode == "current_week":
+    elif window_mode == "current_week" and not macro_raw:
         empty_reason = "current_week_snapshots_empty"
 
     total_source = len(earnings_flat) + len(macro_raw) + len(other_flat)
@@ -916,4 +956,8 @@ async def build_home_top_catalysts(
         "cache_status":         cache_statuses,
         "source_windows":       snapshot_source_windows,
         "empty_reason":         empty_reason,
+        # Rolling-horizon coverage
+        "coverage_complete":    coverage_complete,
+        "horizon_start":        horizon_start,
+        "horizon_end":          horizon_end,
     }

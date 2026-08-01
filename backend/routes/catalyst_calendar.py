@@ -237,6 +237,9 @@ async def catalyst_events(
             "is_stale":      snap.get("is_stale", False),
             "window":        snap.get("window"),
             "diagnostics":   snap.get("diagnostics"),
+            "events":        snap.get("events"),
+            "horizon":       snap.get("horizon"),
+            "coverage":      snap.get("coverage"),
         })
 
     # Parse comma-separated symbols

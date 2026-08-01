@@ -70,6 +70,15 @@ TARGET_TABS: list[str] = [
     "treasury_macro",
 ]
 
+# Tabs that support a broad rolling forward horizon.  These tabs store
+# an additive `events` collection spanning past_days→future_days so
+# future-week and Calendar Month views have data before the weekly
+# snapshot window rotates.
+_TABS_WITH_HORIZON: frozenset[str] = frozenset({"economic_releases"})
+
+_HORIZON_PAST_DAYS   = 14
+_HORIZON_FUTURE_DAYS = 89
+
 _lock = asyncio.Lock()
 
 
@@ -87,14 +96,16 @@ def _neon_read(tab: str) -> Optional[dict]:
         return None
     cw = snap.get("current_week") or []
     pw = snap.get("previous_week") or []
+    evts = snap.get("events") or []
     print(
         f"[calendar_snapshot] neon read tab={tab} status={snap.get('status')} "
-        f"current_week={len(cw)} previous_week={len(pw)} "
+        f"current_week={len(cw)} previous_week={len(pw)} events={len(evts)} "
         f"last_updated={snap.get('last_updated')}"
     )
     return {
         "current_week": cw,
         "previous_week": pw,
+        "events": evts,
         "meta": {
             "last_updated": snap.get("last_updated"),
             "status": snap.get("status") or "empty",
@@ -113,6 +124,7 @@ def _neon_write(tab: str, slot: dict) -> bool:
     meta = slot.get("meta") or {}
     cw = slot.get("current_week") or []
     pw = slot.get("previous_week") or []
+    evts = slot.get("events") or []
     status = meta.get("status") or "empty"
     last_updated = meta.get("last_updated")
     # Pass non-status meta fields through so window/fetch_error/last_run_week persist.
@@ -124,10 +136,11 @@ def _neon_write(tab: str, slot: dict) -> bool:
         last_updated=last_updated,
         status=status,
         meta=extra_meta,
+        events=evts,
     )
     print(
         f"[calendar_snapshot] neon write tab={tab} ok={ok} status={status} "
-        f"current_week={len(cw)} previous_week={len(pw)}"
+        f"current_week={len(cw)} previous_week={len(pw)} events={len(evts)}"
     )
     return ok
 
@@ -165,7 +178,7 @@ def _write_disk(data: dict) -> None:
 
 
 def _empty_slot() -> dict:
-    return {"current_week": [], "previous_week": [], "meta": {"last_updated": None, "status": "empty"}}
+    return {"current_week": [], "previous_week": [], "events": [], "meta": {"last_updated": None, "status": "empty"}}
 
 
 def _normalize_slot(slot: Any) -> dict:
@@ -173,6 +186,7 @@ def _normalize_slot(slot: Any) -> dict:
         return _empty_slot()
     slot.setdefault("current_week", [])
     slot.setdefault("previous_week", [])
+    slot.setdefault("events", [])
     meta = slot.setdefault("meta", {})
     meta.setdefault("last_updated", None)
     meta.setdefault("status", "empty")
@@ -191,6 +205,9 @@ def get_snapshot(tab: str) -> dict:
       is_stale   — True if the stored window does not cover the current ET week
       window     — requested vs. stored date ranges
       diagnostics — per-tab metrics for debugging
+      events     — broad event collection (horizon tabs only)
+      horizon    — rolling-horizon metadata (horizon tabs only)
+      coverage   — horizon-completeness info
     """
     slot: Optional[dict] = _neon_read(tab)
     source = "neon"
@@ -201,6 +218,7 @@ def get_snapshot(tab: str) -> dict:
 
     cw = slot.get("current_week") or []
     pw = slot.get("previous_week") or []
+    evts = slot.get("events") or []
     meta = (slot.get("meta") or {})
     last_updated = meta.get("last_updated")
     stored_window = meta.get("window") or {}
@@ -216,6 +234,14 @@ def get_snapshot(tab: str) -> dict:
     req_to_str   = req_to.strftime("%Y-%m-%d")
 
     is_stale = _snapshot_is_stale(slot, tab)
+
+    # If broad horizon events exist, derive current_week from them (preferred).
+    # This ensures the week view reflects the freshest canonical source.
+    # Fall back to existing current_week / previous_week for old snapshots.
+    if evts and tab in _TABS_WITH_HORIZON:
+        cw = _select_events_for_window(evts, req_from_str, req_to_str)
+        prev_from, prev_to = _previous_week_window_for(tab)
+        pw = _select_events_for_window(evts, prev_from, prev_to)
 
     # Cache age in hours
     cache_age_hours: Optional[float] = None
@@ -258,6 +284,26 @@ def get_snapshot(tab: str) -> dict:
         "sample_titles":     sample_titles,
     }
 
+    # Horizon metadata (additive — presented for horizon tabs only)
+    horizon: dict[str, Any] = {}
+    if evts and tab in _TABS_WITH_HORIZON:
+        horizon = {
+            "horizon_start": meta.get("horizon_start") or stored_window.get("from"),
+            "horizon_end":   meta.get("horizon_end")   or stored_window.get("to"),
+            "past_days":     meta.get("past_days", _HORIZON_PAST_DAYS),
+            "future_days":   meta.get("future_days", _HORIZON_FUTURE_DAYS),
+            "event_count":   meta.get("event_count", len(evts)),
+        }
+
+    coverage: dict[str, Any] = {}
+    if tab in _TABS_WITH_HORIZON:
+        horizon_end = meta.get("horizon_end") or stored_window.get("to") or ""
+        coverage["complete"] = (
+            bool(horizon_end) and horizon_end >= req_to_str
+        ) if evts else False
+        coverage["horizon_end"]   = horizon_end
+        coverage["requested_end"] = req_to_str
+
     envelope = {
         "current_week":  diag_cw,
         "previous_week": pw if not (status == "stale") else pw,
@@ -272,10 +318,18 @@ def get_snapshot(tab: str) -> dict:
         },
         "diagnostics": diagnostics,
     }
+
+    # Additive horizon fields (only for horizon tabs)
+    if evts and tab in _TABS_WITH_HORIZON:
+        envelope["events"]  = evts
+        envelope["horizon"] = horizon
+
+    envelope["coverage"] = coverage
+
     print(
         f"[calendar_snapshot] get_snapshot tab={tab} source={source} "
         f"status={status} is_stale={is_stale} "
-        f"current_week={len(diag_cw)} "
+        f"current_week={len(diag_cw)} events={len(evts)} "
         f"stored_from={stored_window.get('from')!r} req_from={req_from_str!r}"
     )
     return envelope
@@ -298,6 +352,7 @@ def get_read_source(tab: str) -> dict:
         "status": "empty",
         "current_week_count": 0,
         "previous_week_count": 0,
+        "events_count": 0,
         "last_updated": None,
     }
     slot: Optional[dict] = None
@@ -322,9 +377,11 @@ def get_read_source(tab: str) -> dict:
     if slot is not None:
         cw = slot.get("current_week") or []
         pw = slot.get("previous_week") or []
+        evts = slot.get("events") or []
         meta = slot.get("meta") or {}
         info["current_week_count"] = len(cw)
         info["previous_week_count"] = len(pw)
+        info["events_count"] = len(evts)
         info["last_updated"] = meta.get("last_updated")
         if cw:
             info["status"] = "ready"
@@ -348,6 +405,9 @@ def _snapshot_is_stale(slot: Optional[dict], tab: str) -> bool:
 
     Rules:
     • No slot or empty current_week → always stale.
+    • For horizon tabs: if events exist, also check horizon_end covers
+      the current ET Friday.  A snapshot with a recent last_updated but
+      an insufficient horizon_end is stale.
     • For ALL tabs: expected window starts on ET Monday (the current
       Mon–Fri calendar week). Stale if stored_from is before that date.
     Do NOT compare against last_updated / snapshot date — compare only
@@ -356,15 +416,32 @@ def _snapshot_is_stale(slot: Optional[dict], tab: str) -> bool:
     if not slot:
         return True
     cw = slot.get("current_week") or []
-    if not cw:
-        return True
     meta = slot.get("meta") or {}
     window = meta.get("window") or {}
     stored_from = window.get("from", "")
+
+    monday = _et_week_monday()
+    friday = monday + timedelta(days=4)
+    expected_from = monday
+
+    # Horizon-tab coverage check: must also cover the current Friday.
+    if tab in _TABS_WITH_HORIZON:
+        evts = slot.get("events") or []
+        if evts:
+            horizon_end = meta.get("horizon_end") or ""
+            if not horizon_end or horizon_end < friday.strftime("%Y-%m-%d"):
+                return True
+            # Horizon covers Friday — only stale if current_week is empty
+            # AND stored_from is outdated (no events from events in this window).
+            if not cw:
+                return True
+            return stored_from < expected_from.strftime("%Y-%m-%d")
+        # No events — fall through to legacy check.
+        if not cw:
+            return True
+
     if not stored_from:
         return True
-    monday = _et_week_monday()
-    expected_from = monday
     return stored_from < expected_from.strftime("%Y-%m-%d")
 
 
@@ -403,11 +480,49 @@ def _previous_week_window_for(tab: str) -> tuple[str, str]:
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
+def _horizon_window_for() -> tuple[str, str]:
+    """Rolling forward horizon: 14d back, 89d forward (103d total span)."""
+    today = _et_now().date()
+    from_date = today - timedelta(days=_HORIZON_PAST_DAYS)
+    to_date   = today + timedelta(days=_HORIZON_FUTURE_DAYS)
+    return from_date.strftime("%Y-%m-%d"), to_date.strftime("%Y-%m-%d")
+
+
+def _horizon_is_complete(slot: Optional[dict], requested_end: str) -> bool:
+    """
+    Return True if the stored horizon covers at least through `requested_end`.
+    A snapshot without the events field is considered incomplete for horizon purposes.
+    """
+    if not slot:
+        return False
+    evts = slot.get("events") or []
+    if not evts:
+        return False
+    meta = slot.get("meta") or {}
+    horizon_end = meta.get("horizon_end") or ""
+    if not horizon_end:
+        return False
+    return horizon_end >= requested_end
+
+
+def _select_events_for_window(events: list[dict], from_date: str, to_date: str) -> list[dict]:
+    """Return events whose date falls inside [from_date, to_date] inclusive.
+    Compares only the first 10 characters (YYYY-MM-DD) to handle datetime strings."""
+    return [
+        e for e in events
+        if from_date <= (e.get("date") or "")[:10] <= to_date
+    ]
+
+
 async def refresh_tab(tab: str, fmp_key: str) -> dict:
     """
     Run the existing FMP fetcher for `tab`, promote current→previous,
     save the new current_week and meta. Persists to Neon (source of truth)
     and best-effort to disk (emergency fallback). Returns the new envelope.
+
+    For tabs in _TABS_WITH_HORIZON, fetches a broad rolling horizon
+    (14d back, 89d forward), stores all events, and derives current_week
+    / previous_week from that collection.
     """
     if tab not in TARGET_TABS:
         raise ValueError(f"refresh_tab: unsupported tab {tab!r}")
@@ -429,11 +544,17 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
     watchlist = _load_watchlist_symbols()
     portfolio = _load_portfolio_symbols()
 
-    from_date, to_date = _week_window_for(tab)
+    use_horizon = tab in _TABS_WITH_HORIZON
+
+    if use_horizon:
+        fetch_from, fetch_to = _horizon_window_for()
+    else:
+        fetch_from, fetch_to = _week_window_for(tab)
+
     t0 = time.monotonic()
     try:
         events, err = await _fetch_tab(
-            fmp, tab, from_date, to_date, watchlist, portfolio,
+            fmp, tab, fetch_from, fetch_to, watchlist, portfolio,
             limit=1000, mode="upcoming",
         )
     except Exception as e:
@@ -448,16 +569,16 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
     before_filter = len(events)
     events = [
         e for e in events
-        if from_date <= (e.get("date") or "") <= to_date
+        if fetch_from <= (e.get("date") or "")[:10] <= fetch_to
     ]
     if len(events) != before_filter:
         print(
             f"[calendar_snapshot] refresh tab={tab} date-filter: "
-            f"{before_filter} → {len(events)} (dropped {before_filter - len(events)} outside {from_date}→{to_date})"
+            f"{before_filter} → {len(events)} (dropped {before_filter - len(events)} outside {fetch_from}→{fetch_to})"
         )
 
     print(
-        f"[calendar_snapshot] refresh tab={tab} window={from_date}→{to_date} "
+        f"[calendar_snapshot] refresh tab={tab} window={fetch_from}→{fetch_to} "
         f"events={len(events)} err={err} ms={ms}"
     )
 
@@ -472,48 +593,103 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
 
     prior_current = prior.get("current_week") or []
     prior_previous = prior.get("previous_week") or []
-    promoted_previous = prior_current or prior_previous or []
 
-    # Seed previous_week directly when there is nothing to promote. This
-    # handles the first refresh ever (and any subsequent refresh that lost
-    # both slots) so the Recent tab is non-empty without waiting an extra
-    # week. Treasury_macro is intentionally skipped — its feed is
-    # point-in-time and a prior-week range is meaningless. Done outside the
-    # lock to avoid holding it across an HTTP fetch.
-    prev_events: list[dict] = []
-    if not promoted_previous and tab != "treasury_macro":
-        pw_from, pw_to = _previous_week_window_for(tab)
-        t1 = time.monotonic()
-        try:
-            prev_events, prev_err = await _fetch_tab(
-                fmp, tab, pw_from, pw_to, watchlist, portfolio,
-                limit=1000, mode="upcoming",
+    if use_horizon:
+        # ── Rolling horizon: derive current / previous week from the broad
+        #     collection.  Prior-slot promotion is not needed — one fetch
+        #     covers the full horizon.  Preserve prior horizon on fetch error.
+        all_events = events or []
+        monday_str, friday_str = _week_window_for(tab)
+        cw_events = _select_events_for_window(all_events, monday_str, friday_str)
+
+        prev_from, prev_to = _previous_week_window_for(tab)
+        pw_events = _select_events_for_window(all_events, prev_from, prev_to)
+
+        # On fetch error, keep prior valid horizon so consumers never see
+        # a suddenly empty state.
+        if err and prior:
+            prior_evts = prior.get("events") or []
+            if prior_evts:
+                print(
+                    f"[calendar_snapshot] refresh tab={tab} fetch error — "
+                    f"preserving prior horizon events={len(prior_evts)}"
+                )
+                all_events = prior_evts
+                cw_events = _select_events_for_window(all_events, monday_str, friday_str)
+                pw_events = _select_events_for_window(all_events, prev_from, prev_to)
+
+        promoted_previous = pw_events or prior_previous or []
+        prev_events: list[dict] = []
+
+        horizon_start = fetch_from
+        horizon_end   = fetch_to
+    else:
+        # ── Existing per-week flow (non-horizon tabs) ──────────────────────
+        all_events = events or []
+        promoted_previous = prior_current or prior_previous or []
+
+        # Seed previous_week directly when there is nothing to promote. This
+        # handles the first refresh ever (and any subsequent refresh that lost
+        # both slots) so the Recent tab is non-empty without waiting an extra
+        # week. Treasury_macro is intentionally skipped — its feed is
+        # point-in-time and a prior-week range is meaningless. Done outside the
+        # lock to avoid holding it across an HTTP fetch.
+        prev_events = []
+        if not promoted_previous and tab != "treasury_macro":
+            pw_from, pw_to = _previous_week_window_for(tab)
+            t1 = time.monotonic()
+            try:
+                prev_events, prev_err = await _fetch_tab(
+                    fmp, tab, pw_from, pw_to, watchlist, portfolio,
+                    limit=1000, mode="upcoming",
+                )
+            except Exception as e:
+                print(f"[calendar_snapshot] previous_week seed fetch error tab={tab}: {e}")
+                prev_events, prev_err = [], str(e)
+            print(
+                f"[calendar_snapshot] seed previous_week tab={tab} "
+                f"window={pw_from}→{pw_to} events={len(prev_events)} "
+                f"err={prev_err} ms={int((time.monotonic() - t1) * 1000)}"
             )
-        except Exception as e:
-            print(f"[calendar_snapshot] previous_week seed fetch error tab={tab}: {e}")
-            prev_events, prev_err = [], str(e)
-        print(
-            f"[calendar_snapshot] seed previous_week tab={tab} "
-            f"window={pw_from}→{pw_to} events={len(prev_events)} "
-            f"err={prev_err} ms={int((time.monotonic() - t1) * 1000)}"
-        )
+
+        horizon_start = fetch_from
+        horizon_end   = fetch_to
 
     async with _lock:
-        new_previous = promoted_previous or prev_events or []
-        new_slot = {
-            "current_week": events or [],
-            "previous_week": new_previous,
-            "meta": {
-                "last_updated": datetime.now(timezone.utc).isoformat(),
-                "status":       "ready" if events else (
-                    "stale" if new_previous else "empty"
-                ),
-                "window":       {"from": from_date, "to": to_date},
-                "fetch_error":  err,
-                # Preserve schedule marker if it was set previously.
-                **{k: v for k, v in (prior.get("meta") or {}).items()
-                   if k in ("last_run_week",)},
+        if use_horizon:
+            new_previous = promoted_previous or []
+            new_current = cw_events or []
+        else:
+            new_previous = promoted_previous or prev_events or []
+            new_current = events or []
+
+        new_meta: dict[str, Any] = {
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+            "status":       "ready" if new_current else (
+                "stale" if new_previous else "empty"
+            ),
+            "window":       {
+                "from": fetch_from,
+                "to":   fetch_to,
             },
+            "fetch_error":  err,
+            # Preserve schedule marker if it was set previously.
+            **{k: v for k, v in (prior.get("meta") or {}).items()
+               if k in ("last_run_week",)},
+        }
+
+        if use_horizon:
+            new_meta["horizon_start"] = horizon_start
+            new_meta["horizon_end"]   = horizon_end
+            new_meta["past_days"]     = _HORIZON_PAST_DAYS
+            new_meta["future_days"]   = _HORIZON_FUTURE_DAYS
+            new_meta["event_count"]   = len(all_events)
+
+        new_slot = {
+            "current_week": new_current,
+            "previous_week": new_previous,
+            "events": all_events if use_horizon else [],
+            "meta": new_meta,
         }
 
         # Primary persistence: Neon.

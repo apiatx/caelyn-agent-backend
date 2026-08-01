@@ -446,11 +446,16 @@ def init_tables():
                 tab            TEXT PRIMARY KEY,
                 current_week   JSONB NOT NULL DEFAULT '[]'::jsonb,
                 previous_week  JSONB NOT NULL DEFAULT '[]'::jsonb,
+                events         JSONB NOT NULL DEFAULT '[]'::jsonb,
                 last_updated   TIMESTAMPTZ NULL,
                 status         TEXT NOT NULL DEFAULT 'empty',
                 meta           JSONB NOT NULL DEFAULT '{}'::jsonb,
                 updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
+        """)
+        cur.execute("""
+            ALTER TABLE public.calendar_snapshots
+            ADD COLUMN IF NOT EXISTS events JSONB NOT NULL DEFAULT '[]'::jsonb
         """)
 
         # ── Symbol-driven earnings cache (Watchlist / Portfolio universes) ───
@@ -2139,11 +2144,16 @@ def _ensure_calendar_snapshots_table(cur) -> None:
             tab            TEXT PRIMARY KEY,
             current_week   JSONB NOT NULL DEFAULT '[]'::jsonb,
             previous_week  JSONB NOT NULL DEFAULT '[]'::jsonb,
+            events         JSONB NOT NULL DEFAULT '[]'::jsonb,
             last_updated   TIMESTAMPTZ NULL,
             status         TEXT NOT NULL DEFAULT 'empty',
             meta           JSONB NOT NULL DEFAULT '{}'::jsonb,
             updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
+    """)
+    cur.execute("""
+        ALTER TABLE public.calendar_snapshots
+        ADD COLUMN IF NOT EXISTS events JSONB NOT NULL DEFAULT '[]'::jsonb
     """)
 def calendar_snapshot_read(tab: str) -> dict | None:
     """Read a single tab's snapshot row. Returns None if Neon unavailable or row missing."""
@@ -2156,7 +2166,7 @@ def calendar_snapshot_read(tab: str) -> dict | None:
         try:
             cur.execute(
                 """
-                SELECT tab, current_week, previous_week, last_updated, status, meta
+                SELECT tab, current_week, previous_week, events, last_updated, status, meta
                 FROM public.calendar_snapshots
                 WHERE tab = %s
                 """,
@@ -2174,7 +2184,7 @@ def calendar_snapshot_read(tab: str) -> dict | None:
             conn.commit()
             cur.execute(
                 """
-                SELECT tab, current_week, previous_week, last_updated, status, meta
+                SELECT tab, current_week, previous_week, events, last_updated, status, meta
                 FROM public.calendar_snapshots
                 WHERE tab = %s
                 """,
@@ -2186,14 +2196,16 @@ def calendar_snapshot_read(tab: str) -> dict | None:
             return None
         cw = row[1] or []
         pw = row[2] or []
-        last_updated = row[3].isoformat() if row[3] else None
+        evts = row[3] or []
+        last_updated = row[4].isoformat() if row[4] else None
         return {
             "tab": row[0],
             "current_week": cw if isinstance(cw, list) else (json.loads(cw) if isinstance(cw, str) else []),
             "previous_week": pw if isinstance(pw, list) else (json.loads(pw) if isinstance(pw, str) else []),
+            "events": evts if isinstance(evts, list) else (json.loads(evts) if isinstance(evts, str) else []),
             "last_updated": last_updated,
-            "status": row[4] or "empty",
-            "meta": row[5] or {},
+            "status": row[5] or "empty",
+            "meta": row[6] or {},
         }
     except Exception as e:
         print(f"[PG_STORAGE] calendar_snapshot_read error tab={tab}: {e}")
@@ -2211,6 +2223,7 @@ def calendar_snapshot_write(
     last_updated: str | None,
     status: str,
     meta: dict | None = None,
+    events: list | None = None,
 ) -> bool:
     """Upsert a tab's snapshot row. Returns True on success."""
     conn = _get_conn()
@@ -2224,18 +2237,19 @@ def calendar_snapshot_write(
             cur.execute(
                 """
                 INSERT INTO public.calendar_snapshots
-                    (tab, current_week, previous_week, last_updated, status, meta, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                    (tab, current_week, previous_week, events, last_updated, status, meta, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (tab) DO UPDATE SET
                     current_week  = EXCLUDED.current_week,
                     previous_week = EXCLUDED.previous_week,
+                    events        = EXCLUDED.events,
                     last_updated  = EXCLUDED.last_updated,
                     status        = EXCLUDED.status,
                     meta          = EXCLUDED.meta,
                     updated_at    = NOW()
                 """,
                 (tab, Json(current_week or []), Json(previous_week or []),
-                 last_updated, status, Json(meta or {})),
+                 Json(events or []), last_updated, status, Json(meta or {})),
             )
         except Exception as inner_e:
             try:
@@ -2248,18 +2262,19 @@ def calendar_snapshot_write(
             cur.execute(
                 """
                 INSERT INTO public.calendar_snapshots
-                    (tab, current_week, previous_week, last_updated, status, meta, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                    (tab, current_week, previous_week, events, last_updated, status, meta, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (tab) DO UPDATE SET
                     current_week  = EXCLUDED.current_week,
                     previous_week = EXCLUDED.previous_week,
+                    events        = EXCLUDED.events,
                     last_updated  = EXCLUDED.last_updated,
                     status        = EXCLUDED.status,
                     meta          = EXCLUDED.meta,
                     updated_at    = NOW()
                 """,
                 (tab, Json(current_week or []), Json(previous_week or []),
-                 last_updated, status, Json(meta or {})),
+                 Json(events or []), last_updated, status, Json(meta or {})),
             )
         conn.commit()
         cur.close()
