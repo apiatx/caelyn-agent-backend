@@ -136,12 +136,12 @@ The active coding agent may:
 - edit local files
 - run tests and validation
 - stage only exact approved task files
-- create exactly one local commit on `main`
+- create exactly one focused commit on `main`
+- push the completed task commit to `origin/main`
 - write its assigned agent-specific `latest.md` report
 
 The active coding agent must never:
 
-- push
 - pull
 - merge
 - rebase
@@ -154,9 +154,33 @@ The active coding agent must never:
 - create worktrees
 - modify remotes
 - force-push
+- push another branch
+- open or merge pull requests
 - use GitHub or `gh` write operations
 
-The user personally runs:
+For every completed implementation task, the active coding agent must:
+
+1. validate the requested behavior
+2. run `git diff --check`
+3. stage only the exact approved task files
+4. create exactly one focused commit on local `main`
+5. push the completed commit using `git push origin main`
+6. verify that local `main` and `origin/main` point to the pushed task commit
+7. write the final report with the commit SHA and push result
+
+Do not commit or push an incomplete, failing, partially validated, or temporary
+debugging state unless the user explicitly requests that behavior.
+
+Do not commit or push for:
+
+- audit-only tasks
+- read-only tasks
+- tasks where the user explicitly says not to commit or push
+- failed validation
+- unresolved merge conflicts
+- unrelated pre-existing production changes in an authorized task file
+
+The only permitted remote Git write operation is:
 
 `git push origin main`
 
@@ -172,11 +196,23 @@ Before committing:
 
 Create one descriptive local commit only after validation succeeds.
 
-If validation fails, do not commit unless the user explicitly approves a
-partial or failing state.
+After pushing, verify with:
 
-If the user says audit only, read only, do not edit, or do not commit, follow
-that instruction instead.
+- `git status -sb`
+- `git log -3 --oneline --decorate`
+
+A successful implementation task must end with the new task commit present at:
+
+- `HEAD`
+- local `main`
+- `origin/main`
+- `origin/HEAD`
+
+If validation fails, do not commit or push unless the user explicitly approves
+a partial or failing state.
+
+If the user says audit only, read only, do not edit, do not commit, or do not
+push, follow that instruction instead.
 
 ## Ground truth and architecture
 
@@ -353,10 +389,11 @@ After completing the task, overwrite the report assigned to the active agent:
 - DeepSeek through OpenCode:
   `/home/runner/workspace/.opencode-reports/latest.md`
 
-For an implementation task, write the report after the local commit.
+For an implementation task, write the report after the commit has been pushed
+successfully to `origin/main`.
 
-For an audit-only, read-only, or no-commit task, write the report after the
-audit and validation are complete. Do not create a commit.
+For an audit-only, read-only, no-commit, or no-push task, write the report after
+the audit and validation are complete. Do not create or push a commit.
 
 The report must contain:
 
@@ -372,17 +409,20 @@ The report must contain:
 - risks and remaining issues
 - final `git status -sb`
 - commit SHA and message
+- push command and result
+- confirmation that the task commit is present at `HEAD`, local `main`,
+  `origin/main`, and `origin/HEAD`
 - complete task commit diff
 
-For an audit-only, read-only, or no-commit task:
+For an audit-only, read-only, no-commit, or no-push task:
 
 - include the exact files inspected
 - state that no production files were modified
 - mark the commit SHA and message as not applicable
+- mark the push result as not applicable
 - mark the complete task commit diff as not applicable
 
 Use the committed patch as the source of truth for the final diff when a commit
 exists.
 
-Stop after writing the assigned report. For implementation tasks, this follows
-the local commit. Never push.
+Stop after writing the assigned report and confirming the push succeeded.
