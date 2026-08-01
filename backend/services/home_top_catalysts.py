@@ -24,6 +24,11 @@ import time as _time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
+from services.calendar_curation import group_economic_events_to_families
+
+
+# ── Tier ordering (reused from calendar_curation; local copy for independence) ─
+_TIER_ORDER: dict[str, int] = {"critical": 3, "major": 2, "secondary": 1, "context": 0}
 
 # ── Macro category definitions (priority: high number = show first) ──────────
 
@@ -55,6 +60,7 @@ _MACRO_CATEGORIES: list[dict] = [
             r"\b(?:cpi|consumer\s+price\s+index|ppi|producer\s+price\s+index|"
             r"pce|personal\s+consumption\s+expenditure|inflation\s+rate|"
             r"core\s+cpi|core\s+ppi|core\s+pce|deflator|price\s+index|"
+            r"employment\s+cost\s+index|"
             r"brc\s+retail\s+sales\s+monitor)\b",
             re.I,
         ),
@@ -255,6 +261,12 @@ def _classify_macro(ev: dict) -> Optional[str]:
     return None
 
 
+def _is_us_macro(ev: dict) -> bool:
+    """True when the event is eligible for the US-only default Home surface."""
+    country = (ev.get("country") or "").strip().upper()
+    return not country or country in ("US", "USA", "UNITED STATES")
+
+
 # ── Planning-window in-memory fetch (Sat/Sun only) ───────────────────────────
 
 def _get_planning_lock(key: str) -> asyncio.Lock:
@@ -421,42 +433,152 @@ async def warm_planning_window() -> None:
             print(f"[home_top_catalysts] warm_planning_window error tab={tab}: {exc}")
 
 
+# ── Home logical-event helpers ─────────────────────────────────────────────
+
+def _logical_event_name(ev: dict) -> str:
+    """Return the display name for a logical event (family card or discrete)."""
+    if ev.get("type") == "macro_family":
+        return ev.get("display_title") or ev.get("title") or ev.get("event_family", "") or ""
+    return _event_name(ev)
+
+
+def _resolve_parent_tier(children: list[dict]) -> str:
+    """Return the strongest explicit signal_tier, falling back to importance."""
+    best_val = -1
+    best_tier = "context"
+    for c in children:
+        t = (c.get("signal_tier") or "").lower()
+        if t in _TIER_ORDER:
+            v = _TIER_ORDER[t]
+            if v > best_val:
+                best_val = v
+                best_tier = t
+        else:
+            imp = (c.get("importance") or "low").lower()
+            if imp == "high" or imp == "medium":
+                v = _TIER_ORDER.get("secondary", 1)
+            else:
+                v = _TIER_ORDER.get("context", 0)
+            if v > best_val:
+                best_val = v
+                best_tier = "secondary" if (imp in ("high", "medium")) else "context"
+    return best_tier
+
+
+def _resolve_parent_reason(children: list[dict], best_tier: str) -> str:
+    """
+    Return the signal_reason from the strongest child.
+    Tie-breaking: stronger tier, earlier date, existing source order, stable lexical.
+    """
+    sorted_children = sorted(
+        children,
+        key=lambda c: (
+            -_TIER_ORDER.get((c.get("signal_tier") or "").lower(), 0),
+            _resolve_legacy_tier_val(c),
+            c.get("date") or "",
+            _logical_event_name(c).lower(),
+        ),
+    )
+    for c in sorted_children:
+        tier_match = (c.get("signal_tier") or "").lower() == best_tier
+        if not tier_match:
+            continue
+        r = c.get("signal_reason")
+        if r:
+            return r
+    for c in sorted_children:
+        r = c.get("signal_reason")
+        if r:
+            return r
+    return _CATEGORY_BY_ID.get(
+        _classify_macro(sorted_children[0]) if sorted_children else "", {}
+    ).get("reason", "")
+
+
+def _resolve_legacy_tier_val(c: dict) -> int:
+    """Map legacy importance-only events to a tier value for sorting."""
+    t = (c.get("signal_tier") or "").lower()
+    if t in _TIER_ORDER:
+        return _TIER_ORDER[t]
+    imp = (c.get("importance") or "low").lower()
+    if imp in ("high", "medium"):
+        return _TIER_ORDER.get("secondary", 1)
+    return _TIER_ORDER.get("context", 0)
+
+
+def _tier_to_impact(tier: str) -> str:
+    if tier == "critical" or tier == "major":
+        return "high"
+    if tier == "secondary":
+        return "medium"
+    return "low"
+
+
+def _tier_to_urgency(tier: str) -> str:
+    if tier == "critical":
+        return "high"
+    if tier == "major":
+        return "important"
+    return "normal"
+
+
+def _build_logical_subtitle(events: list[dict], cat: dict) -> tuple[str, int]:
+    """Build subtitle from logical event display names. Returns (subtitle, extra_count)."""
+    names: list[str] = []
+    seen: set[str] = set()
+    for ev in events:
+        name = _logical_event_name(ev)
+        if not name:
+            continue
+        key = name.lower()
+        if key not in seen:
+            seen.add(key)
+            names.append(name)
+
+    visible = names[:4]
+    extra = max(0, len(names) - len(visible))
+    if not visible:
+        return cat.get("title", ""), 0
+    subtitle = "Includes " + ", ".join(visible)
+    if extra > 0:
+        subtitle += f" +{extra} more"
+    return subtitle, extra
+
+
 # ── Group builder ────────────────────────────────────────────────────────────
 
 def _build_macro_group(cat_id: str, events: list[dict], week_start: str) -> dict:
     cat = _CATEGORY_BY_ID[cat_id]
 
-    events_sorted = sorted(events, key=lambda e: (e.get("date") or ""))
+    events_sorted = sorted(
+        events,
+        key=lambda e: (
+            -_TIER_ORDER.get((e.get("signal_tier") or "").lower(), 0),
+            e.get("date") or "",
+        ),
+    )
+
     seen_keys: set[tuple[str, str]] = set()
     deduped: list[dict] = []
     for ev in events_sorted:
-        name_key = (_event_name(ev).lower()[:50], (ev.get("date") or "")[:10])
-        if name_key not in seen_keys:
-            seen_keys.add(name_key)
+        name = _logical_event_name(ev).lower()[:80]
+        date_key = (ev.get("date") or "")[:10]
+        key = (name, date_key)
+        if key not in seen_keys:
+            seen_keys.add(key)
             deduped.append(ev)
 
     if not deduped:
         return {}
 
-    start_date = (deduped[0].get("date") or "")[:10]
-    end_date   = (deduped[-1].get("date") or "")[:10]
-    impact     = _highest_impact(deduped)
+    start_date = min((e.get("date") or "")[:10] or "z" for e in deduped)
+    end_date   = max((e.get("date") or "")[:10] or ""  for e in deduped)
 
-    names_seen: set[str] = set()
-    short_names: list[str] = []
-    for ev in deduped:
-        n = _event_name(ev)
-        n_short = re.sub(r"\s*\([^)]{1,10}\)\s*$", "", n).strip() or n
-        if n_short.lower() not in names_seen and len(short_names) < 4:
-            names_seen.add(n_short.lower())
-            short_names.append(n_short)
+    parent_tier    = _resolve_parent_tier(deduped)
+    parent_reason  = _resolve_parent_reason(deduped, parent_tier)
 
+    subtitle, extra = _build_logical_subtitle(deduped, cat)
     date_label = _date_label(start_date, end_date)
-    names_str  = ", ".join(short_names) if short_names else cat["title"]
-    subtitle   = f"{date_label}: {names_str}"
-    extra      = len(deduped) - len(short_names)
-    if extra > 0:
-        subtitle += f" +{extra} more"
 
     return {
         "id":          f"macro_{cat_id}_{week_start}",
@@ -467,9 +589,10 @@ def _build_macro_group(cat_id: str, events: list[dict], week_start: str) -> dict
         "date_label":  date_label,
         "start_date":  start_date,
         "end_date":    end_date,
-        "impact":      impact,
-        "urgency":     "high" if impact == "high" else "important",
-        "reason":      cat["reason"],
+        "impact":      _tier_to_impact(parent_tier),
+        "urgency":     _tier_to_urgency(parent_tier),
+        "signal_tier": parent_tier,
+        "reason":      parent_reason,
         "source":      "calendar_top_catalysts",
         "event_count": len(deduped),
         "children":    deduped,
@@ -664,8 +787,15 @@ async def build_home_top_catalysts(
     total_source = len(earnings_flat) + len(macro_raw) + len(other_flat)
 
     # ── 3. Categorize and group macro events ─────────────────────────────────
+    #    3a. Exclude non-US macro events from the default Home surface.
+    macro_us = [ev for ev in macro_raw if _classify_macro(ev) and _is_us_macro(ev)]
+
+    #    3b. Pass eligible US economic events through the family grouper.
+    macro_logical = group_economic_events_to_families(macro_us)
+
+    #    3c. Classify each logical event (family card or discrete) into categories.
     events_by_cat: dict[str, list[dict]] = {}
-    for ev in macro_raw:
+    for ev in macro_logical:
         cat_id = _classify_macro(ev)
         if cat_id:
             events_by_cat.setdefault(cat_id, []).append(ev)
