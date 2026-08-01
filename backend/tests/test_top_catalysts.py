@@ -407,3 +407,413 @@ def test_flat_current_week_capped(monkeypatch):
     env = get_top_catalysts(cap=MAX_CAP)
     assert len(env["current_week"]) <= MAX_CAP
     assert MIN_CAP <= DEFAULT_CAP <= MAX_CAP
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Macro family-grouping tests (Top Catalysts integration)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _make_macro_ev(**kw) -> dict:
+    return {
+        "id":              kw.get("id", "ev1"),
+        "eventType":       kw.get("eventType", "economic_release"),
+        "eventName":       kw.get("eventName", kw.get("title", "CPI MoM")),
+        "title":           kw.get("title", kw.get("eventName", "CPI MoM")),
+        "date":            kw.get("date", "2026-04-29"),
+        "time":            kw.get("time"),
+        "country":         kw.get("country", "US"),
+        "importance":      kw.get("importance", "high"),
+        "actual":          kw.get("actual"),
+        "estimate":        kw.get("estimate"),
+        "previous":        kw.get("previous"),
+        "unit":            kw.get("unit"),
+        "event_family":    kw.get("event_family"),
+        "signal_tier":     kw.get("signal_tier"),
+        "signal_reason":   kw.get("signal_reason"),
+        "source":          kw.get("source", "fmp"),
+    }
+
+
+def test_cpi_variants_produce_one_macro_entry(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="c1", title="CPI MoM", event_family="cpi",
+                               signal_tier="major", date="2026-04-29", actual=0.2),
+                _make_macro_ev(id="c2", title="Core CPI MoM", event_family="cpi",
+                               signal_tier="major", date="2026-04-29", actual=0.1),
+                _make_macro_ev(id="c3", title="CPI YoY", event_family="cpi",
+                               signal_tier="major", date="2026-04-29", actual=3.0),
+                _make_macro_ev(id="c4", title="Core CPI YoY", event_family="cpi",
+                               signal_tier="major", date="2026-04-29", actual=3.2),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    macro_entries = [m for d in env["days"] for m in d["macro"]]
+    cpi_entries = [m for m in macro_entries if m.get("macroType") == "CPI"]
+    assert len(cpi_entries) == 1, f"expected 1 CPI entry, got {len(cpi_entries)}"
+
+
+def test_ppi_variants_produce_one_macro_entry(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="p1", title="PPI MoM", event_family="ppi",
+                               signal_tier="major", date="2026-04-29"),
+                _make_macro_ev(id="p2", title="Core PPI MoM", event_family="ppi",
+                               signal_tier="major", date="2026-04-29"),
+                _make_macro_ev(id="p3", title="PPI YoY", event_family="ppi",
+                               signal_tier="major", date="2026-04-29"),
+                _make_macro_ev(id="p4", title="Core PPI YoY", event_family="ppi",
+                               signal_tier="major", date="2026-04-29"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    macro_entries = [m for d in env["days"] for m in d["macro"]]
+    ppi_entries = [m for m in macro_entries if m.get("macroType") == "PPI"]
+    assert len(ppi_entries) == 1, f"expected 1 PPI entry, got {len(ppi_entries)}"
+
+
+def test_pce_variants_produce_one_macro_entry(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="x1", title="PCE Price Index MoM",
+                               event_family="pce", signal_tier="major",
+                               date="2026-04-30"),
+                _make_macro_ev(id="x2", title="Core PCE Price Index MoM",
+                               event_family="pce", signal_tier="major",
+                               date="2026-04-30"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    macro_entries = [m for d in env["days"] for m in d["macro"]]
+    # PCE is NOT in the whitelist — should not appear at all
+    pce_entries = [m for m in macro_entries if
+                   "PCE" in (str(m.get("macroType") or "") + str(m.get("title") or ""))]
+    assert len(pce_entries) == 0
+
+
+def test_gdp_variants_produce_one_macro_entry(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="g1", title="GDP Growth Rate QoQ",
+                               event_family="gdp", signal_tier="major",
+                               date="2026-04-30", actual=2.4, estimate=2.5,
+                               previous=3.0, unit="%"),
+                _make_macro_ev(id="g2", title="GDP Price Index",
+                               event_family="gdp", signal_tier="major",
+                               date="2026-04-30", actual=3.1, unit="%"),
+                _make_macro_ev(id="g3", title="GDP Sales QoQ",
+                               event_family="gdp", signal_tier="major",
+                               date="2026-04-30", actual=3.0, unit="%"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    macro_entries = [m for d in env["days"] for m in d["macro"]]
+    gdp_entries = [m for m in macro_entries if m.get("macroType") == "GDP"]
+    assert len(gdp_entries) == 1, f"expected 1 GDP entry, got {len(gdp_entries)}"
+
+
+def test_us_cpi_and_eu_cpi_do_not_merge(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="u1", title="CPI YoY", event_family="cpi",
+                               signal_tier="major", date="2026-04-29",
+                               country="US"),
+                _make_macro_ev(id="e1", title="CPI YoY", event_family="cpi",
+                               signal_tier="major", date="2026-04-29",
+                               country="EU"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    macro_entries = [m for d in env["days"] for m in d["macro"]]
+    cpi_entries = [m for m in macro_entries if m.get("macroType") == "CPI"]
+    assert len(cpi_entries) == 1, "EU CPI should have been excluded"
+
+
+def test_eu_cpi_excluded_from_curated_top_catalysts(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="eu1", title="CPI YoY", event_family="cpi",
+                               signal_tier="major", date="2026-04-29",
+                               country="EU"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    macro_entries = [m for d in env["days"] for m in d["macro"]]
+    assert len(macro_entries) == 0
+
+
+def test_children_preserved_in_family_entry(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="c1", title="CPI MoM", event_family="cpi",
+                               signal_tier="major", date="2026-04-29"),
+                _make_macro_ev(id="c2", title="Core CPI MoM", event_family="cpi",
+                               signal_tier="major", date="2026-04-29"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    cpi_entries = [m for d in env["days"] for m in d["macro"] if m.get("macroType") == "CPI"]
+    assert len(cpi_entries) == 1
+    entry = cpi_entries[0]
+    assert "children" in entry
+    assert isinstance(entry["children"], list)
+    assert entry.get("event_count") == 2
+
+
+def test_lead_actual_estimate_previous_surfaces(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="c1", title="CPI MoM", event_family="cpi",
+                               signal_tier="major", date="2026-04-29",
+                               actual=0.2, estimate=0.3, previous=0.2, unit="%"),
+                _make_macro_ev(id="c2", title="Core CPI MoM", event_family="cpi",
+                               signal_tier="major", date="2026-04-29",
+                               actual=0.1, estimate=0.2, previous=0.1, unit="%"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    cpi_entry = [m for d in env["days"] for m in d["macro"] if m.get("macroType") == "CPI"][0]
+    assert cpi_entry["actual"] == 0.1
+    assert cpi_entry["estimate"] == 0.2
+    assert cpi_entry["previous"] == 0.1
+    assert cpi_entry.get("unit") == "%"
+
+
+def test_rendered_macro_count_reflects_family_cards(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="c1", title="CPI MoM", event_family="cpi",
+                               signal_tier="major", date="2026-04-29"),
+                _make_macro_ev(id="c2", title="Core CPI MoM", event_family="cpi",
+                               signal_tier="major", date="2026-04-29"),
+                _make_macro_ev(id="c3", title="CPI YoY", event_family="cpi",
+                               signal_tier="major", date="2026-04-29"),
+                _make_macro_ev(id="c4", title="Core CPI YoY", event_family="cpi",
+                               signal_tier="major", date="2026-04-29"),
+                _make_macro_ev(id="p1", title="PPI MoM", event_family="ppi",
+                               signal_tier="major", date="2026-04-29"),
+                _make_macro_ev(id="p2", title="Core PPI MoM", event_family="ppi",
+                               signal_tier="major", date="2026-04-29"),
+                _make_macro_ev(id="p3", title="PPI YoY", event_family="ppi",
+                               signal_tier="major", date="2026-04-29"),
+                _make_macro_ev(id="p4", title="Core PPI YoY", event_family="ppi",
+                               signal_tier="major", date="2026-04-29"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    macro_entries = [m for d in env["days"] for m in d["macro"]]
+    assert len(macro_entries) == 2, f"expected 2 (CPI+PPI) family entries, got {len(macro_entries)}"
+
+
+def test_raw_source_count_unchanged(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="s1", title="CPI MoM", event_family="cpi",
+                               signal_tier="major", date="2026-04-29"),
+                _make_macro_ev(id="s2", title="Core CPI MoM", event_family="cpi",
+                               signal_tier="major", date="2026-04-29"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    cpi_entry = [m for d in env["days"] for m in d["macro"] if m.get("macroType") == "CPI"][0]
+    assert cpi_entry.get("raw") is None  # family card has no single raw row
+
+
+def test_earnings_behavior_unchanged(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _seed_earnings_cache([
+        {"symbol": "AAPL", "eventType": "earnings_dates", "date": "2026-04-30",
+         "companyName": "Apple", "marketCap": 3e12, "importanceScore": 90},
+    ])
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="c1", title="CPI MoM", event_family="cpi",
+                               signal_tier="major", date="2026-04-30"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    assert env["current_week"]
+    assert env["current_week"][0]["eventType"] == "earnings"
+    assert env["current_week"][0]["symbol"] == "AAPL"
+
+
+def test_fomc_remains_individual(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="fm1", title="FOMC Interest Rate Decision",
+                               event_family="fomc_decision", signal_tier="critical",
+                               date="2026-04-30"),
+                _make_macro_ev(id="fm2", title="FOMC Minutes",
+                               event_family="fomc_minutes", signal_tier="major",
+                               date="2026-04-28"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    macro_entries = [m for d in env["days"] for m in d["macro"]]
+    fomc_entries = [m for m in macro_entries if m.get("macroType") == "FOMC"]
+    assert len(fomc_entries) >= 1, f"expected at least 1 FOMC entry, got {len(fomc_entries)}"
+    for m in fomc_entries:
+        assert m.get("type") != "macro_family"
+        assert m["eventType"] == "macro"
+
+
+def test_no_extra_provider_calls(monkeypatch):
+    import httpx
+
+    def boom(*a, **k):
+        raise AssertionError("network call attempted at request time")
+
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="c1", title="CPI MoM", event_family="cpi",
+                               signal_tier="major", date="2026-04-29"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    monkeypatch.setattr(httpx, "AsyncClient", boom)
+    monkeypatch.setattr(httpx, "Client", boom)
+    env = get_top_catalysts()
+    assert env["status"] in ("ready", "stale", "empty")
+
+
+def test_existing_response_envelope_fields_unchanged(monkeypatch):
+    _seed_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "current_week": [
+                _make_macro_ev(id="c1", title="CPI MoM", event_family="cpi",
+                               signal_tier="major", date="2026-04-29"),
+            ],
+            "previous_week": [], "last_updated": "2026-04-28T10:00:00Z",
+            "status": "ready",
+        },
+    })
+    env = get_top_catalysts()
+    assert env["tab"] == "top_catalysts"
+    assert env["mode"] == "weekly"
+    assert "week" in env
+    assert "days" in env
+    assert "current_week" in env
+    assert "previous_week" in env
+    assert "last_updated" in env
+    assert "status" in env
+    assert len(env["days"]) == 5

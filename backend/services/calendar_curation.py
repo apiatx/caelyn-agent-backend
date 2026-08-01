@@ -21,6 +21,7 @@ and re-ranked.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any, Iterable, Optional
 
@@ -487,6 +488,183 @@ _HARD_FILTERS = {
 }
 
 
+# ── Macro family grouping ──────────────────────────────────────────────────
+
+# Only these US families are grouped in this phase.
+_FAMILIES_TO_GROUP: frozenset[str] = frozenset({"cpi", "ppi", "pce", "gdp", "eci"})
+
+# Display titles for-family cards.
+_FAMILY_DISPLAY_TITLES: dict[str, str] = {
+    "cpi": "CPI Inflation Report",
+    "ppi": "PPI Inflation Report",
+    "pce": "PCE Inflation Report",
+    "gdp": "GDP Report",
+    "eci": "Employment Cost Index",
+}
+
+# Lead-metric precedence by family.  Each tuple contains normalised substrings
+# matched case-insensitively against the child eventName / title.  First match
+# wins; tie-breaking uses earlier source order then lexical order.
+_LEAD_PRECEDENCE: dict[str, list[str]] = {
+    "cpi": [
+        "core cpi mom",
+        "core cpi yoy",
+        "cpi mom",
+        "cpi yoy",
+    ],
+    "ppi": [
+        "core ppi mom",
+        "core ppi yoy",
+        "ppi mom",
+        "ppi yoy",
+    ],
+    "pce": [
+        "core pce price index mom", "core pce mom",
+        "core pce price index yoy", "core pce yoy",
+        "pce price index mom", "pce mom",
+        "pce price index yoy", "pce yoy",
+        "core pce prices qoq",
+        "pce prices qoq",
+    ],
+    "gdp": [
+        "gdp growth rate qoq",
+        "advance gdp",
+        "gdp growth rate yoy",
+        "gdp price index",
+        "gdp sales",
+    ],
+    "eci": [
+        "employment cost index qoq",
+        "employment cost index yoy",
+    ],
+}
+
+_TIER_ORDER: dict[str, int] = {"critical": 3, "major": 2, "secondary": 1, "context": 0}
+
+
+def _child_name(ev: dict) -> str:
+    return (ev.get("eventName") or ev.get("title") or "").strip().lower()
+
+
+def _resolve_lead(childs: list[dict], precedence: list[str]) -> dict:
+    for pattern in precedence:
+        for c in childs:
+            if pattern in _child_name(c):
+                return c
+    return childs[0]
+
+
+def _strongest_tier(childs: list[dict]) -> str:
+    best = "context"
+    best_val = 0
+    for c in childs:
+        t = (c.get("signal_tier") or "").lower()
+        v = _TIER_ORDER.get(t, 0)
+        if v > best_val:
+            best, best_val = t, v
+    return best
+
+
+def _resolve_signal_reason(childs: list[dict], lead: dict) -> str:
+    lead_reason = lead.get("signal_reason")
+    if lead_reason:
+        return lead_reason
+    sorted_children = sorted(
+        childs,
+        key=lambda c: _TIER_ORDER.get((c.get("signal_tier") or "").lower(), 0),
+        reverse=True,
+    )
+    for c in sorted_children:
+        r = c.get("signal_reason")
+        if r:
+            return r
+    return ""
+
+
+def _make_family_id(family: str, country: str, date: str, time_val: str) -> str:
+    raw = f"macro_family:{family}:{country}:{date}:{time_val or ''}"
+    return hashlib.md5(raw.encode()).hexdigest()[:16]
+
+
+def _build_family_card(
+    family: str, children: list[dict], date: str, time_val: str | None
+) -> dict:
+    lead = _resolve_lead(children, _LEAD_PRECEDENCE.get(family, []))
+    tier = _strongest_tier(children)
+    reason = _resolve_signal_reason(children, lead)
+    display = _FAMILY_DISPLAY_TITLES.get(family, family.replace("_", " ").title())
+
+    return {
+        "id":            _make_family_id(family, "US", date, time_val or ""),
+        "type":          "macro_family",
+        "eventType":     "economic_release",
+        "eventCategory": "macro",
+        "symbol":        "Macro",
+        "event_family":  family,
+        "display_title": display,
+        "title":         display,
+        "subtitle":      lead.get("subtitle"),
+        "keyDetails":    lead.get("keyDetails"),
+        "date":          date,
+        "time":          time_val,
+        "country":       "US",
+        "signal_tier":   tier,
+        "signal_reason": reason,
+        "importance":    lead.get("importance"),
+        "lead_metric":   _child_name(lead).title() or (lead.get("eventName") or lead.get("title") or ""),
+        "actual":        lead.get("actual"),
+        "estimate":      lead.get("estimate"),
+        "previous":      lead.get("previous"),
+        "unit":          lead.get("unit") or (lead.get("raw") or {}).get("unit"),
+        "children":      children,
+        "event_count":   len(children),
+        "source":        lead.get("source") or "fmp",
+        "raw":           None,
+    }
+
+
+def group_economic_events_to_families(events: list[dict]) -> list[dict]:
+    """
+    Group US individual economic-release events into family-level cards.
+
+    Only approved US families (cpi, ppi, pce, gdp, eci) are grouped.
+    All other events pass through unchanged. Source events are never
+    mutated — family cards hold the original children by reference.
+
+    Grouping key: (event_family, date, time, country=US).
+    """
+    if not events:
+        return []
+
+    groups: dict[tuple, list[dict]] = {}
+    pass_through: list[dict] = []
+    group_order: list[tuple] = []
+
+    for ev in events:
+        family = (ev.get("event_family") or "").lower()
+        country = (ev.get("country") or "").upper()
+        date = ev.get("date") or ""
+        time_val = ev.get("time") or ""
+
+        if family in _FAMILIES_TO_GROUP and country == "US":
+            key = (family, date, time_val)
+            if key not in groups:
+                groups[key] = []
+                group_order.append(key)
+            groups[key].append(ev)
+        else:
+            pass_through.append(ev)
+
+    result: list[dict] = []
+    for key in group_order:
+        children = groups[key]
+        family, date, time_val = key
+        result.append(_build_family_card(family, children, date, time_val if time_val else None))
+
+    result.extend(pass_through)
+    return result
+
+
 # ── Public entry point ─────────────────────────────────────────────────────
 
 def curate_events(
@@ -533,6 +711,11 @@ def curate_events(
 
     # 2. Dedup.
     deduped = _dedup(filtered)
+
+    # 2b. Family grouping — applies to economic_releases only.
+    #     Runs after dedup, before scoring.  Raw Neon storage is unchanged.
+    if tab == "economic_releases":
+        deduped = group_economic_events_to_families(deduped)
 
     # 3. Score & rank.
     if scorer is not None:

@@ -50,6 +50,7 @@ from services.calendar_curation import (
     MC_FLOOR,
     _canonical_symbol,
     _is_preferred_or_junk,
+    group_economic_events_to_families,
 )
 from services.calendar_snapshot_service import (
     get_snapshot as _get_snapshot,
@@ -488,6 +489,36 @@ def _normalize_macro_event(ev: dict, tag: str) -> dict:
     return out
 
 
+# Family → Top Catalysts whitelist tag.  Only families already present in
+# _MACRO_WHITELIST_PATTERNS appear here.
+_FAMILY_TO_TOP_TAG: dict[str, str] = {
+    "cpi": "CPI",
+    "ppi": "PPI",
+    "gdp": "GDP",
+}
+
+
+def _normalize_macro_family_entry(ev: dict, tag: str) -> dict:
+    out: dict[str, Any] = {
+        "title":         ev.get("display_title") or ev.get("title") or tag,
+        "date":          (ev.get("date") or "")[:10],
+        "eventType":     "macro",
+        "macroType":     tag,
+        "sourceTab":     "macro",
+        "whyThisMatters": [f"{tag} release"],
+        "children":      ev.get("children") or [],
+        "event_count":   ev.get("event_count") or len(ev.get("children") or []),
+        "type":          "macro_family",
+    }
+    for k in ("time", "country", "importance", "actual", "estimate", "previous",
+              "unit", "eventName"):
+        v = ev.get(k)
+        if v is not None and v != "":
+            out[k] = v
+    out["raw"] = None
+    return out
+
+
 def _normalize_other_event(ev: dict, source_tab: str) -> dict:
     sym_raw = ev.get("symbol")
     canon = _canonical_symbol(sym_raw) if sym_raw else None
@@ -586,7 +617,8 @@ def get_top_catalysts(
             seen_per_day_sym[key] = True
 
     # ── 2. Macro (whitelist only, not scored) ──────────────────────────────
-    macro_per_day: dict[str, list[dict]] = {}
+    # Phase A: collect whitelisted individual events per day across both tabs.
+    raw_per_day: dict[str, list[dict]] = {}
     for tab in ("economic_releases", "treasury_macro"):
         try:
             env = _get_snapshot(tab) or {}
@@ -605,13 +637,34 @@ def get_top_catalysts(
             if not tag:
                 continue
             day = d.isoformat()
-            day_list = macro_per_day.setdefault(day, [])
-            # Dedup by (tag, country, date)
-            country = (ev.get("country") or "").upper()
-            if any(m.get("macroType") == tag and (m.get("country") or "").upper() == country
-                   for m in day_list):
-                continue
-            day_list.append(_normalize_macro_event(ev, tag))
+            raw_per_day.setdefault(day, []).append(ev)
+
+    # Phase B: for each day, group approved US families, normalise the rest.
+    macro_per_day: dict[str, list[dict]] = {}
+    for day in sorted(raw_per_day):
+        grouped = group_economic_events_to_families(raw_per_day[day])
+        day_list: list[dict] = []
+        seen: set[tuple] = set()
+        for item in grouped:
+            if item.get("type") == "macro_family":
+                family = (item.get("event_family") or "").lower()
+                top_tag = _FAMILY_TO_TOP_TAG.get(family)
+                if top_tag is None:
+                    continue
+                day_list.append(_normalize_macro_family_entry(item, top_tag))
+            else:
+                tag = _classify_macro(item)
+                if not tag:
+                    continue
+                country = (item.get("country") or "").upper()
+                if country != "US":
+                    continue
+                if (tag, (item.get("date") or "")[:10]) in seen:
+                    continue
+                seen.add((tag, (item.get("date") or "")[:10]))
+                day_list.append(_normalize_macro_event(item, tag))
+        if day_list:
+            macro_per_day[day] = day_list
 
     # ── 3. Other (IPO/dividend/split) — default exclude, max 2-3 / week ────
     other_pool: list[tuple[float, dict]] = []

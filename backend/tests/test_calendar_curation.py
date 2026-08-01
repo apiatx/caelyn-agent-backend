@@ -20,6 +20,7 @@ from services.calendar_curation import (
     _is_preferred_or_junk,
     curate_envelope,
     curate_events,
+    group_economic_events_to_families,
 )
 from services.catalyst_calendar_service import (
     _classify_event_family,
@@ -653,6 +654,370 @@ def test_no_new_imports():
     assert "cache" not in src
     assert "psycopg" not in src
     assert "neon" not in src.lower()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Family-grouping tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _make_econ(**kw) -> dict:
+    ev = _build_event(
+        id=kw.get("id", "ev1"),
+        eventType="economic_release",
+        date=kw.get("date", "2026-05-01"),
+        time=kw.get("time"),
+        title=kw.get("title", "CPI MoM"),
+        eventName=kw.get("eventName", kw.get("title", "CPI MoM")),
+        country=kw.get("country", "US"),
+        importance=kw.get("importance", "high"),
+        actual=kw.get("actual"),
+        estimate=kw.get("estimate"),
+        previous=kw.get("previous"),
+        event_family=kw.get("event_family"),
+        signal_tier=kw.get("signal_tier"),
+        signal_reason=kw.get("signal_reason"),
+        source=kw.get("source", "fmp"),
+        raw=kw.get("raw", {}),
+    )
+    if kw.get("unit") is not None:
+        ev["unit"] = kw["unit"]
+    return ev
+
+
+def test_cpi_family_four_variants_become_one_card():
+    cpi_evs = [
+        _make_econ(id="c1", title="CPI MoM", eventName="CPI MoM (Jul)",
+                   event_family="cpi", signal_tier="major",
+                   signal_reason="Major consumer inflation release",
+                   actual=0.2, estimate=0.3, previous=0.2, unit="%"),
+        _make_econ(id="c2", title="Core CPI MoM", eventName="Core CPI MoM (Jul)",
+                   event_family="cpi", signal_tier="major",
+                   signal_reason="Major consumer inflation release",
+                   actual=0.1, estimate=0.2, previous=0.1, unit="%"),
+        _make_econ(id="c3", title="CPI YoY", eventName="CPI YoY (Jul)",
+                   event_family="cpi", signal_tier="major",
+                   signal_reason="Major consumer inflation release",
+                   actual=3.0, estimate=3.1, previous=3.0, unit="%"),
+        _make_econ(id="c4", title="Core CPI YoY", eventName="Core CPI YoY (Jul)",
+                   event_family="cpi", signal_tier="major",
+                   signal_reason="Major consumer inflation release",
+                   actual=3.2, estimate=3.3, previous=3.2, unit="%"),
+    ]
+    result = group_economic_events_to_families(cpi_evs)
+    family_cards = [e for e in result if e.get("type") == "macro_family"]
+    assert len(family_cards) == 1, f"expected 1 family card, got {len(family_cards)}"
+    card = family_cards[0]
+    assert card["type"] == "macro_family"
+    assert card["event_family"] == "cpi"
+    assert card["country"] == "US"
+    assert card["title"] == "CPI Inflation Report"
+    assert card["children"] == cpi_evs
+    assert card["event_count"] == 4
+    assert card["source"] == "fmp"
+    assert card["signal_tier"] == "major"
+
+
+def test_core_cpi_mom_selected_as_lead():
+    cpi_evs = [
+        _make_econ(id="c1", title="CPI MoM", event_family="cpi",
+                   signal_tier="major", actual=0.2, estimate=0.3, previous=0.2, unit="%"),
+        _make_econ(id="c2", title="Core CPI MoM", event_family="cpi",
+                   signal_tier="major", actual=0.1, estimate=0.2, previous=0.1, unit="%"),
+        _make_econ(id="c3", title="CPI YoY", event_family="cpi",
+                   signal_tier="major", actual=3.0, estimate=3.1, previous=3.0, unit="%"),
+        _make_econ(id="c4", title="Core CPI YoY", event_family="cpi",
+                   signal_tier="major", actual=3.2, estimate=3.3, previous=3.2, unit="%"),
+    ]
+    result = group_economic_events_to_families(cpi_evs)
+    card = result[0]
+    assert card["lead_metric"] == "Core Cpi Mom"
+    assert card["actual"] == 0.1
+    assert card["estimate"] == 0.2
+    assert card["previous"] == 0.1
+    assert card["unit"] == "%"
+
+
+def test_pce_family_four_variants_become_one_card():
+    pce_evs = [
+        _make_econ(id="p1", title="PCE Price Index MoM", event_family="pce",
+                   signal_tier="major", actual=0.2, estimate=0.3, previous=0.1, unit="%"),
+        _make_econ(id="p2", title="PCE Price Index YoY", event_family="pce",
+                   signal_tier="major", actual=2.5, estimate=2.5, previous=2.7, unit="%"),
+        _make_econ(id="p3", title="Core PCE Price Index MoM", event_family="pce",
+                   signal_tier="major", actual=0.1, estimate=0.2, previous=0.1, unit="%"),
+        _make_econ(id="p4", title="Core PCE Price Index YoY", event_family="pce",
+                   signal_tier="major", actual=2.6, estimate=2.6, previous=2.8, unit="%"),
+    ]
+    result = group_economic_events_to_families(pce_evs)
+    family_cards = [e for e in result if e.get("type") == "macro_family"]
+    assert len(family_cards) == 1
+    card = family_cards[0]
+    assert card["event_family"] == "pce"
+    assert card["title"] == "PCE Inflation Report"
+    assert card["event_count"] == 4
+
+
+def test_core_pce_mom_selected_as_lead():
+    pce_evs = [
+        _make_econ(id="p1", title="PCE Price Index MoM", event_family="pce",
+                   signal_tier="major", actual=0.2, unit="%"),
+        _make_econ(id="p2", title="Core PCE MoM", event_family="pce",
+                   signal_tier="major", actual=0.1, unit="%"),
+    ]
+    result = group_economic_events_to_families(pce_evs)
+    card = result[0]
+    assert card["lead_metric"] == "Core Pce Mom"
+    assert card["actual"] == 0.1
+
+
+def test_gdp_variants_become_one_card():
+    gdp_evs = [
+        _make_econ(id="g1", title="GDP Growth Rate QoQ", event_family="gdp",
+                   signal_tier="major", actual=2.4, estimate=2.5, unit="%"),
+        _make_econ(id="g2", title="GDP Sales QoQ", event_family="gdp",
+                   signal_tier="major", actual=3.0, unit="%"),
+        _make_econ(id="g3", title="GDP Price Index", event_family="gdp",
+                   signal_tier="major", actual=3.1, unit="%"),
+    ]
+    result = group_economic_events_to_families(gdp_evs)
+    family_cards = [e for e in result if e.get("type") == "macro_family"]
+    assert len(family_cards) == 1
+    card = family_cards[0]
+    assert card["event_family"] == "gdp"
+    assert card["title"] == "GDP Report"
+    assert card["event_count"] == 3
+    assert card["lead_metric"] == "Gdp Growth Rate Qoq"
+
+
+def test_eci_variants_become_one_card():
+    eci_evs = [
+        _make_econ(id="e1", title="Employment Cost Index QoQ", event_family="eci",
+                   signal_tier="major", actual=0.9, estimate=1.0, unit="%"),
+        _make_econ(id="e2", title="Employment Cost Index YoY", event_family="eci",
+                   signal_tier="major", actual=3.5, unit="%"),
+    ]
+    result = group_economic_events_to_families(eci_evs)
+    family_cards = [e for e in result if e.get("type") == "macro_family"]
+    assert len(family_cards) == 1
+    card = family_cards[0]
+    assert card["event_family"] == "eci"
+    assert card["title"] == "Employment Cost Index"
+    assert card["event_count"] == 2
+    assert card["lead_metric"] == "Employment Cost Index Qoq"
+
+
+def test_lead_actual_preserved():
+    evs = [
+        _make_econ(id="a1", title="CPI MoM", event_family="cpi",
+                   signal_tier="major", actual=0.2, unit="%"),
+        _make_econ(id="a2", title="Core CPI MoM", event_family="cpi",
+                   signal_tier="major", actual=0.1, unit="%"),
+    ]
+    result = group_economic_events_to_families(evs)
+    card = result[0]
+    assert card["actual"] == 0.1
+
+
+def test_lead_estimate_preserved():
+    evs = [
+        _make_econ(id="b1", title="CPI MoM", event_family="cpi",
+                   signal_tier="major", actual=0.2, estimate=0.3, unit="%"),
+        _make_econ(id="b2", title="Core CPI MoM", event_family="cpi",
+                   signal_tier="major", actual=0.1, estimate=0.2, unit="%"),
+    ]
+    result = group_economic_events_to_families(evs)
+    card = result[0]
+    assert card["estimate"] == 0.2
+
+
+def test_lead_previous_preserved():
+    evs = [
+        _make_econ(id="c1", title="CPI MoM", event_family="cpi",
+                   signal_tier="major", actual=0.2, previous=0.2, unit="%"),
+        _make_econ(id="c2", title="Core CPI MoM", event_family="cpi",
+                   signal_tier="major", actual=0.1, previous=0.1, unit="%"),
+    ]
+    result = group_economic_events_to_families(evs)
+    card = result[0]
+    assert card["previous"] == 0.1
+
+
+def test_lead_unit_preserved():
+    evs = [
+        _make_econ(id="d1", title="CPI MoM", event_family="cpi",
+                   signal_tier="major", unit="%"),
+        _make_econ(id="d2", title="Core CPI MoM", event_family="cpi",
+                   signal_tier="major", unit="%"),
+    ]
+    result = group_economic_events_to_families(evs)
+    card = result[0]
+    assert card["unit"] == "%"
+
+
+def test_every_source_row_preserved_in_children():
+    cpi_evs = [
+        _make_econ(id="x1", title="CPI MoM", event_family="cpi", signal_tier="major"),
+        _make_econ(id="x2", title="Core CPI MoM", event_family="cpi", signal_tier="major"),
+        _make_econ(id="x3", title="CPI YoY", event_family="cpi", signal_tier="major"),
+        _make_econ(id="x4", title="Core CPI YoY", event_family="cpi", signal_tier="major"),
+    ]
+    result = group_economic_events_to_families(cpi_evs)
+    card = result[0]
+    assert len(card["children"]) == 4
+    child_ids = [c["id"] for c in card["children"]]
+    assert child_ids == ["x1", "x2", "x3", "x4"]
+
+
+def test_event_count_is_exact():
+    cpi_evs = [
+        _make_econ(id="z1", title="CPI MoM", event_family="cpi", signal_tier="major"),
+        _make_econ(id="z2", title="Core CPI MoM", event_family="cpi", signal_tier="major"),
+    ]
+    result = group_economic_events_to_families(cpi_evs)
+    card = result[0]
+    assert card["event_count"] == 2
+
+
+def test_source_inputs_not_mutated():
+    cpi_evs = [
+        _make_econ(id="m1", title="CPI MoM", event_family="cpi", signal_tier="major"),
+        _make_econ(id="m2", title="Core CPI MoM", event_family="cpi", signal_tier="major"),
+    ]
+    before = [dict(ev) for ev in cpi_evs]
+    group_economic_events_to_families(cpi_evs)
+    for i, ev in enumerate(cpi_evs):
+        assert ev == before[i], f"event {i} was mutated"
+
+
+def test_same_family_date_country_time_groups():
+    evs = [
+        _make_econ(id="s1", title="CPI MoM", event_family="cpi", signal_tier="major",
+                   date="2026-05-01", time="08:30:00"),
+        _make_econ(id="s2", title="Core CPI MoM", event_family="cpi", signal_tier="major",
+                   date="2026-05-01", time="08:30:00"),
+    ]
+    result = group_economic_events_to_families(evs)
+    family_cards = [e for e in result if e.get("type") == "macro_family"]
+    assert len(family_cards) == 1
+    assert family_cards[0]["event_count"] == 2
+
+
+def test_different_dates_do_not_group():
+    evs = [
+        _make_econ(id="d1", title="CPI MoM", event_family="cpi", signal_tier="major",
+                   date="2026-05-01"),
+        _make_econ(id="d2", title="CPI MoM", event_family="cpi", signal_tier="major",
+                   date="2026-05-02"),
+    ]
+    result = group_economic_events_to_families(evs)
+    family_cards = [e for e in result if e.get("type") == "macro_family"]
+    assert len(family_cards) == 2
+    assert family_cards[0]["date"] == "2026-05-01"
+    assert family_cards[1]["date"] == "2026-05-02"
+
+
+def test_different_times_do_not_group():
+    evs = [
+        _make_econ(id="t1", title="CPI MoM", event_family="cpi", signal_tier="major",
+                   date="2026-05-01", time="08:30:00"),
+        _make_econ(id="t2", title="Core CPI MoM", event_family="cpi", signal_tier="major",
+                   date="2026-05-01", time="10:00:00"),
+    ]
+    result = group_economic_events_to_families(evs)
+    family_cards = [e for e in result if e.get("type") == "macro_family"]
+    assert len(family_cards) == 2
+    assert family_cards[0]["time"] == "08:30:00"
+    assert family_cards[1]["time"] == "10:00:00"
+
+
+def test_foreign_cpi_passes_through():
+    evs = [
+        _make_econ(id="f1", title="CPI YoY", event_family="cpi", signal_tier="major",
+                   country="JP"),
+    ]
+    result = group_economic_events_to_families(evs)
+    assert len(result) == 1
+    assert result[0].get("type") != "macro_family"
+    assert result[0]["country"] == "JP"
+
+
+def test_fomc_decision_passes_through():
+    evs = [
+        _make_econ(id="fm1", title="FOMC Interest Rate Decision",
+                   event_family="fomc_decision", signal_tier="critical",
+                   country="US"),
+    ]
+    result = group_economic_events_to_families(evs)
+    assert len(result) == 1
+    assert result[0].get("type") != "macro_family"
+    assert result[0]["event_family"] == "fomc_decision"
+
+
+def test_payroll_and_unemployment_remain_separate():
+    evs = [
+        _make_econ(id="p1", title="Nonfarm Payrolls", event_family="payrolls",
+                   signal_tier="major", country="US"),
+        _make_econ(id="u1", title="Unemployment Rate", event_family="unemployment",
+                   signal_tier="secondary", country="US"),
+    ]
+    result = group_economic_events_to_families(evs)
+    assert len(result) == 2
+    assert all(e.get("event_family") != "macro_family" and e.get("type") != "macro_family"
+               for e in result)
+
+
+def test_envelope_metadata_remains_unchanged():
+    cpi_evs = [
+        _make_econ(id="v1", title="CPI MoM", event_family="cpi", signal_tier="major"),
+        _make_econ(id="v2", title="Core CPI MoM", event_family="cpi", signal_tier="major"),
+    ]
+    env = {
+        "current_week": cpi_evs,
+        "previous_week": [],
+        "last_updated": "2026-05-01T00:00:00Z",
+        "status": "ready",
+        "is_stale": False,
+        "diagnostics": {"event_count": 2},
+        "window": {"stored_from": "2026-04-27", "stored_to": "2026-05-01"},
+    }
+    out = curate_envelope("economic_releases", env, cap=50)
+    assert out["status"] == "ready"
+    assert out["last_updated"] == "2026-05-01T00:00:00Z"
+    assert out["is_stale"] is False
+    assert out["diagnostics"] == {"event_count": 2}
+    assert out["window"] == {"stored_from": "2026-04-27", "stored_to": "2026-05-01"}
+    assert out["previous_week"] == []
+
+
+def test_ordering_is_stable_and_deterministic():
+    evs = [
+        _make_econ(id="o1", title="CPI MoM", event_family="cpi", signal_tier="major",
+                   date="2026-05-01"),
+        _make_econ(id="o2", title="Core CPI MoM", event_family="cpi", signal_tier="major",
+                   date="2026-05-01"),
+        _make_econ(id="o3", title="PPI MoM", event_family="ppi", signal_tier="major",
+                   date="2026-05-01"),
+        _make_econ(id="o4", title="Core PPI MoM", event_family="ppi", signal_tier="major",
+                   date="2026-05-01"),
+    ]
+    result1 = group_economic_events_to_families(evs)
+    result2 = group_economic_events_to_families(evs)
+    assert len(result1) == len(result2) == 2
+    assert result1[0]["event_family"] == result2[0]["event_family"]
+    assert result1[1]["event_family"] == result2[1]["event_family"]
+    assert result1[0]["children"] == result2[0]["children"]
+
+
+def test_family_id_is_stable():
+    evs = [
+        _make_econ(id="i1", title="CPI MoM", event_family="cpi", signal_tier="major",
+                   date="2026-05-01"),
+        _make_econ(id="i2", title="Core CPI MoM", event_family="cpi", signal_tier="major",
+                   date="2026-05-01"),
+    ]
+    result1 = group_economic_events_to_families(evs)
+    result2 = group_economic_events_to_families(evs)
+    assert result1[0]["id"] == result2[0]["id"]
 
 
 if __name__ == "__main__":
