@@ -262,9 +262,12 @@ def _classify_macro(ev: dict) -> Optional[str]:
 
 
 def _is_us_macro(ev: dict) -> bool:
-    """True when the event is eligible for the US-only default Home surface."""
-    country = (ev.get("country") or "").strip().upper()
-    return not country or country in ("US", "USA", "UNITED STATES")
+    """True when the event has an explicit US country code — Home only."""
+    raw = ev.get("country")
+    if raw is None:
+        return False
+    country = str(raw).strip().upper()
+    return country in ("US", "USA", "UNITED STATES")
 
 
 # ── Planning-window in-memory fetch (Sat/Sun only) ───────────────────────────
@@ -442,68 +445,80 @@ def _logical_event_name(ev: dict) -> str:
     return _event_name(ev)
 
 
+def _effective_tier_val(ev: dict) -> int:
+    """Unified numeric tier value: 3=critical, 2=major, 1=secondary, 0=context."""
+    t = (ev.get("signal_tier") or "").lower()
+    if t in _TIER_ORDER:
+        return _TIER_ORDER[t]
+    imp = (ev.get("importance") or "low").lower()
+    if imp in ("high", "medium"):
+        return 1
+    return 0
+
+
+def _effective_tier_name(ev: dict) -> str:
+    """Unified string tier: critical, major, secondary, context."""
+    t = (ev.get("signal_tier") or "").lower()
+    if t in _TIER_ORDER:
+        return t
+    imp = (ev.get("importance") or "low").lower()
+    if imp in ("high", "medium"):
+        return "secondary"
+    return "context"
+
+
+def _normalize_time(t: object) -> str:
+    """Push missing time to end so earliest is selected first."""
+    if t is None or str(t).strip() == "":
+        return "~"
+    return str(t).strip()
+
+
 def _resolve_parent_tier(children: list[dict]) -> str:
-    """Return the strongest explicit signal_tier, falling back to importance."""
+    """Return the strongest effective signal_tier across children."""
     best_val = -1
     best_tier = "context"
     for c in children:
-        t = (c.get("signal_tier") or "").lower()
-        if t in _TIER_ORDER:
-            v = _TIER_ORDER[t]
-            if v > best_val:
-                best_val = v
-                best_tier = t
-        else:
-            imp = (c.get("importance") or "low").lower()
-            if imp == "high" or imp == "medium":
-                v = _TIER_ORDER.get("secondary", 1)
-            else:
-                v = _TIER_ORDER.get("context", 0)
-            if v > best_val:
-                best_val = v
-                best_tier = "secondary" if (imp in ("high", "medium")) else "context"
+        v = _effective_tier_val(c)
+        if v > best_val:
+            best_val = v
+            best_tier = _effective_tier_name(c)
     return best_tier
 
 
 def _resolve_parent_reason(children: list[dict], best_tier: str) -> str:
     """
-    Return the signal_reason from the strongest child.
-    Tie-breaking: stronger tier, earlier date, existing source order, stable lexical.
+    Return the signal_reason from the strongest / earliest child.
+    Tie-breaking (deterministic):
+      1.  strongest effective signal tier  (critical > major > secondary > context)
+      2.  earliest event date
+      3.  earliest normalized event time (missing → last)
+      4.  original source order (enumerate before sort)
+      5.  lexical title (only if source order is unavailable)
     """
-    sorted_children = sorted(
-        children,
-        key=lambda c: (
-            -_TIER_ORDER.get((c.get("signal_tier") or "").lower(), 0),
-            _resolve_legacy_tier_val(c),
-            c.get("date") or "",
-            _logical_event_name(c).lower(),
+    indexed = list(enumerate(children))
+    indexed.sort(
+        key=lambda pair: (
+            -_effective_tier_val(pair[1]),
+            pair[1].get("date") or "",
+            _normalize_time(pair[1].get("time")),
+            pair[0],
+            _logical_event_name(pair[1]).lower(),
         ),
     )
-    for c in sorted_children:
-        tier_match = (c.get("signal_tier") or "").lower() == best_tier
-        if not tier_match:
+    for idx, c in indexed:
+        if _effective_tier_name(c) != best_tier:
             continue
         r = c.get("signal_reason")
         if r:
             return r
-    for c in sorted_children:
+    for idx, c in indexed:
         r = c.get("signal_reason")
         if r:
             return r
     return _CATEGORY_BY_ID.get(
-        _classify_macro(sorted_children[0]) if sorted_children else "", {}
+        _classify_macro(children[0]) if children else "", {}
     ).get("reason", "")
-
-
-def _resolve_legacy_tier_val(c: dict) -> int:
-    """Map legacy importance-only events to a tier value for sorting."""
-    t = (c.get("signal_tier") or "").lower()
-    if t in _TIER_ORDER:
-        return _TIER_ORDER[t]
-    imp = (c.get("importance") or "low").lower()
-    if imp in ("high", "medium"):
-        return _TIER_ORDER.get("secondary", 1)
-    return _TIER_ORDER.get("context", 0)
 
 
 def _tier_to_impact(tier: str) -> str:

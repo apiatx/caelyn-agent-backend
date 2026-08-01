@@ -18,8 +18,11 @@ from services.calendar_curation import group_economic_events_to_families
 from services.home_top_catalysts import (
     _build_macro_group,
     _classify_macro,
+    _effective_tier_name,
+    _effective_tier_val,
     _is_us_macro,
     _logical_event_name,
+    _normalize_time,
     _resolve_parent_reason,
     _resolve_parent_tier,
     _build_logical_subtitle,
@@ -86,9 +89,14 @@ def test_us_event_passes():
     assert _is_us_macro({"country": "US"}) is True
     assert _is_us_macro({"country": "USA"}) is True
     assert _is_us_macro({"country": "UNITED STATES "}) is True
-    assert _is_us_macro({"country": ""}) is True
-    assert _is_us_macro({"country": "  "}) is True
-    assert _is_us_macro({}) is True
+    assert _is_us_macro({"country": "United States"}) is True
+
+
+def test_us_missing_country_excluded():
+    assert _is_us_macro({"country": ""}) is False
+    assert _is_us_macro({"country": "  "}) is False
+    assert _is_us_macro({}) is False
+    assert _is_us_macro({"country": None}) is False
 
 
 def test_foreign_event_excluded():
@@ -97,6 +105,22 @@ def test_foreign_event_excluded():
     assert _is_us_macro({"country": "EU"}) is False
     assert _is_us_macro({"country": "JP"}) is False
     assert _is_us_macro({"country": "GB"}) is False
+
+
+def test_countryless_critical_cannot_raise_tier():
+    ev = _make_econ(id="nous", title="Critical Event", eventName="Critical Event",
+                    country=None, importance="high", date="2026-04-29")
+    ev["signal_tier"] = "critical"
+    ev["signal_reason"] = "critical reason"
+    assert _is_us_macro(ev) is False
+
+
+def test_countryless_cannot_provide_reason():
+    ev = _make_econ(id="nous2", title="No Country", eventName="No Country",
+                    country="", importance="high", date="2026-04-29")
+    ev["signal_tier"] = "major"
+    ev["signal_reason"] = "no country reason"
+    assert _is_us_macro(ev) is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -378,6 +402,75 @@ def test_parent_tier_not_inflated_by_multiple_raw_children():
     assert family_tier == "major"
 
 
+def test_tiebreak_earlier_date_wins():
+    later = _make_econ(id="late", title="CPI MoM", event_family="cpi",
+                       signal_tier="major", signal_reason="later",
+                       date="2026-04-30")
+    earlier = _make_econ(id="early", title="PPI MoM", event_family="ppi",
+                         signal_tier="major", signal_reason="earlier",
+                         date="2026-04-29")
+    reason = _resolve_parent_reason([later, earlier], "major")
+    assert "earlier" in reason
+
+
+def test_tiebreak_earlier_time_wins():
+    late_time = _make_econ(id="lt", title="CPI MoM", event_family="cpi",
+                           signal_tier="major", signal_reason="late_time",
+                           date="2026-04-29", time="10:00:00")
+    early_time = _make_econ(id="et", title="PPI MoM", event_family="ppi",
+                            signal_tier="major", signal_reason="early_time",
+                            date="2026-04-29", time="08:30:00")
+    reason = _resolve_parent_reason([late_time, early_time], "major")
+    assert "early_time" in reason
+
+
+def test_tiebreak_source_order_preserved():
+    a = _make_econ(id="so1", title="CPI MoM", event_family="cpi",
+                   signal_tier="major", signal_reason="first",
+                   date="2026-04-29", time="08:30:00")
+    b = _make_econ(id="so2", title="PPI MoM", event_family="ppi",
+                   signal_tier="major", signal_reason="second",
+                   date="2026-04-29", time="08:30:00")
+    reason = _resolve_parent_reason([a, b], "major")
+    assert "first" in reason
+
+
+def test_tiebreak_lexical_only_as_final_fallback():
+    """Source order breaks the tie before lexical; lexical is the last sort key."""
+    a = _make_econ(id="lx1", title="A Event", event_family="cpi",
+                   signal_tier="major", signal_reason="a_reason",
+                   date="2026-04-29", time="08:30:00")
+    b = _make_econ(id="lx2", title="B Event", event_family="cpi",
+                   signal_tier="major", signal_reason="b_reason",
+                   date="2026-04-29", time="08:30:00")
+    reason1 = _resolve_parent_reason([b, a], "major")
+    reason2 = _resolve_parent_reason([a, b], "major")
+    assert reason1 == "b_reason"
+    assert reason2 == "a_reason"
+
+
+def test_parent_reason_from_exact_winning_child():
+    major1 = _make_econ(id="w1", title="Jobless Claims", event_family="jobless_claims",
+                        signal_tier="secondary", signal_reason="should_not_win",
+                        date="2026-04-29")
+    major2 = _make_econ(id="w2", title="Nonfarm Payrolls", event_family="payrolls",
+                        signal_tier="major", signal_reason="should_win",
+                        date="2026-04-29")
+    reason = _resolve_parent_reason([major1, major2], "major")
+    assert reason == "should_win"
+
+
+def test_lower_tier_child_never_provides_reason():
+    major = _make_econ(id="low1", title="Payrolls", event_family="payrolls",
+                       signal_tier="major", signal_reason="major_reason",
+                       date="2026-04-29")
+    second = _make_econ(id="low2", title="Claims", event_family="jobless_claims",
+                        signal_tier="secondary", signal_reason="secondary_reason",
+                        date="2026-04-28")
+    reason = _resolve_parent_reason([second, major], "major")
+    assert reason == "major_reason"
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Subtitle and counts
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -623,6 +716,59 @@ def test_tier_to_urgency():
     assert _tier_to_urgency("critical") == "high"
     assert _tier_to_urgency("major") == "important"
     assert _tier_to_urgency("secondary") == "normal"
+
+
+def test_effective_tier_val():
+    assert _effective_tier_val({"signal_tier": "critical"}) == 3
+    assert _effective_tier_val({"signal_tier": "major"}) == 2
+    assert _effective_tier_val({"signal_tier": "secondary"}) == 1
+    assert _effective_tier_val({"signal_tier": "context"}) == 0
+    assert _effective_tier_val({"importance": "high"}) == 1
+    assert _effective_tier_val({"importance": "medium"}) == 1
+    assert _effective_tier_val({"importance": "low"}) == 0
+    assert _effective_tier_val({}) == 0
+
+
+def test_effective_tier_name():
+    assert _effective_tier_name({"signal_tier": "critical"}) == "critical"
+    assert _effective_tier_name({"signal_tier": "major"}) == "major"
+    assert _effective_tier_name({"importance": "high"}) == "secondary"
+    assert _effective_tier_name({"importance": "medium"}) == "secondary"
+    assert _effective_tier_name({"importance": "low"}) == "context"
+
+
+def test_normalize_time_pushes_missing_to_end():
+    assert _normalize_time("08:30:00") == "08:30:00"
+    assert _normalize_time(None) == "~"
+    assert _normalize_time("") == "~"
+    assert _normalize_time("   ") == "~"
+    assert _normalize_time("08:30:00") < _normalize_time(None)
+    assert _normalize_time("08:30:00") < _normalize_time("")
+
+
+def test_logical_family_cards_are_direct_home_children():
+    cpi_child = group_economic_events_to_families([
+        _make_econ(id="df1", title="CPI MoM", event_family="cpi", signal_tier="major",
+                   signal_reason="r", date="2026-04-29"),
+        _make_econ(id="df2", title="Core CPI MoM", event_family="cpi", signal_tier="major",
+                   signal_reason="r", date="2026-04-29"),
+    ])
+    card = _build_macro_group("inflation", cpi_child, "2026-04-27")
+    assert len(card["children"]) == 1
+    assert card["children"][0].get("type") == "macro_family"
+
+
+def test_raw_metrics_nested_not_direct_children():
+    cpi_child = group_economic_events_to_families([
+        _make_econ(id="rn1", title="CPI MoM", event_family="cpi", signal_tier="major",
+                   date="2026-04-29"),
+        _make_econ(id="rn2", title="Core CPI MoM", event_family="cpi", signal_tier="major",
+                   date="2026-04-29"),
+    ])
+    card = _build_macro_group("inflation", cpi_child, "2026-04-27")
+    direct_ids = {c["id"] for c in card["children"]}
+    assert "rn1" not in direct_ids
+    assert "rn2" not in direct_ids
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
