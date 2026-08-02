@@ -85,6 +85,11 @@ _HORIZON_FUTURE_DAYS = 90   # 3 calendar months ahead
 
 _lock = asyncio.Lock()
 
+# Bootstrap state: True while a full first-run backfill is in progress for a
+# given tab.  Used to prevent duplicate full backfill tasks and to report
+# truthfully to the frontend.
+_bootstrapping: dict[str, bool] = {}
+
 
 # ── Neon-backed primary persistence ─────────────────────────────────────────
 
@@ -209,15 +214,23 @@ def get_snapshot(tab: str) -> dict:
       is_stale   — True if the stored window does not cover the current ET week
       window     — requested vs. stored date ranges
       diagnostics — per-tab metrics for debugging
-      events     — broad event collection (horizon tabs only)
+      events     — broad event collection (horizon tabs only, always present)
       horizon    — rolling-horizon metadata (horizon tabs only)
       coverage   — horizon-completeness info
     """
-    slot: Optional[dict] = _neon_read(tab)
+    slot: Optional[dict] = None
     source = "neon"
+    try:
+        slot = _neon_read(tab)
+    except Exception as e:
+        print(f"[calendar_snapshot] neon read exception tab={tab}: {e}")
+        slot = None
     if slot is None:
         store = _read_disk()
-        slot = _normalize_slot(store.get(tab))
+        if isinstance(store, dict):
+            slot = _normalize_slot(store.get(tab))
+        else:
+            slot = _empty_slot()
         source = "disk"
 
     cw = slot.get("current_week") or []
@@ -321,8 +334,9 @@ def get_snapshot(tab: str) -> dict:
         "current_week":  diag_cw,
         "previous_week": pw if not (status == "stale") else pw,
         "last_updated":  last_updated,
-        "status":        status,
+        "status":        "initializing" if _bootstrapping.get(tab) else status,
         "is_stale":      is_stale,
+        "bootstrapping": _bootstrapping.get(tab, False),
         "window": {
             "requested_from": req_from_str,
             "requested_to":   req_to_str,
@@ -333,8 +347,9 @@ def get_snapshot(tab: str) -> dict:
     }
 
     # Additive horizon fields (only for horizon tabs)
-    if evts and tab in _TABS_WITH_HORIZON:
+    if tab in _TABS_WITH_HORIZON:
         envelope["events"]  = evts
+    if evts and tab in _TABS_WITH_HORIZON:
         envelope["horizon"] = horizon
 
     envelope["coverage"] = coverage
@@ -748,12 +763,14 @@ def _window_empty_reason(
     coverage_complete: bool,
     selected: list[dict],
     source: str,
+    status: str = "",
 ) -> Optional[str]:
     """
     Truthful empty-state classification for a requested window.
 
       • events present                     → None
       • snapshot has no events at all      → "snapshot_empty"
+      • snapshot initializing/refreshing   → "snapshot_initializing"
       • window outside cached horizon      → "outside_horizon"
       • old snapshot without broad events  → "legacy_snapshot_without_horizon"
       • covered window with no events      → "no_events_in_window"
@@ -761,6 +778,8 @@ def _window_empty_reason(
     if selected:
         return None
     if source == "none":
+        if status in ("initializing", "refreshing"):
+            return "snapshot_initializing"
         return "snapshot_empty"
     if not coverage_complete:
         if source == "legacy":
@@ -825,10 +844,18 @@ def get_snapshot_window(
         source = "horizon" if broad else ("legacy" if legacy else "none")
         pool = broad if broad else legacy
         selected = _select_events_for_window(pool, win_from, win_to)
+        # Coverage uses the ACTUAL persisted event span, not the meta
+        # intended-fetch window.  The meta horizon_start/horizon_end describe
+        # what the provider was asked for; the actual collection may be
+        # narrower (e.g. capped fetches, provider 402 historical denial).
+        # Using actual bounds prevents "no_events_in_window" being reported
+        # for dates the provider never actually supplied.
+        actual_start, actual_end = _actual_bounds(pool)
         coverage_complete = _window_covered(
-            horizon_start, horizon_end, win_from, win_to,
+            actual_start, actual_end, win_from, win_to,
         )
-        empty_reason = _window_empty_reason(coverage_complete, selected, source)
+        empty_reason = _window_empty_reason(coverage_complete, selected, source,
+                                               status=env.get("status", ""))
     if from_date or to_date:
         out["view"] = (view or "range").strip().lower()
     else:
@@ -896,6 +923,7 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
     if use_horizon:
         prior_check = _neon_read(tab)
         prior_events = (prior_check.get("events") or []) if prior_check else []
+        is_bootstrap_start = False
         if prior_events:
             # Existing history present — fetch only a delta window so the
             # weekly refresh stays fast (most old chunks are already cached).
@@ -911,12 +939,21 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
             )
         else:
             # First run: full horizon backfill.
+            if _bootstrapping.get(tab):
+                print(
+                    f"[calendar_snapshot] refresh tab={tab} bootstrap already "
+                    f"running — skipping duplicate"
+                )
+                return get_snapshot(tab)
+            _bootstrapping[tab] = True
+            is_bootstrap_start = True
             fetch_from, fetch_to = _horizon_window_for()
             print(
                 f"[calendar_snapshot] refresh tab={tab} full backfill "
                 f"window={fetch_from}→{fetch_to}"
             )
     else:
+        is_bootstrap_start = False
         fetch_from, fetch_to = _week_window_for(tab)
 
     t0 = time.monotonic()
@@ -1094,6 +1131,9 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
                 f"[calendar_snapshot] WARN tab={tab} Neon write FAILED — "
                 f"deployed API will not see this refresh until Neon is back"
             )
+
+    if is_bootstrap_start:
+        _bootstrapping[tab] = False
 
     return get_snapshot(tab)
 

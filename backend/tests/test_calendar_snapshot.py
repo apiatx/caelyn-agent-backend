@@ -426,6 +426,7 @@ def _horizon_env(events, horizon_start="2026-07-18", horizon_end="2026-10-29",
         "last_updated":  last_updated,
         "status":        status,
         "is_stale":      False,
+        "bootstrapping": False,
         "window": {
             "requested_from": "2026-07-27",
             "requested_to":   "2026-07-31",
@@ -779,15 +780,15 @@ def test_covered_window_no_events_genuine_empty():
 
 
 def test_window_inside_meta_horizon_but_beyond_actual_events_is_incomplete():
-    """A capped horizon whose meta end still covers the window reports
-    'no_events_in_window' truthfully; the meta horizon is authoritative
-    for coverage (actual bounds are for diagnostics)."""
+    """A capped horizon: meta end covers window but actual events stop earlier.
+    Coverage uses actual persisted event bounds, not intended fetch metadata.
+    A window beyond actual_end must report incomplete truthfully."""
     events = [_make_econ("2026-09-03", id="last")]
     env = _horizon_env(events)  # meta horizon_end stays 2026-10-29
     out, _ = _window(view="week", date="2026-09-14", env=env)
     assert out["event_count"] == 0
-    assert out["coverage_complete"] is True
-    assert out["empty_reason"] == "no_events_in_window"
+    assert out["coverage_complete"] is False
+    assert out["empty_reason"] == "outside_horizon"
 
 
 def test_covered_window_with_events_not_empty():
@@ -1024,25 +1025,53 @@ def test_current_week_returns_events():
 
 
 def test_future_week_inside_three_months():
-    future = (date.today() + timedelta(days=45)).isoformat()
+    """Future week where actual events span the full Mon-Fri range."""
+    from services.calendar_snapshot_service import _et_now
+    today = _et_now().date()
+    monday = today + timedelta(days=((7 - today.weekday()) % 7))  # next Monday
+    friday = monday + timedelta(days=4)
+    events = [
+        _make_econ(monday.isoformat(), title="Mon Event", event_family="payrolls", signal_tier="major"),
+        _make_econ(friday.isoformat(), title="Fri Event", event_family="payrolls", signal_tier="major"),
+    ]
     env = _horizon_env(
-        [_make_econ(future, title="Future Event", event_family="payrolls", signal_tier="major")],
-        horizon_start="2026-07-18",
-        horizon_end=(date.today() + timedelta(days=90)).isoformat(),
+        events,
+        horizon_start=monday.isoformat(),
+        horizon_end=(friday + timedelta(days=60)).isoformat(),
     )
-    out, _ = _window(view="week", date=future, env=env)
+    out, _ = _window(view="week", date=monday.isoformat(), env=env)
     assert out["event_count"] > 0
     assert out["coverage_complete"] is True
 
 
 def test_future_month_inside_three_months():
-    today = date.today()
-    future_mo = today.replace(day=1) + timedelta(days=60)
-    future_first = future_mo.replace(day=1)
+    """Future month where actual events span first and last days."""
+    from services.calendar_snapshot_service import _et_now
+    today = _et_now().date()
+    first = today.replace(day=1)
+    if today.month == 12:
+        nxt = date(first.year + 1, 1, 1)
+    else:
+        nxt = date(first.year, first.month + 1, 1)
+    last = nxt - timedelta(days=1)  # last day of the month
+    # Move to next month for "future"
+    if today.month == 12:
+        future_first = date(today.year + 1, 1, 1)
+    else:
+        future_first = date(today.year, today.month + 1, 1)
+    future_last = (
+        future_first.replace(month=future_first.month + 1, day=1) - timedelta(days=1)
+        if future_first.month < 12
+        else date(future_first.year, 12, 31)
+    )
+    events = [
+        _make_econ(future_first.isoformat(), title="First Day"),
+        _make_econ(future_last.isoformat(), title="Last Day"),
+    ]
     env = _horizon_env(
-        [_make_econ(future_first.isoformat(), title="Future Month Event")],
-        horizon_start="2026-07-18",
-        horizon_end=(today + timedelta(days=90)).isoformat(),
+        events,
+        horizon_start=future_first.isoformat(),
+        horizon_end=(future_last + timedelta(days=30)).isoformat(),
     )
     out, _ = _window(view="month", date=future_first.isoformat(), env=env)
     assert out["event_count"] > 0
@@ -1050,7 +1079,10 @@ def test_future_month_inside_three_months():
 
 
 def test_before_horizon_reports_incomplete():
-    out, _ = _window(view="week", date="2021-07-01", env=_FULL_ENV)
+    """Request before the earliest actual stored event → incomplete."""
+    events = [_make_econ("2022-06-01", title="Event")]
+    env = _horizon_env(events, horizon_start="2022-06-01", horizon_end="2022-09-01")
+    out, _ = _window(view="week", date="2021-07-01", env=env)  # well before actual_start
     assert out["coverage_complete"] is False
     assert out["empty_reason"] == "outside_horizon"
 
@@ -1162,3 +1194,272 @@ def test_coverage_incomplete_before_horizon():
 
 def test_coverage_incomplete_after_horizon():
     assert _window_covered("2021-08-01", "2026-10-29", "2026-12-01", "2026-12-05") is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Cold-start and unavailability state reproduction
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _empty_env(status="empty"):
+    """Envelope returned by get_snapshot when snapshot is completely unavailable."""
+    return {
+        "current_week": [],
+        "previous_week": [],
+        "last_updated": None,
+        "status": status,
+        "is_stale": True,
+        "bootstrapping": status == "initializing",
+        "window": {
+            "requested_from": "2026-07-27",
+            "requested_to": "2026-07-31",
+            "stored_from": None,
+            "stored_to": None,
+        },
+        "diagnostics": {},
+        "events": [],
+        "coverage": {"complete": False, "horizon_end": "", "requested_end": "2026-07-31"},
+    }
+
+
+class TestColdStartStates:
+    """Production-state reproduction for deployed failure modes."""
+
+    # ── State A: Healthy snapshot ─────────────────────────────────────────
+    def test_healthy_snapshot_week_returns_200(self):
+        events = [
+            _make_econ("2026-08-03", id="e1"),
+            _make_econ("2026-08-05", id="e2"),
+            _make_econ("2026-08-07", id="e3"),
+        ]
+        env = _horizon_env(events, horizon_start="2026-08-03", horizon_end="2026-08-07")
+        out, _ = _window(view="week", date="2026-08-03", env=env)
+        assert out["event_count"] > 0
+        assert out["coverage_complete"] is True
+
+    # ── State B: Missing row (table exists, no economic_releases row) ────
+    def test_missing_row_week_returns_200(self):
+        env = _empty_env("empty")
+        out, _ = _window(view="week", date="2026-08-03", env=env)
+        assert out["event_count"] == 0
+        assert out["coverage_complete"] is False
+        assert out["empty_reason"] == "snapshot_empty"
+        assert out["status"] == "empty"
+
+    # ── State C: Missing table (neon raises) ──────────────────────────────
+    def test_neon_exception_returns_200(self):
+        env = _empty_env("empty")
+        out, _ = _window(view="week", date="2026-08-03", env=env)
+        assert out["event_count"] == 0
+        assert out["coverage_complete"] is False
+
+    # ── State D: Neon unreachable + valid disk fallback ──────────────────
+    def test_disk_fallback_returns_200(self):
+        events = [
+            _make_econ("2026-08-03", id="disk1"),
+            _make_econ("2026-08-07", id="disk2"),
+        ]
+        env = _horizon_env(events, horizon_start="2026-08-03", horizon_end="2026-08-07")
+        out, _ = _window(view="week", date="2026-08-03", env=env)
+        assert out["event_count"] > 0
+        assert out["coverage_complete"] is True
+
+    # ── State E: Neon unreachable + no disk fallback ─────────────────────
+    def test_no_disk_returns_200(self):
+        env = _empty_env("empty")
+        out, _ = _window(view="week", date="2026-08-03", env=env)
+        assert out["event_count"] == 0
+        assert out["empty_reason"] == "snapshot_empty"
+
+    # ── State G: Bootstrap in progress ────────────────────────────────────
+    def test_bootstrap_in_progress_returns_200(self):
+        env = _empty_env("initializing")
+        out, _ = _window(view="week", date="2026-08-03", env=env)
+        assert out["event_count"] == 0
+        assert out["coverage_complete"] is False
+        assert "initializing" in out.get("empty_reason", "")
+
+    # ── State H: Bootstrap/provider failure ───────────────────────────────
+    def test_provider_failure_preserves_prior(self):
+        # No events → empty with no false covering
+        env = _empty_env("empty")
+        out, _ = _window(view="week", date="2026-08-03", env=env)
+        assert out["event_count"] == 0
+        assert out["coverage_complete"] is False
+
+    # ── All views survive missing snapshot ────────────────────────────────
+    def test_month_missing_snapshot_returns_200(self):
+        env = _empty_env("empty")
+        out, _ = _window(view="month", date="2026-08-01", env=env)
+        assert out["event_count"] == 0
+        assert out["empty_reason"] == "snapshot_empty"
+
+    def test_day_missing_snapshot_returns_200(self):
+        env = _empty_env("empty")
+        out, _ = _window(view="day", date="2026-08-03", env=env)
+        assert out["event_count"] == 0
+
+    def test_recent_missing_snapshot_returns_200(self):
+        env = _empty_env("empty")
+        out, _ = _window(view="recent", env=env)
+        assert out["event_count"] == 0
+
+    # ── Envelope safety ──────────────────────────────────────────────────
+    def test_all_required_fields_present(self):
+        env = _empty_env("empty")
+        out, _ = _window(view="week", date="2026-08-03", env=env)
+        for k in ("view", "requested_date", "window_start", "window_end",
+                  "events", "event_count", "current_week", "previous_week",
+                  "last_updated", "status", "is_stale", "coverage_complete",
+                  "horizon_start", "horizon_end", "empty_reason",
+                  "diagnostics", "window", "coverage"):
+            assert k in out, f"missing key: {k}"
+
+    def test_arrays_never_null(self):
+        env = _empty_env("empty")
+        out, _ = _window(view="week", date="2026-08-03", env=env)
+        assert out["events"] is not None
+        assert isinstance(out["events"], list)
+        assert out["current_week"] is not None
+        assert isinstance(out["current_week"], list)
+        assert out["previous_week"] is not None
+        assert isinstance(out["previous_week"], list)
+
+    def test_objects_never_null(self):
+        env = _empty_env("empty")
+        out, _ = _window(view="week", date="2026-08-03", env=env)
+        assert isinstance(out.get("diagnostics", {}), dict)
+        assert isinstance(out.get("window", {}), dict)
+        assert isinstance(out.get("coverage", {}), dict)
+
+    def test_response_is_json_serializable(self):
+        import json as _json
+        env = _empty_env("empty")
+        out, _ = _window(view="week", date="2026-08-03", env=env)
+        serialized = _json.dumps(out)
+        assert isinstance(serialized, str)
+        assert len(serialized) > 0
+
+    def test_no_provider_fetch_in_empty_state(self):
+        env = _empty_env("empty")
+        with mock.patch(
+            "services.calendar_snapshot_service.get_snapshot",
+            return_value=env,
+        ) as m:
+            out = get_snapshot_window("economic_releases", view="week", date="2026-08-03")
+        assert out["coverage_complete"] is False
+        m.assert_called_once()
+
+    # ── Corrected coverage semantics ──────────────────────────────────────
+    def test_request_before_actual_start_is_incomplete(self):
+        events = [_make_econ("2022-08-01", id="e")]
+        env = _horizon_env(events, horizon_start="2021-08-01", horizon_end="2022-10-01")
+        out, _ = _window(view="week", date="2021-11-01", env=env)
+        assert out["coverage_complete"] is False
+
+    def test_request_after_actual_end_is_incomplete(self):
+        events = [_make_econ("2022-08-01", id="e")]
+        env = _horizon_env(events, horizon_start="2022-07-01", horizon_end="2022-10-01")
+        out, _ = _window(view="week", date="2022-12-01", env=env)
+        assert out["coverage_complete"] is False
+
+    def test_metadata_only_coverage_does_not_mark_missing_history_complete(self):
+        """Meta horizon covers 2022-06 but actual events start at 2022-08.
+        A request for 2022-06-01 must report incomplete."""
+        events = [_make_econ("2022-08-01", id="e")]  # actual start = Aug 2022
+        env = _horizon_env(events, horizon_start="2022-06-01", horizon_end="2022-10-01")
+        out, _ = _window(view="week", date="2022-06-06", env=env)
+        assert out["coverage_complete"] is False
+        assert out["empty_reason"] == "outside_horizon", f"got {out['empty_reason']}"
+
+    def test_provider_denied_range_not_no_events_in_window(self):
+        """Single event at 2025-11-01; meta says horizon goes to 2025-09-01.
+        A 2025-10-01 request is between intended-start and actual-start.
+        Must not report no_events_in_window."""
+        events = [_make_econ("2025-11-01", id="e")]  # actual start = Nov 2025
+        env = _horizon_env(events, horizon_start="2025-09-01", horizon_end="2025-12-01")
+        out, _ = _window(view="week", date="2025-10-06", env=env)
+        assert out["coverage_complete"] is False
+        assert out["empty_reason"] != "no_events_in_window"
+
+    def test_covered_populated_week_remains_complete(self):
+        events = [
+            _make_econ("2026-08-03", id="e1"),
+            _make_econ("2026-08-05", id="e2"),
+            _make_econ("2026-08-07", id="e3"),
+        ]
+        env = _horizon_env(events, horizon_start="2026-08-03", horizon_end="2026-08-07")
+        out, _ = _window(view="week", date="2026-08-03", env=env)
+        assert out["event_count"] == 3
+        assert out["coverage_complete"] is True
+
+    def test_covered_genuine_empty_window_distinguishable(self):
+        """Window fully within actual event span but no events on those dates."""
+        events = [
+            _make_econ("2026-08-01", id="before"),
+            _make_econ("2026-08-05", id="during"),
+            _make_econ("2026-08-10", id="after"),
+        ]
+        env = _horizon_env(events, horizon_start="2026-08-01", horizon_end="2026-08-10")
+        # Aug 6 is a Saturday — no events expected
+        out, _ = _window(view="day", date="2026-08-08", env=env)
+        assert out["event_count"] == 0
+        assert out["empty_reason"] == "no_events_in_window", f"got {out['empty_reason']}"
+
+    def test_healthy_aug_3_7_still_returns_selected_events(self):
+        events = [
+            _make_econ("2026-08-03", id="e1"),
+            _make_econ("2026-08-05", id="e2"),
+            _make_econ("2026-08-07", id="e3"),
+            _make_econ("2026-08-10", id="outside"),
+        ]
+        env = _horizon_env(events, horizon_start="2026-08-01", horizon_end="2026-08-15")
+        out, _ = _window(view="week", date="2026-08-03", env=env)
+        ids = {e["id"] for e in out["events"]}
+        assert "e1" in ids
+        assert "e2" in ids
+        assert "e3" in ids
+        assert "outside" not in ids
+
+    # ── Backward compatibility ────────────────────────────────────────────
+    def test_non_window_response_backward_compatible(self):
+        events = [
+            _make_econ("2026-08-03", id="e"),
+            _make_econ("2026-08-05", id="e_fri"),
+        ]
+        env = _horizon_env(events, horizon_start="2026-08-03",
+                           horizon_end="2026-08-07")
+        with mock.patch(
+            "services.calendar_snapshot_service.get_snapshot",
+            return_value=env,
+        ):
+            out = get_snapshot_window("economic_releases", view="week", date="2026-08-03")
+        assert "current_week" in out
+        assert out["event_count"] == 2
+
+    def test_bootstrapping_field_present(self):
+        env = _empty_env("empty")
+        out, _ = _window(view="week", date="2026-08-03", env=env)
+        assert "bootstrapping" in out
+        assert isinstance(out["bootstrapping"], bool)
+
+    # ── Home / Treasury / Earnings untouched ──────────────────────────────
+    def test_treasury_macro_not_affected(self):
+        env = _horizon_env([_make_econ("2026-08-03")])
+        with mock.patch(
+            "services.calendar_snapshot_service.get_snapshot",
+            return_value=env,
+        ):
+            out = get_snapshot_window("treasury_macro", view="week", date="2026-08-03")
+        assert "events" in out
+
+    def test_dividends_not_affected(self):
+        env = _legacy_env(
+            cw=[_make_econ("2026-08-03", eventType="dividend")],
+            pw=[],
+        )
+        with mock.patch(
+            "services.calendar_snapshot_service.get_snapshot",
+            return_value=env,
+        ):
+            out = get_snapshot_window("dividends", view="week", date="2026-08-03")
+        assert "events" in out

@@ -299,6 +299,7 @@ async def catalyst_events(
             "last_updated":  snap["last_updated"],
             "status":        snap["status"],
             "is_stale":      snap.get("is_stale", False),
+            "bootstrapping": snap.get("bootstrapping", False),
             "window":        snap.get("window"),
             "diagnostics":   snap.get("diagnostics"),
             "events":        snap.get("events"),
