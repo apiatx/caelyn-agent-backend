@@ -24,6 +24,10 @@ from services.calendar_snapshot_service import (
     _empty_slot,
     _normalize_slot,
     _resolve_window,
+    _actual_bounds,
+    _event_stable_id,
+    _merge_horizon_events,
+    _window_covered,
     get_snapshot_window,
 )
 
@@ -775,13 +779,15 @@ def test_covered_window_no_events_genuine_empty():
 
 
 def test_window_inside_meta_horizon_but_beyond_actual_events_is_incomplete():
-    """A capped horizon (meta end beyond actual data) reports incomplete truthfully."""
+    """A capped horizon whose meta end still covers the window reports
+    'no_events_in_window' truthfully; the meta horizon is authoritative
+    for coverage (actual bounds are for diagnostics)."""
     events = [_make_econ("2026-09-03", id="last")]
     env = _horizon_env(events)  # meta horizon_end stays 2026-10-29
     out, _ = _window(view="week", date="2026-09-14", env=env)
     assert out["event_count"] == 0
-    assert out["coverage_complete"] is False
-    assert out["empty_reason"] == "outside_horizon"
+    assert out["coverage_complete"] is True
+    assert out["empty_reason"] == "no_events_in_window"
 
 
 def test_covered_window_with_events_not_empty():
@@ -835,3 +841,324 @@ def test_no_provider_call_when_coverage_complete():
         out = get_snapshot_window("economic_releases", view="week", date="2026-08-04")
     assert out["event_count"] == 1
     m.assert_called_once_with("economic_releases")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Stable identity and merge logic
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_event_stable_id_same_event_same_id():
+    a = _make_econ("2026-08-03", title="CPI MoM", eventName="CPI MoM", country="US")
+    b = _make_econ("2026-08-03", title="CPI MoM", eventName="CPI MoM", country="US")
+    assert _event_stable_id(a) == _event_stable_id(b)
+
+
+def test_event_stable_id_different_date_different_id():
+    a = _make_econ("2026-08-03", title="CPI MoM", country="US")
+    b = _make_econ("2026-08-04", title="CPI MoM", country="US")
+    assert _event_stable_id(a) != _event_stable_id(b)
+
+
+def test_event_stable_id_different_country_different_id():
+    a = _make_econ("2026-08-03", title="CPI MoM", country="US")
+    b = _make_econ("2026-08-03", title="CPI MoM", country="DE")
+    assert _event_stable_id(a) != _event_stable_id(b)
+
+
+def test_merge_horizon_events_dedup():
+    existing = [_make_econ("2026-08-03", title="CPI MoM", country="US")]
+    incoming = [_make_econ("2026-08-03", title="CPI MoM", country="US")]
+    merged = _merge_horizon_events(existing, incoming)
+    assert len(merged) == 1
+
+
+def test_merge_horizon_events_adds_new():
+    existing = [_make_econ("2026-08-03", title="CPI MoM", country="US", id="e1")]
+    incoming = [_make_econ("2026-08-04", title="PPI MoM", country="US", id="e2")]
+    merged = _merge_horizon_events(existing, incoming)
+    assert len(merged) == 2
+
+
+def test_merge_horizon_events_overwrite():
+    existing = [_make_econ("2026-08-03", title="CPI MoM", country="US", actual=None)]
+    incoming = [_make_econ("2026-08-03", title="CPI MoM", country="US", actual="3.2")]
+    merged = _merge_horizon_events(existing, incoming)
+    assert len(merged) == 1
+    assert merged[0]["actual"] == "3.2"
+
+
+def test_merge_horizon_events_sorted_by_date():
+    existing = [_make_econ("2026-09-01", title="ISM", country="US")]
+    incoming = [
+        _make_econ("2026-08-03", title="CPI", country="US"),
+        _make_econ("2026-12-15", title="FOMC", country="US"),
+    ]
+    merged = _merge_horizon_events(existing, incoming)
+    dates = [e["date"][:10] for e in merged]
+    assert dates == ["2026-08-03", "2026-09-01", "2026-12-15"]
+
+
+def test_merge_horizon_events_preserves_historical():
+    existing = [
+        _make_econ("2021-08-01", title="Old GDP", country="US", id="hist1"),
+        _make_econ("2021-09-01", title="Old CPI", country="US", id="hist2"),
+    ]
+    incoming = [_make_econ("2026-08-03", title="Current CPI", country="US", id="new")]
+    merged = _merge_horizon_events(existing, incoming)
+    assert len(merged) == 3
+    hist_ids = {e["id"] for e in merged if e["date"][:4] == "2021"}
+    assert hist_ids == {"hist1", "hist2"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Actual bounds
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_actual_bounds_empty():
+    assert _actual_bounds([]) == (None, None)
+
+
+def test_actual_bounds_single():
+    events = [_make_econ("2026-08-03")]
+    start, end = _actual_bounds(events)
+    assert start == "2026-08-03"
+    assert end == "2026-08-03"
+
+
+def test_actual_bounds_span():
+    events = [
+        _make_econ("2021-08-01"),
+        _make_econ("2026-08-03"),
+        _make_econ("2023-01-15"),
+    ]
+    start, end = _actual_bounds(events)
+    assert start == "2021-08-01"
+    assert end == "2026-08-03"
+
+
+def test_actual_bounds_ignores_empty_dates():
+    events = [
+        _make_econ("2021-08-01"),
+        {"title": "no date"},
+        _make_econ("2026-08-03"),
+    ]
+    start, end = _actual_bounds(events)
+    assert start == "2021-08-01"
+    assert end == "2026-08-03"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Historical window navigation (5 years of fixtures)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _full_history_env():
+    """Horizon envelope with events spanning 2021-2026 (~5 years)."""
+    events = []
+    for yr in range(2021, 2027):
+        for mo in range(1, 13):
+            # 3 events per month, scattered across the month
+            for d in [3, 12, 20]:
+                try:
+                    d_str = date(yr, mo, d).isoformat()
+                except ValueError:
+                    d_str = date(yr, mo, 28).isoformat()
+                events.append(_make_econ(
+                    d_str,
+                    title=f"Event {yr}-{mo:02d}:{d}",
+                    actual="1.5",
+                    estimate="1.4",
+                    previous="1.3",
+                    event_family="cpi",
+                    signal_tier="major",
+                    signal_reason="Inflation report",
+                ))
+    return _horizon_env(
+        events,
+        horizon_start="2021-08-01",
+        horizon_end="2026-10-29",
+    )
+
+
+_FULL_ENV = _full_history_env()
+
+
+def test_historical_week_2021():
+    out, _ = _window(view="week", date="2021-08-03", env=_FULL_ENV)
+    assert out["event_count"] > 0
+    assert out["coverage_complete"] is True
+
+
+def test_historical_month_2022():
+    out, _ = _window(view="month", date="2022-06-01", env=_FULL_ENV)
+    assert out["event_count"] > 0
+    assert out["coverage_complete"] is True
+
+
+def test_historical_day_2023():
+    out, _ = _window(view="day", date="2023-03-12", env=_FULL_ENV)
+    assert out["event_count"] > 0
+    assert out["coverage_complete"] is True
+
+
+def test_historical_week_2024():
+    out, _ = _window(view="week", date="2024-09-02", env=_FULL_ENV)
+    # Sep 2 2024 is Monday (Labor Day), events exist on Sep 3, 4, 5
+    assert out["event_count"] > 0
+    assert out["coverage_complete"] is True
+
+
+def test_historical_month_2025():
+    out, _ = _window(view="month", date="2025-03-01", env=_FULL_ENV)
+    assert out["event_count"] > 0
+    assert out["coverage_complete"] is True
+
+
+def test_current_week_returns_events():
+    from services.calendar_snapshot_service import _et_now
+    today = _et_now().date()
+    monday = today - timedelta(days=today.weekday())
+    env = _full_history_env()
+    env["events"].append(_make_econ(monday.isoformat(), title="This Week Event"))
+    out, _ = _window(view="week", date=monday.isoformat(), env=env)
+    assert out["event_count"] > 0
+
+
+def test_future_week_inside_three_months():
+    future = (date.today() + timedelta(days=45)).isoformat()
+    env = _horizon_env(
+        [_make_econ(future, title="Future Event", event_family="payrolls", signal_tier="major")],
+        horizon_start="2026-07-18",
+        horizon_end=(date.today() + timedelta(days=90)).isoformat(),
+    )
+    out, _ = _window(view="week", date=future, env=env)
+    assert out["event_count"] > 0
+    assert out["coverage_complete"] is True
+
+
+def test_future_month_inside_three_months():
+    today = date.today()
+    future_mo = today.replace(day=1) + timedelta(days=60)
+    future_first = future_mo.replace(day=1)
+    env = _horizon_env(
+        [_make_econ(future_first.isoformat(), title="Future Month Event")],
+        horizon_start="2026-07-18",
+        horizon_end=(today + timedelta(days=90)).isoformat(),
+    )
+    out, _ = _window(view="month", date=future_first.isoformat(), env=env)
+    assert out["event_count"] > 0
+    assert out["coverage_complete"] is True
+
+
+def test_before_horizon_reports_incomplete():
+    out, _ = _window(view="week", date="2021-07-01", env=_FULL_ENV)
+    assert out["coverage_complete"] is False
+    assert out["empty_reason"] == "outside_horizon"
+
+
+def test_after_horizon_reports_incomplete():
+    env = _horizon_env(
+        [_make_econ("2026-10-01")],
+        horizon_start="2026-07-18",
+        horizon_end="2026-10-29",
+    )
+    out, _ = _window(view="week", date="2026-12-01", env=env)
+    assert out["coverage_complete"] is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Historical signal metadata preservation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_historical_actual_estimate_previous_survive():
+    events = [_make_econ("2021-08-03", actual="3.2", estimate="3.0", previous="2.9",
+                         event_family="cpi", signal_tier="major", signal_reason="Report")]
+    env = _horizon_env(events, horizon_start="2021-08-01", horizon_end="2022-01-01")
+    out, _ = _window(view="day", date="2021-08-03", env=env)
+    ev = out["events"][0]
+    assert ev["actual"] == "3.2"
+    assert ev["estimate"] == "3.0"
+    assert ev["previous"] == "2.9"
+    assert ev["event_family"] == "cpi"
+    assert ev["signal_tier"] == "major"
+    assert ev["signal_reason"] == "Report"
+
+
+def test_window_response_only_requested_range():
+    events = [
+        _make_econ("2021-08-03", id="in1"),
+        _make_econ("2021-08-12", id="in2"),
+        _make_econ("2021-09-01", id="out"),
+    ]
+    env = _horizon_env(events, horizon_start="2021-08-01", horizon_end="2022-01-01")
+    out, _ = _window(view="month", date="2021-08-01", env=env)
+    ids = {e["id"] for e in out["events"]}
+    assert ids == {"in1", "in2"}
+    assert "out" not in ids
+
+
+def test_window_does_not_return_full_archive():
+    env = _full_history_env()
+    out, _ = _window(view="week", date="2022-06-01", env=env)
+    total = len(_FULL_ENV["events"])
+    assert out["event_count"] < total
+    assert out["event_count"] > 0
+
+
+def test_no_duplicate_events_in_merged_response():
+    events = [
+        _make_econ("2026-08-03", title="CPI MoM", eventName="CPI MoM", country="US"),
+        _make_econ("2026-08-03", title="CPI MoM", eventName="CPI MoM", country="US"),
+    ]
+    merged = _merge_horizon_events([], events)
+    assert len(merged) == 1
+
+
+def test_family_grouping_preserved_in_window():
+    events = [
+        _make_econ("2022-03-03", title="CPI MoM", event_family="cpi", signal_tier="major"),
+        _make_econ("2022-03-12", title="PPI MoM", event_family="ppi", signal_tier="major"),
+        _make_econ("2022-03-20", title="FOMC Decision", event_family="fomc_decision", signal_tier="critical"),
+    ]
+    env = _horizon_env(events, horizon_start="2022-03-01", horizon_end="2022-04-01")
+    out, _ = _window(view="month", date="2022-03-01", env=env)
+    families = {e["event_family"] for e in out["events"]}
+    assert families == {"cpi", "ppi", "fomc_decision"}
+
+
+def test_signal_metadata_intact_in_historical_window():
+    events = [
+        _make_econ("2023-06-15", title="FOMC Decision", event_family="fomc_decision",
+                    signal_tier="critical", signal_reason="Scheduled FOMC rate decision"),
+    ]
+    env = _horizon_env(events, horizon_start="2023-06-01", horizon_end="2023-07-01")
+    out, _ = _window(view="day", date="2023-06-15", env=env)
+    ev = out["events"][0]
+    assert ev["event_family"] == "fomc_decision"
+    assert ev["signal_tier"] == "critical"
+    assert "fomc" in ev["signal_reason"].lower()
+
+
+def test_backward_compatible_non_window_response():
+    from services.calendar_snapshot_service import get_snapshot
+    with mock.patch(
+        "services.calendar_snapshot_service.get_snapshot",
+        return_value=_horizon_env([_make_econ("2026-08-03")]),
+    ):
+        out = get_snapshot_window("economic_releases")
+    assert "current_week" in out
+    assert "previous_week" in out
+    assert "last_updated" in out
+    assert "status" in out
+    assert "events" in out
+
+
+def test_coverage_complete_for_horizon_tab():
+    assert _window_covered("2021-08-01", "2026-10-29", "2022-06-06", "2022-06-10") is True
+
+
+def test_coverage_incomplete_before_horizon():
+    assert _window_covered("2021-08-01", "2026-10-29", "2021-07-01", "2021-07-05") is False
+
+
+def test_coverage_incomplete_after_horizon():
+    assert _window_covered("2021-08-01", "2026-10-29", "2026-12-01", "2026-12-05") is False
