@@ -1471,42 +1471,46 @@ class TestColdStartStates:
 
 from services.calendar_snapshot_service import (
     _merge_coverage_ranges,
-    _window_in_any_range,
+    _normalize_coverage_ranges,
+    _coverage_union,
+    _window_covered_by_ranges,
+    _coverage_gap_kind,
 )
 
 
 class TestCoverageRanges:
     """Coverage at the provider-chunk level — each chunk is tracked."""
 
-    # ── _window_in_any_range ──────────────────────────────────────────────
+    # ── _window_covered_by_ranges ──────────────────────────────────────────────
     def test_window_inside_complete_range(self):
         ranges = [{"from": "2025-09-01", "to": "2025-10-31", "status": "complete"}]
-        assert _window_in_any_range(ranges, "2025-09-15", "2025-09-19") is True
+        assert _window_covered_by_ranges(ranges, "2025-09-15", "2025-09-19") is True
 
     def test_window_outside_any_range(self):
         ranges = [{"from": "2025-09-01", "to": "2025-10-31", "status": "complete"}]
-        assert _window_in_any_range(ranges, "2025-11-01", "2025-11-05") is False
+        assert _window_covered_by_ranges(ranges, "2025-11-01", "2025-11-05") is False
 
     def test_window_in_failed_range_is_not_covered(self):
         ranges = [
             {"from": "2025-09-01", "to": "2025-10-31", "status": "failed"},
             {"from": "2025-11-01", "to": "2025-11-30", "status": "complete"},
         ]
-        assert _window_in_any_range(ranges, "2025-09-15", "2025-09-19") is False
+        assert _window_covered_by_ranges(ranges, "2025-09-15", "2025-09-19") is False
 
     def test_window_in_empty_range_is_covered(self):
         """An empty chunk (provider returned no events) is still successfully
         fetched evidence of no releases — it IS covered."""
         ranges = [{"from": "2025-09-01", "to": "2025-10-31", "status": "empty"}]
-        assert _window_in_any_range(ranges, "2025-09-15", "2025-09-19") is True
+        assert _window_covered_by_ranges(ranges, "2025-09-15", "2025-09-19") is True
 
-    def test_window_straddling_multiple_ranges(self):
+    def test_window_straddling_adjacent_successful_ranges(self):
+        """Adjacent successful ranges form one continuous union.
+        A week straddling both must be covered."""
         ranges = [
             {"from": "2025-09-01", "to": "2025-09-30", "status": "complete"},
             {"from": "2025-10-01", "to": "2025-10-15", "status": "complete"},
         ]
-        # Week straddling Oct 1 boundary; no single range covers it
-        assert _window_in_any_range(ranges, "2025-09-28", "2025-10-04") is False
+        assert _window_covered_by_ranges(ranges, "2025-09-28", "2025-10-04") is True
 
     def test_window_inside_single_range_across_two(self):
         ranges = [
@@ -1514,7 +1518,7 @@ class TestCoverageRanges:
             {"from": "2025-10-01", "to": "2025-10-31", "status": "complete"},
         ]
         # Entirely inside the second range
-        assert _window_in_any_range(ranges, "2025-10-05", "2025-10-09") is True
+        assert _window_covered_by_ranges(ranges, "2025-10-05", "2025-10-09") is True
 
     # ── _merge_coverage_ranges ────────────────────────────────────────────
     def test_merge_adds_new_ranges(self):
@@ -1565,9 +1569,9 @@ class TestCoverageRanges:
             {"from": "2025-10-01", "to": "2025-10-31", "status": "complete"},
         ]
         # September request: not in any complete range
-        assert _window_in_any_range(ranges, "2025-09-15", "2025-09-19") is False
+        assert _window_covered_by_ranges(ranges, "2025-09-15", "2025-09-19") is False
         # August request: in a complete range
-        assert _window_in_any_range(ranges, "2025-08-10", "2025-08-14") is True
+        assert _window_covered_by_ranges(ranges, "2025-08-10", "2025-08-14") is True
 
     def test_coverage_ranges_in_get_snapshot_window(self):
         """get_snapshot_window uses coverage_ranges when present in env."""
@@ -1603,3 +1607,185 @@ class TestCoverageRanges:
         # but inside a trusted range → covered
         out, _ = _window(view="week", date="2025-10-20", env=env)
         assert out["coverage_complete"] is True
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Continuous union, internal gaps, normalization
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestCoverageUnionAndGaps:
+    """Union of successful ranges, gap detection, normalization safety."""
+
+    # ── Union forms continuous span ────────────────────────────────────────
+    def test_adjacent_complete_and_empty_cover_spanning_request(self):
+        ranges = [
+            {"from": "2025-08-01", "to": "2025-08-31", "status": "complete"},
+            {"from": "2025-09-01", "to": "2025-09-30", "status": "empty"},
+        ]
+        assert _window_covered_by_ranges(ranges, "2025-08-28", "2025-09-04") is True
+
+    def test_adjacent_empty_and_complete_cover_spanning_request(self):
+        ranges = [
+            {"from": "2025-08-01", "to": "2025-08-31", "status": "empty"},
+            {"from": "2025-09-01", "to": "2025-09-30", "status": "complete"},
+        ]
+        assert _window_covered_by_ranges(ranges, "2025-08-28", "2025-09-04") is True
+
+    def test_overlapping_successful_ranges_cover_union(self):
+        ranges = [
+            {"from": "2025-08-01", "to": "2025-08-20", "status": "complete"},
+            {"from": "2025-08-15", "to": "2025-09-10", "status": "complete"},
+        ]
+        assert _window_covered_by_ranges(ranges, "2025-08-25", "2025-09-01") is True
+
+    def test_one_day_gap_makes_spanning_request_incomplete(self):
+        ranges = [
+            {"from": "2025-08-01", "to": "2025-08-31", "status": "complete"},
+            {"from": "2025-09-02", "to": "2025-09-30", "status": "complete"},
+        ]
+        assert _window_covered_by_ranges(ranges, "2025-08-29", "2025-09-04") is False
+
+    def test_failed_internal_range_returns_coverage_gap(self):
+        ranges = [
+            {"from": "2025-08-01", "to": "2025-08-31", "status": "complete"},
+            {"from": "2025-09-01", "to": "2025-09-30", "status": "failed"},
+            {"from": "2025-10-01", "to": "2025-10-31", "status": "complete"},
+        ]
+        kind = _coverage_gap_kind(ranges, "2025-09-15", "2025-09-19")
+        assert kind == "coverage_gap"
+
+    def test_before_all_ranges_returns_outside_horizon(self):
+        ranges = [{"from": "2025-08-01", "to": "2025-10-31", "status": "complete"}]
+        kind = _coverage_gap_kind(ranges, "2025-07-01", "2025-07-05")
+        assert kind == "outside_horizon"
+
+    def test_after_all_ranges_returns_outside_horizon(self):
+        ranges = [{"from": "2025-08-01", "to": "2025-10-31", "status": "complete"}]
+        kind = _coverage_gap_kind(ranges, "2025-12-01", "2025-12-05")
+        assert kind == "outside_horizon"
+
+    # ── Merge with boundary overlap ────────────────────────────────────────
+    def test_successful_incoming_overlap_supersedes_prior_failed(self):
+        prior = [{"from": "2025-08-01", "to": "2025-09-30", "status": "failed"}]
+        incoming = [{"from": "2025-08-15", "to": "2025-10-15", "status": "complete"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        statuses = {r["status"] for r in merged}
+        assert "failed" not in statuses
+        assert "complete" in statuses
+
+    def test_failed_incoming_does_not_downgrade_prior_complete(self):
+        prior = [{"from": "2025-08-01", "to": "2025-09-30", "status": "complete"}]
+        incoming = [{"from": "2025-08-15", "to": "2025-10-15", "status": "failed"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        statuses = {r["status"] for r in merged}
+        assert "complete" in statuses
+
+    def test_different_full_and_delta_boundaries_normalize(self):
+        prior = [{"from": "2025-06-01", "to": "2025-08-31", "status": "complete"}]
+        incoming = [{"from": "2025-07-15", "to": "2025-10-15", "status": "complete"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        spans = [(r["from"], r["to"]) for r in merged if r["status"] == "complete"]
+        assert len(spans) == 1
+
+    def test_duplicate_ranges_collapse(self):
+        prior = [
+            {"from": "2025-08-01", "to": "2025-08-31", "status": "complete"},
+            {"from": "2025-08-01", "to": "2025-08-31", "status": "complete"},
+        ]
+        merged = _merge_coverage_ranges([], prior)
+        assert len(merged) == 1
+
+    # ── Normalization safety ──────────────────────────────────────────────
+    def test_malformed_dates_ignored(self):
+        dirty = [
+            {"from": "2025-08-01", "to": "2025-08-31", "status": "complete"},
+            {"from": "not-a-date", "to": "2025-09-30", "status": "complete"},
+        ]
+        clean = _normalize_coverage_ranges(dirty)
+        assert len(clean) == 1
+
+    def test_inverted_ranges_ignored(self):
+        dirty = [
+            {"from": "2025-08-01", "to": "2025-08-31", "status": "complete"},
+            {"from": "2025-09-30", "to": "2025-09-01", "status": "complete"},
+        ]
+        clean = _normalize_coverage_ranges(dirty)
+        assert len(clean) == 1
+
+    def test_unsupported_status_ignored(self):
+        dirty = [
+            {"from": "2025-08-01", "to": "2025-08-31", "status": "bogus"},
+            {"from": "2025-09-01", "to": "2025-09-30", "status": "complete"},
+        ]
+        clean = _normalize_coverage_ranges(dirty)
+        assert len(clean) == 1
+        assert clean[0]["status"] == "complete"
+
+    def test_non_dict_entries_ignored(self):
+        dirty = [
+            "not a dict",
+            {"from": "2025-08-01", "to": "2025-08-31", "status": "complete"},
+        ]
+        clean = _normalize_coverage_ranges(dirty)
+        assert len(clean) == 1
+
+    def test_empty_ranges_list_returns_empty(self):
+        assert _normalize_coverage_ranges([]) == []
+        assert _normalize_coverage_ranges(None) == []
+
+    # ── Coverage status diagnostics ────────────────────────────────────────
+    def test_all_success_chunks_report_complete(self):
+        ranges = [
+            {"from": "2025-08-01", "to": "2025-08-31", "status": "complete"},
+            {"from": "2025-09-01", "to": "2025-09-30", "status": "complete"},
+        ]
+        union = _coverage_union(ranges)
+        assert len(union) == 1
+        assert union[0]["from"] == "2025-08-01"
+        assert union[0]["to"] == "2025-09-30"
+
+    def test_valid_all_empty_ranges_remain_covered(self):
+        ranges = [
+            {"from": "2025-08-01", "to": "2025-08-31", "status": "empty"},
+        ]
+        assert _window_covered_by_ranges(ranges, "2025-08-15", "2025-08-19") is True
+
+    # ── Coverage gap in get_snapshot_window ────────────────────────────────
+    def test_internal_gap_produces_coverage_gap_reason(self):
+        events = [_make_econ("2025-08-05", id="e1"), _make_econ("2025-10-05", id="e2")]
+        env = _horizon_env(events, horizon_start="2025-08-01", horizon_end="2025-10-31")
+        env["horizon"] = {
+            "horizon_start": "2025-08-01",
+            "horizon_end": "2025-10-31",
+            "coverage_ranges": [
+                {"from": "2025-08-01", "to": "2025-08-31", "status": "complete"},
+                {"from": "2025-09-01", "to": "2025-09-30", "status": "failed"},
+                {"from": "2025-10-01", "to": "2025-10-31", "status": "complete"},
+            ],
+        }
+        out, _ = _window(view="week", date="2025-09-15", env=env)
+        assert out["coverage_complete"] is False
+        assert out["empty_reason"] == "coverage_gap"
+
+    def test_coverage_metadata_json_serializable(self):
+        import json as _json
+        ranges = [
+            {"from": "2025-08-01", "to": "2025-08-31", "status": "complete"},
+            {"from": "2025-09-01", "to": "2025-09-30", "status": "failed"},
+        ]
+        serialized = _json.dumps(ranges)
+        assert isinstance(serialized, str)
+        assert len(serialized) > 0
+
+    # ── Bootstrap and backward compat ──────────────────────────────────────
+    def test_home_treasury_earnings_unchanged(self):
+        env = _legacy_env(
+            cw=[_make_econ("2026-08-03", eventType="treasury_rate")],
+            pw=[],
+        )
+        with mock.patch(
+            "services.calendar_snapshot_service.get_snapshot",
+            return_value=env,
+        ):
+            out = get_snapshot_window("treasury_macro", view="week", date="2026-08-03")
+        assert out["event_count"] > 0

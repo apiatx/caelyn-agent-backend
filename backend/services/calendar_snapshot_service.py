@@ -560,6 +560,114 @@ def _merge_horizon_events(
     return sorted(seen.values(), key=lambda e: e.get("date", ""))
 
 
+def _normalize_coverage_ranges(ranges: list) -> list[dict]:
+    """
+    Filter and normalize a list of coverage-range dicts to a canonical form.
+    Reject or ignore:
+      • non-dict entries
+      • missing or malformed from/to dates
+      • inverted ranges (from > to)
+      • unsupported status values
+    Returns a cleaned, sorted list.
+    """
+    valid_statuses = frozenset({"complete", "empty", "failed"})
+    clean: list[dict] = []
+    for r in (ranges or []):
+        if not isinstance(r, dict):
+            continue
+        fr = r.get("from", "")
+        to = r.get("to", "")
+        st = r.get("status", "")
+        if not fr or not to or st not in valid_statuses:
+            continue
+        try:
+            d_fr = date.fromisoformat(fr[:10])
+            d_to = date.fromisoformat(to[:10])
+        except (TypeError, ValueError):
+            continue
+        if d_fr > d_to:
+            continue
+        clean.append({"from": fr[:10], "to": to[:10], "status": st})
+    clean.sort(key=lambda r: r["from"])
+    return clean
+
+
+def _coverage_union(ranges: list[dict]) -> list[dict]:
+    """
+    Build the continuous union of all successful (complete or empty) ranges.
+    Overlapping and directly adjacent ranges are merged into maximal spans.
+
+    Returns a list of {"from", "to"} dicts sorted by from ASC.
+    """
+    successful = [
+        {"from": r["from"], "to": r["to"]}
+        for r in ranges
+        if r.get("status") in ("complete", "empty")
+    ]
+    if not successful:
+        return []
+    successful.sort(key=lambda r: r["from"])
+    union: list[dict] = [dict(successful[0])]
+    for r in successful[1:]:
+        prev = union[-1]
+        # Merge if overlapping or directly adjacent (touching, no gap)
+        if prev["to"] >= _day_before(r["from"]):
+            if r["to"] > prev["to"]:
+                prev["to"] = r["to"]
+        else:
+            union.append(dict(r))
+    return union
+
+
+def _window_covered_by_ranges(
+    ranges: list[dict],
+    win_from: str,
+    win_to: str,
+) -> bool:
+    """
+    True when [win_from, win_to] is fully contained within the continuous
+    union of successful (complete + empty) coverage ranges.
+    """
+    union = _coverage_union(ranges)
+    for span in union:
+        if span["from"] <= win_from and win_to <= span["to"]:
+            return True
+    return False
+
+
+def _coverage_gap_kind(
+    ranges: list[dict],
+    win_from: str,
+    win_to: str,
+) -> str:
+    """
+    Classify why a window is uncovered.
+
+    Returns:
+      • "outside_horizon" — entirely before earliest or after latest range
+      • "coverage_gap"    — inside the outer span but intersecting a failed range
+      • ""                — covered (no gap)
+    """
+    clean = _normalize_coverage_ranges(ranges)
+    if not clean:
+        return "outside_horizon"
+    first = clean[0]["from"]
+    last  = clean[-1]["to"]
+    if win_to < first or win_from > last:
+        return "outside_horizon"
+    if _window_covered_by_ranges(clean, win_from, win_to):
+        return ""
+    return "coverage_gap"
+
+
+def _day_before(d: str) -> str:
+    """Return the day before `d` as YYYY-MM-DD."""
+    try:
+        return (date.fromisoformat(d) - timedelta(days=1)).isoformat()
+    except (TypeError, ValueError):
+        return d
+
+
 def _merge_coverage_ranges(
     prior_ranges: list[dict],
     new_ranges: list[dict],
@@ -567,70 +675,72 @@ def _merge_coverage_ranges(
     """
     Merge incoming chunk-level coverage ranges into the prior set.
 
-    • Each range is {"from": "YYYY-MM-DD", "to": "YYYY-MM-DD", "status": "..."}
-    • A new "complete" or "empty" range overwrites any prior range for the same
-      date span (a fresh fetch is more authoritative).
-    • A "failed" incoming range does NOT overwrite a prior "complete" range
-      — we keep the earlier successful data.
-    • Ranges are sorted by `from` ASC and adjacent ranges with the same status
-      are merged for compactness.
+    Date-driven precedence (not exact-tuple matching) so delta refreshes
+    with different chunk boundaries integrate correctly:
+
+    • A successful incoming range (complete/empty) supersedes any prior
+      range whose date span it overlaps — the latest fetch is authoritative.
+    • A failed incoming range does NOT overwrite prior successful coverage
+      for the dates it overlaps.
+    • Unrelated historical ranges are preserved unchanged.
+    • Output is sorted by from ASC.
     """
-    by_key: dict[str, dict] = {}
-    for r in prior_ranges:
-        key = (r.get("from", ""), r.get("to", ""))
-        by_key[key] = dict(r)
-    for r in new_ranges:
-        key = (r.get("from", ""), r.get("to", ""))
-        existing = by_key.get(key)
-        if existing and existing.get("status") == "complete":
-            if r.get("status") == "failed":
-                continue  # keep prior success
-        by_key[key] = dict(r)
+    prior = _normalize_coverage_ranges(prior_ranges)
+    incoming = _normalize_coverage_ranges(new_ranges)
 
-    merged = sorted(by_key.values(), key=lambda r: r.get("from", ""))
+    result: list[dict] = list(prior)
+    for inc in incoming:
+        inc_from = inc["from"]
+        inc_to   = inc["to"]
+        inc_status = inc["status"]
+        is_successful = inc_status in ("complete", "empty")
 
-    # Compact adjacent ranges with same status.
-    # Adjacent = previous.to + 1 day >= next.from (touching or overlapping).
+        # Remove any prior entries whose span overlaps with this incoming entry,
+        # but only when the incoming is authoritative:
+        #   • successful incoming → supersedes any overlapping prior
+        result = [
+            r for r in result
+            if not (
+                r["from"] <= inc_to and r["to"] >= inc_from
+                and is_successful
+            )
+        ]
+
+        # Add the incoming range.  For a failed incoming, only add if no
+        # prior successful range already covers the same span.
+        if is_successful:
+            result.append(dict(inc))
+        else:
+            has_prior_success = any(
+                r["from"] <= inc_to and r["to"] >= inc_from
+                and r.get("status") in ("complete", "empty")
+                for r in result
+            )
+            if not has_prior_success:
+                result.append(dict(inc))
+
+    result.sort(key=lambda r: r["from"])
+
+    # Compact adjacent ranges with the same status.
     compact: list[dict] = []
-    for r in merged:
+    for r in result:
         if (
             compact
             and compact[-1]["status"] == r["status"]
             and compact[-1]["to"] >= _day_before(r["from"])
         ):
-            compact[-1]["to"] = r["to"]
+            if r["to"] > compact[-1]["to"]:
+                compact[-1]["to"] = r["to"]
         else:
             compact.append(dict(r))
     return compact
-
-
-def _day_before(d: str) -> str:
-    """Return the day before `d` as YYYY-MM-DD. Used for adjacency check."""
-    try:
-        return (date.fromisoformat(d) - timedelta(days=1)).isoformat()
-    except (TypeError, ValueError):
-        return d
-
-
-def _window_in_any_range(
-    ranges: list[dict],
-    win_from: str,
-    win_to: str,
-) -> bool:
-    """True when at least one range with status=complete|empty covers [win_from, win_to]."""
-    for r in ranges:
-        if r.get("status") not in ("complete", "empty"):
-            continue
-        if (r.get("from", "") <= win_from and win_to <= r.get("to", "")):
-            return True
-    return False
 
 
 async def _chunked_economic_fetch(
     fmp,
     from_date: str,
     to_date: str,
-) -> tuple[list[dict], Optional[str], list[dict]]:
+) -> tuple[list[dict], Optional[str], list[dict], dict]:
     """
     Fetch economic releases in ~2-month chunks so each FMP call stays
     well under the provider's ~7000-row response cap.
@@ -638,8 +748,9 @@ async def _chunked_economic_fetch(
     Deduplication across chunks uses the stable MD5 identity so events
     that appear at chunk boundaries only count once.
 
-    Returns (events, error_message, coverage_ranges) where each range is:
-        {"from": "YYYY-MM-DD", "to": "YYYY-MM-DD", "status": "complete"|"failed"}
+    Returns (events, error_message, coverage_ranges, diagnostics) where:
+      • coverage_ranges: list of {"from", "to", "status"} per chunk
+      • diagnostics: {"coverage_status", "chunks_succeeded", "chunks_failed"}
     """
     from services.catalyst_calendar_service import _fetch_economic_releases
 
@@ -647,11 +758,15 @@ async def _chunked_economic_fetch(
         from_dt = date.fromisoformat(from_date)
         to_dt   = date.fromisoformat(to_date)
     except (TypeError, ValueError):
-        return [], f"invalid dates: {from_date} / {to_date}", []
+        return [], f"invalid dates: {from_date} / {to_date}", [], {
+            "coverage_status": "unavailable", "chunks_succeeded": 0, "chunks_failed": 1,
+        }
 
     all_events: list[dict] = []
     seen_ids: set[str] = set()
     ranges: list[dict] = []
+    succeeded = 0
+    failed = 0
     cur = from_dt
 
     while cur <= to_dt:
@@ -664,9 +779,11 @@ async def _chunked_economic_fetch(
         except Exception as e:
             print(f"[calendar_snapshot] chunked fetch error {c_from}→{c_to}: {e}")
             ranges.append({"from": c_from, "to": c_to, "status": "failed"})
+            failed += 1
             cur = chunk_end + timedelta(days=1)
             continue
 
+        succeeded += 1
         added = 0
         for ev in chunk:
             sid = _event_stable_id(ev)
@@ -684,7 +801,23 @@ async def _chunked_economic_fetch(
         )
         cur = chunk_end + timedelta(days=1)
 
-    return all_events, None, ranges
+    if failed == 0 and succeeded == 0:
+        coverage_status = "unavailable"
+    elif failed == 0:
+        coverage_status = "complete"
+    elif succeeded > 0:
+        coverage_status = "partial"
+    else:
+        coverage_status = "unavailable"
+
+    diag = {
+        "coverage_status":     coverage_status,
+        "chunks_succeeded":    succeeded,
+        "chunks_failed":       failed,
+    }
+    err_msg = None if failed == 0 else f"{failed}/{succeeded + failed} chunks failed"
+
+    return all_events, err_msg, ranges, diag
 
 
 def _horizon_is_complete(slot: Optional[dict], requested_end: str) -> bool:
@@ -839,6 +972,7 @@ def _window_empty_reason(
     selected: list[dict],
     source: str,
     status: str = "",
+    gap_kind: str = "",
 ) -> Optional[str]:
     """
     Truthful empty-state classification for a requested window.
@@ -846,7 +980,8 @@ def _window_empty_reason(
       • events present                     → None
       • snapshot has no events at all      → "snapshot_empty"
       • snapshot initializing/refreshing   → "snapshot_initializing"
-      • window outside cached horizon      → "outside_horizon"
+      • window outside all known coverage  → "outside_horizon"
+      • internal provider gap              → "coverage_gap"
       • old snapshot without broad events  → "legacy_snapshot_without_horizon"
       • covered window with no events      → "no_events_in_window"
     """
@@ -859,7 +994,9 @@ def _window_empty_reason(
     if not coverage_complete:
         if source == "legacy":
             return "legacy_snapshot_without_horizon"
-        return "outside_horizon"
+        if gap_kind == "coverage_gap":
+            return "coverage_gap"
+        return gap_kind or "outside_horizon"
     return "no_events_in_window"
 
 
@@ -921,18 +1058,22 @@ def get_snapshot_window(
         selected = _select_events_for_window(pool, win_from, win_to)
         # Coverage uses explicit provider-chunk coverage ranges when available,
         # falling back to _actual_bounds() for legacy snapshots that predate
-        # the ranges model.  A chunk that was successfully fetched is a
-        # trustworthy range; a chunk that failed is an explicit gap.
+        # the ranges model.  The continuous union of all successful ranges
+        # (complete + empty) is the authoritative coverage.
         ranges = (env.get("horizon") or {}).get("coverage_ranges") or []
         if ranges:
-            coverage_complete = _window_in_any_range(ranges, win_from, win_to)
+            ranges = _normalize_coverage_ranges(ranges)
+            coverage_complete = _window_covered_by_ranges(ranges, win_from, win_to)
+            gap_kind = _coverage_gap_kind(ranges, win_from, win_to) if not coverage_complete else ""
         else:
             actual_start, actual_end = _actual_bounds(pool)
             coverage_complete = _window_covered(
                 actual_start, actual_end, win_from, win_to,
             )
+            gap_kind = ""
         empty_reason = _window_empty_reason(coverage_complete, selected, source,
-                                               status=env.get("status", ""))
+                                               status=env.get("status", ""),
+                                               gap_kind=gap_kind)
     if from_date or to_date:
         out["view"] = (view or "range").strip().lower()
     else:
@@ -1047,9 +1188,15 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
 
         if use_horizon:
             # ── Horizon tabs: chunked fetch + merge with existing collection ──
-            events, err, chunk_ranges = await _chunked_economic_fetch(fmp, fetch_from, fetch_to)
+            events, err, chunk_ranges, _chunk_diag = await _chunked_economic_fetch(fmp, fetch_from, fetch_to)
             if err:
                 print(f"[calendar_snapshot] refresh_tab({tab}) chunked fetch error: {err}")
+            print(
+                f"[calendar_snapshot] refresh tab={tab} chunk diag: "
+                f"coverage_status={_chunk_diag.get('coverage_status', '?')} "
+                f"succeeded={_chunk_diag.get('chunks_succeeded', 0)} "
+                f"failed={_chunk_diag.get('chunks_failed', 0)}"
+            )
         else:
             try:
                 events, err = await _fetch_tab(
@@ -1200,6 +1347,7 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
                 new_meta["future_days"]      = _HORIZON_FUTURE_DAYS
                 new_meta["event_count"]      = len(all_events)
                 new_meta["coverage_ranges"]  = merged_ranges
+                new_meta["coverage_status"]  = _chunk_diag.get("coverage_status")
 
             new_slot = {
                 "current_week": new_current,
