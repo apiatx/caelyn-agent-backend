@@ -668,56 +668,133 @@ def _day_before(d: str) -> str:
         return d
 
 
+def _day_after(d: str) -> str:
+    """Return the day after `d` as YYYY-MM-DD."""
+    try:
+        return (date.fromisoformat(d) + timedelta(days=1)).isoformat()
+    except (TypeError, ValueError):
+        return d
+
+
+def _dates_overlap(a_from: str, a_to: str, b_from: str, b_to: str) -> bool:
+    """True when two inclusive date intervals overlap."""
+    return a_from <= b_to and b_from <= a_to
+
+
+def _overlay_coverage_range(
+    result: list[dict],
+    inc: dict,
+) -> None:
+    """
+    Overlay one incoming coverage range onto the result list with proper
+    date-interval splitting. Non-overlapping left and right remainder
+    portions of prior ranges are preserved.
+
+    Phase 1: cut out overlapping sections from all prior ranges.
+    Phase 2: insert the incoming range (or remainder portions) with
+             precedence applied.
+    """
+    inc_from = inc["from"]
+    inc_to = inc["to"]
+    inc_status = inc["status"]
+    is_successful = inc_status in ("complete", "empty")
+
+    # If the incoming is failed and the overlap area was previously covered by
+    # any successful prior range, the prior is authoritative for the overlap.
+    # Do NOT cut prior ranges (Phase 1).  Only insert uncovered tail portion
+    # of the failed incoming (Phase 2).
+    skip_phase1 = False
+    if not is_successful and any(
+        _dates_overlap(r["from"], r["to"], inc_from, inc_to)
+        and r.get("status") in ("complete", "empty")
+        for r in result
+    ):
+        skip_phase1 = True
+
+    # ── Phase 1: cut remaining ranges ──────────────────────────────────────
+    if not skip_phase1:
+        cut: list[dict] = []
+        for r in result:
+            r_from = r["from"]
+            r_to = r["to"]
+            if not _dates_overlap(r_from, r_to, inc_from, inc_to):
+                cut.append(r)
+                continue
+
+            # Left remainder (before the incoming)
+            if r_from < inc_from:
+                cut.append({
+                    "from": r_from,
+                    "to": _day_before(inc_from),
+                    "status": r["status"],
+                })
+
+            # Right remainder (after the incoming)
+            if r_to > inc_to:
+                cut.append({
+                    "from": _day_after(inc_to),
+                    "to": r_to,
+                    "status": r["status"],
+                })
+        result[:] = cut
+
+    # ── Phase 2: insert incoming (or applicable portions) ──────────────────
+    if is_successful:
+        result.append({"from": inc_from, "to": inc_to, "status": inc_status})
+        return
+
+    # Incoming is failed.  Only insert portions NOT already covered by
+    # range (complete or empty) that survives after Phase 1.
+    success_spans = sorted(
+        [(r["from"], r["to"]) for r in result if r.get("status") in ("complete", "empty")],
+        key=lambda s: s[0],
+    )
+
+    # Merge adjacent success spans for clean gap detection
+    merged_spans: list[tuple[str, str]] = []
+    for sf, st in success_spans:
+        if merged_spans and sf <= _day_after(merged_spans[-1][1]):
+            if st > merged_spans[-1][1]:
+                merged_spans[-1] = (merged_spans[-1][0], st)
+        else:
+            merged_spans.append((sf, st))
+
+    # Add failed portions that are not inside any success span
+    cur = inc_from
+    for sf, st in merged_spans:
+        if cur < sf and cur <= inc_to:
+            result.append({
+                "from": cur,
+                "to": _day_before(sf),
+                "status": inc_status,
+            })
+        cur = max(cur, _day_after(st))
+    if cur <= inc_to:
+        result.append({"from": cur, "to": inc_to, "status": inc_status})
+
+
 def _merge_coverage_ranges(
     prior_ranges: list[dict],
     new_ranges: list[dict],
 ) -> list[dict]:
     """
-    Merge incoming chunk-level coverage ranges into the prior set.
+    Merge incoming chunk-level coverage ranges into the prior set using
+    proper date-interval overlay semantics.
 
-    Date-driven precedence (not exact-tuple matching) so delta refreshes
-    with different chunk boundaries integrate correctly:
+    Each incoming range replaces prior status only for the dates it covers.
+    Non-overlapping left and right portions of prior ranges are preserved.
 
-    • A successful incoming range (complete/empty) supersedes any prior
-      range whose date span it overlaps — the latest fetch is authoritative.
-    • A failed incoming range does NOT overwrite prior successful coverage
-      for the dates it overlaps.
-    • Unrelated historical ranges are preserved unchanged.
-    • Output is sorted by from ASC.
+    Precedence:
+      • incoming complete/empty  → replaces any prior for its date span
+      • incoming failed          → does not downgrade prior complete/empty
+      • incoming failed          → supersedes prior failed or uncovered dates
     """
     prior = _normalize_coverage_ranges(prior_ranges)
     incoming = _normalize_coverage_ranges(new_ranges)
 
     result: list[dict] = list(prior)
     for inc in incoming:
-        inc_from = inc["from"]
-        inc_to   = inc["to"]
-        inc_status = inc["status"]
-        is_successful = inc_status in ("complete", "empty")
-
-        # Remove any prior entries whose span overlaps with this incoming entry,
-        # but only when the incoming is authoritative:
-        #   • successful incoming → supersedes any overlapping prior
-        result = [
-            r for r in result
-            if not (
-                r["from"] <= inc_to and r["to"] >= inc_from
-                and is_successful
-            )
-        ]
-
-        # Add the incoming range.  For a failed incoming, only add if no
-        # prior successful range already covers the same span.
-        if is_successful:
-            result.append(dict(inc))
-        else:
-            has_prior_success = any(
-                r["from"] <= inc_to and r["to"] >= inc_from
-                and r.get("status") in ("complete", "empty")
-                for r in result
-            )
-            if not has_prior_success:
-                result.append(dict(inc))
+        _overlay_coverage_range(result, inc)
 
     result.sort(key=lambda r: r["from"])
 

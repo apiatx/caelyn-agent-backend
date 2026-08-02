@@ -1475,6 +1475,7 @@ from services.calendar_snapshot_service import (
     _coverage_union,
     _window_covered_by_ranges,
     _coverage_gap_kind,
+    _dates_overlap,
 )
 
 
@@ -1669,9 +1670,11 @@ class TestCoverageUnionAndGaps:
         prior = [{"from": "2025-08-01", "to": "2025-09-30", "status": "failed"}]
         incoming = [{"from": "2025-08-15", "to": "2025-10-15", "status": "complete"}]
         merged = _merge_coverage_ranges(prior, incoming)
-        statuses = {r["status"] for r in merged}
-        assert "failed" not in statuses
-        assert "complete" in statuses
+        # Aug 1-14 remains failed (not covered by incoming)
+        # Aug 15-Oct 15 becomes complete
+        assert len(merged) == 2
+        assert merged[0] == {"from": "2025-08-01", "to": "2025-08-14", "status": "failed"}
+        assert merged[1] == {"from": "2025-08-15", "to": "2025-10-15", "status": "complete"}
 
     def test_failed_incoming_does_not_downgrade_prior_complete(self):
         prior = [{"from": "2025-08-01", "to": "2025-09-30", "status": "complete"}]
@@ -1789,3 +1792,140 @@ class TestCoverageUnionAndGaps:
         ):
             out = get_snapshot_window("treasury_macro", view="week", date="2026-08-03")
         assert out["event_count"] > 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Interval overlay — remainder preservation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestIntervalOverlay:
+    """Exact date-boundary assertions for _merge_coverage_ranges interval splits."""
+
+    # ── Successful extension ───────────────────────────────────────────────
+    def test_successful_extension_preserves_historical_start(self):
+        prior = [{"from": "2025-06-01", "to": "2025-08-31", "status": "complete"}]
+        incoming = [{"from": "2025-07-15", "to": "2025-10-15", "status": "complete"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        assert len(merged) == 1
+        assert merged[0] == {"from": "2025-06-01", "to": "2025-10-15", "status": "complete"}
+
+    def test_failed_tail_beyond_prior_success(self):
+        prior = [{"from": "2025-08-01", "to": "2025-09-30", "status": "complete"}]
+        incoming = [{"from": "2025-09-15", "to": "2025-10-31", "status": "failed"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        assert len(merged) == 2
+        assert merged[0] == {"from": "2025-08-01", "to": "2025-09-30", "status": "complete"}
+        assert merged[1] == {"from": "2025-10-01", "to": "2025-10-31", "status": "failed"}
+
+    def test_successful_repair_of_partial_failed_range(self):
+        prior = [{"from": "2025-08-01", "to": "2025-09-30", "status": "failed"}]
+        incoming = [{"from": "2025-09-15", "to": "2025-10-31", "status": "complete"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        assert len(merged) == 2
+        assert merged[0] == {"from": "2025-08-01", "to": "2025-09-14", "status": "failed"}
+        assert merged[1] == {"from": "2025-09-15", "to": "2025-10-31", "status": "complete"}
+
+    def test_success_inside_prior_success_does_not_shrink(self):
+        prior = [{"from": "2025-08-01", "to": "2025-12-31", "status": "complete"}]
+        incoming = [{"from": "2025-10-01", "to": "2025-10-31", "status": "complete"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        assert len(merged) == 1
+        assert merged[0] == {"from": "2025-08-01", "to": "2025-12-31", "status": "complete"}
+
+    def test_failed_inside_prior_success_does_not_split(self):
+        prior = [{"from": "2025-08-01", "to": "2025-12-31", "status": "complete"}]
+        incoming = [{"from": "2025-10-01", "to": "2025-10-31", "status": "failed"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        assert len(merged) == 1
+        assert merged[0]["status"] == "complete"
+
+    def test_complete_overlapping_two_prior_ranges_unifies(self):
+        prior = [
+            {"from": "2025-08-01", "to": "2025-09-15", "status": "empty"},
+            {"from": "2025-09-16", "to": "2025-10-31", "status": "failed"},
+        ]
+        incoming = [{"from": "2025-09-01", "to": "2025-09-30", "status": "complete"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        # empty Aug 1-31 + complete Sep 1-30 → compact to Aug 1-Sep 30 successful
+        # failed Sep 16-30 replaced; remainder Oct 1-31 failed
+        assert any(r["from"] == "2025-10-01" and r["to"] == "2025-10-31" and r["status"] == "failed" for r in merged)
+
+    # ── Boundary precision ─────────────────────────────────────────────────
+    def test_left_remainder_boundary_is_day_before_inc_start(self):
+        prior = [{"from": "2025-08-01", "to": "2025-08-31", "status": "failed"}]
+        incoming = [{"from": "2025-08-15", "to": "2025-08-20", "status": "complete"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        # Left failed remainder: Aug 1-14
+        assert merged[0] == {"from": "2025-08-01", "to": "2025-08-14", "status": "failed"}
+
+    def test_right_remainder_boundary_is_day_after_inc_end(self):
+        prior = [{"from": "2025-08-01", "to": "2025-08-31", "status": "failed"}]
+        incoming = [{"from": "2025-08-10", "to": "2025-08-15", "status": "complete"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        # Right failed remainder: Aug 16-31
+        assert merged[-1] == {"from": "2025-08-16", "to": "2025-08-31", "status": "failed"}
+
+    def test_no_contradictory_output_overlaps(self):
+        prior = [{"from": "2025-08-01", "to": "2025-09-30", "status": "complete"}]
+        incoming = [{"from": "2025-09-15", "to": "2025-10-31", "status": "failed"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        sep_entries = [r for r in merged if _dates_overlap(r["from"], r["to"], "2025-09-15", "2025-09-30")]
+        assert all(r["status"] == "complete" for r in sep_entries)
+
+    def test_delta_refresh_preserves_historical_coverage(self):
+        prior = [{"from": "2025-06-01", "to": "2025-08-31", "status": "complete"}]
+        incoming = [{"from": "2025-07-15", "to": "2025-10-15", "status": "complete"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        assert merged[0]["from"] == "2025-06-01"
+        assert merged[0]["to"] == "2025-10-15"
+
+    def test_repeated_merge_idempotent(self):
+        prior = [{"from": "2025-06-01", "to": "2025-08-31", "status": "complete"}]
+        incoming = [{"from": "2025-07-15", "to": "2025-10-15", "status": "complete"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        merged2 = _merge_coverage_ranges(merged, incoming)
+        assert merged == merged2
+
+    def test_output_ordering_deterministic(self):
+        prior = [
+            {"from": "2025-09-01", "to": "2025-09-30", "status": "failed"},
+            {"from": "2025-06-01", "to": "2025-08-31", "status": "complete"},
+            {"from": "2025-10-01", "to": "2025-10-31", "status": "complete"},
+        ]
+        incoming = [{"from": "2025-09-15", "to": "2025-09-20", "status": "complete"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        dates = [r["from"] for r in merged]
+        assert dates == sorted(dates)
+
+    def test_coverage_union_spans_adjacent_after_merge(self):
+        prior = [{"from": "2025-08-01", "to": "2025-08-31", "status": "complete"}]
+        incoming = [{"from": "2025-09-01", "to": "2025-09-30", "status": "empty"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        assert _window_covered_by_ranges(merged, "2025-08-28", "2025-09-04") is True
+
+    def test_internal_failed_tail_still_coverage_gap(self):
+        prior = [{"from": "2025-08-01", "to": "2025-08-31", "status": "complete"}]
+        incoming = [{"from": "2025-08-01", "to": "2025-08-31", "status": "complete"},
+                     {"from": "2025-09-01", "to": "2025-09-30", "status": "failed"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        kind = _coverage_gap_kind(merged, "2025-09-15", "2025-09-19")
+        assert kind == "coverage_gap"
+        assert _window_covered_by_ranges(merged, "2025-08-15", "2025-08-19") is True
+
+    def test_historical_window_before_delta_remains_covered(self):
+        prior = [{"from": "2025-06-01", "to": "2025-08-31", "status": "complete"}]
+        incoming = [{"from": "2025-07-15", "to": "2025-10-15", "status": "complete"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        assert _window_covered_by_ranges(merged, "2025-06-10", "2025-06-14") is True
+
+    def test_mixed_merge_output_no_data_loss(self):
+        prior = [
+            {"from": "2025-08-01", "to": "2025-08-31", "status": "empty"},
+            {"from": "2025-09-01", "to": "2025-09-30", "status": "failed"},
+            {"from": "2025-10-01", "to": "2025-10-31", "status": "complete"},
+        ]
+        incoming = [{"from": "2025-09-15", "to": "2025-10-15", "status": "complete"}]
+        merged = _merge_coverage_ranges(prior, incoming)
+        assert any(r["status"] == "empty" and r["from"] == "2025-08-01" for r in merged)
+        assert any(r["status"] == "failed" and r["from"] == "2025-09-01" and r["to"] == "2025-09-14" for r in merged)
+        assert _window_covered_by_ranges(merged, "2025-10-05", "2025-10-09") is True
