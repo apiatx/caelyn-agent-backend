@@ -1463,3 +1463,143 @@ class TestColdStartStates:
         ):
             out = get_snapshot_window("dividends", view="week", date="2026-08-03")
         assert "events" in out
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Coverage range tracking (per-chunk provider evidence)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from services.calendar_snapshot_service import (
+    _merge_coverage_ranges,
+    _window_in_any_range,
+)
+
+
+class TestCoverageRanges:
+    """Coverage at the provider-chunk level — each chunk is tracked."""
+
+    # ── _window_in_any_range ──────────────────────────────────────────────
+    def test_window_inside_complete_range(self):
+        ranges = [{"from": "2025-09-01", "to": "2025-10-31", "status": "complete"}]
+        assert _window_in_any_range(ranges, "2025-09-15", "2025-09-19") is True
+
+    def test_window_outside_any_range(self):
+        ranges = [{"from": "2025-09-01", "to": "2025-10-31", "status": "complete"}]
+        assert _window_in_any_range(ranges, "2025-11-01", "2025-11-05") is False
+
+    def test_window_in_failed_range_is_not_covered(self):
+        ranges = [
+            {"from": "2025-09-01", "to": "2025-10-31", "status": "failed"},
+            {"from": "2025-11-01", "to": "2025-11-30", "status": "complete"},
+        ]
+        assert _window_in_any_range(ranges, "2025-09-15", "2025-09-19") is False
+
+    def test_window_in_empty_range_is_covered(self):
+        """An empty chunk (provider returned no events) is still successfully
+        fetched evidence of no releases — it IS covered."""
+        ranges = [{"from": "2025-09-01", "to": "2025-10-31", "status": "empty"}]
+        assert _window_in_any_range(ranges, "2025-09-15", "2025-09-19") is True
+
+    def test_window_straddling_multiple_ranges(self):
+        ranges = [
+            {"from": "2025-09-01", "to": "2025-09-30", "status": "complete"},
+            {"from": "2025-10-01", "to": "2025-10-15", "status": "complete"},
+        ]
+        # Week straddling Oct 1 boundary; no single range covers it
+        assert _window_in_any_range(ranges, "2025-09-28", "2025-10-04") is False
+
+    def test_window_inside_single_range_across_two(self):
+        ranges = [
+            {"from": "2025-09-01", "to": "2025-09-30", "status": "complete"},
+            {"from": "2025-10-01", "to": "2025-10-31", "status": "complete"},
+        ]
+        # Entirely inside the second range
+        assert _window_in_any_range(ranges, "2025-10-05", "2025-10-09") is True
+
+    # ── _merge_coverage_ranges ────────────────────────────────────────────
+    def test_merge_adds_new_ranges(self):
+        prior = [{"from": "2025-09-01", "to": "2025-10-31", "status": "complete"}]
+        new = [{"from": "2025-12-01", "to": "2026-01-31", "status": "complete"}]
+        merged = _merge_coverage_ranges(prior, new)
+        assert len(merged) == 2  # gap between Oct 31 and Dec 1 — no compaction
+
+    def test_new_complete_overwrites_prior_failed(self):
+        prior = [{"from": "2025-09-01", "to": "2025-09-30", "status": "failed"}]
+        new = [{"from": "2025-09-01", "to": "2025-09-30", "status": "complete"}]
+        merged = _merge_coverage_ranges(prior, new)
+        assert len(merged) == 1
+        assert merged[0]["status"] == "complete"
+
+    def test_failed_does_not_overwrite_prior_complete(self):
+        prior = [{"from": "2025-09-01", "to": "2025-09-30", "status": "complete"}]
+        new = [{"from": "2025-09-01", "to": "2025-09-30", "status": "failed"}]
+        merged = _merge_coverage_ranges(prior, new)
+        assert len(merged) == 1
+        assert merged[0]["status"] == "complete"
+
+    def test_compact_adjacent_same_status(self):
+        prior = [
+            {"from": "2025-09-01", "to": "2025-09-30", "status": "complete"},
+            {"from": "2025-10-01", "to": "2025-10-31", "status": "complete"},
+        ]
+        merged = _merge_coverage_ranges([], prior)
+        assert len(merged) == 1
+        assert merged[0]["from"] == "2025-09-01"
+        assert merged[0]["to"] == "2025-10-31"
+
+    def test_no_compact_across_different_status(self):
+        prior = [
+            {"from": "2025-09-01", "to": "2025-09-30", "status": "failed"},
+            {"from": "2025-10-01", "to": "2025-10-31", "status": "complete"},
+        ]
+        merged = _merge_coverage_ranges([], prior)
+        assert len(merged) == 2
+
+    # ── Coverage gaps between chunks ─────────────────────────────────────
+    def test_gap_between_chunks_is_not_covered(self):
+        """Two successful chunks with a failed chunk between them.
+        The gap (failed Sept chunk) must not report coverage."""
+        ranges = [
+            {"from": "2025-08-01", "to": "2025-08-31", "status": "complete"},
+            {"from": "2025-09-01", "to": "2025-09-30", "status": "failed"},
+            {"from": "2025-10-01", "to": "2025-10-31", "status": "complete"},
+        ]
+        # September request: not in any complete range
+        assert _window_in_any_range(ranges, "2025-09-15", "2025-09-19") is False
+        # August request: in a complete range
+        assert _window_in_any_range(ranges, "2025-08-10", "2025-08-14") is True
+
+    def test_coverage_ranges_in_get_snapshot_window(self):
+        """get_snapshot_window uses coverage_ranges when present in env."""
+        events = [_make_econ("2025-10-05", id="e1"), _make_econ("2025-10-15", id="e2")]
+        env = _horizon_env(events, horizon_start="2025-09-01", horizon_end="2025-12-01")
+        # Inject coverage_ranges into horizon — simulate a gap
+        env["horizon"] = {
+            "horizon_start": "2025-09-01",
+            "horizon_end": "2025-12-01",
+            "coverage_ranges": [
+                {"from": "2025-10-01", "to": "2025-10-31", "status": "complete"},
+            ],
+        }
+        out, _ = _window(view="month", date="2025-11-01", env=env)
+        # November request: no range covers it
+        assert out["coverage_complete"] is False
+        assert out["empty_reason"] == "outside_horizon"
+
+    def test_coverage_uses_ranges_not_bounds_when_ranges_present(self):
+        """When coverage_ranges exist, they are authoritative, not actual_bounds.
+        A single event at Oct 5 means actual_bounds = Oct 5..Oct 5,
+        but coverage_ranges cover Oct 1..Oct 31 — the whole month is trusted."""
+        events = [_make_econ("2025-10-05", id="e1")]
+        env = _horizon_env(events, horizon_start="2025-10-01", horizon_end="2025-10-31")
+        env["horizon"] = {
+            "horizon_start": "2025-10-01",
+            "horizon_end": "2025-10-31",
+            "coverage_ranges": [
+                {"from": "2025-10-01", "to": "2025-10-31", "status": "complete"},
+            ],
+        }
+        # Week Oct 20-24: well outside the single-event actual_bounds
+        # but inside a trusted range → covered
+        out, _ = _window(view="week", date="2025-10-20", env=env)
+        assert out["coverage_complete"] is True

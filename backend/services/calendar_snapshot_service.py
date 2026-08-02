@@ -315,6 +315,7 @@ def get_snapshot(tab: str) -> dict:
             "horizon_end":   meta.get("horizon_end")   or stored_window.get("to"),
             "actual_start":  actual_start,
             "actual_end":    actual_end,
+            "coverage_ranges": meta.get("coverage_ranges") or [],
             "past_days":     meta.get("past_days", _HORIZON_PAST_DAYS),
             "future_days":   meta.get("future_days", _HORIZON_FUTURE_DAYS),
             "event_count":   meta.get("event_count", len(evts)),
@@ -559,17 +560,86 @@ def _merge_horizon_events(
     return sorted(seen.values(), key=lambda e: e.get("date", ""))
 
 
+def _merge_coverage_ranges(
+    prior_ranges: list[dict],
+    new_ranges: list[dict],
+) -> list[dict]:
+    """
+    Merge incoming chunk-level coverage ranges into the prior set.
+
+    • Each range is {"from": "YYYY-MM-DD", "to": "YYYY-MM-DD", "status": "..."}
+    • A new "complete" or "empty" range overwrites any prior range for the same
+      date span (a fresh fetch is more authoritative).
+    • A "failed" incoming range does NOT overwrite a prior "complete" range
+      — we keep the earlier successful data.
+    • Ranges are sorted by `from` ASC and adjacent ranges with the same status
+      are merged for compactness.
+    """
+    by_key: dict[str, dict] = {}
+    for r in prior_ranges:
+        key = (r.get("from", ""), r.get("to", ""))
+        by_key[key] = dict(r)
+    for r in new_ranges:
+        key = (r.get("from", ""), r.get("to", ""))
+        existing = by_key.get(key)
+        if existing and existing.get("status") == "complete":
+            if r.get("status") == "failed":
+                continue  # keep prior success
+        by_key[key] = dict(r)
+
+    merged = sorted(by_key.values(), key=lambda r: r.get("from", ""))
+
+    # Compact adjacent ranges with same status.
+    # Adjacent = previous.to + 1 day >= next.from (touching or overlapping).
+    compact: list[dict] = []
+    for r in merged:
+        if (
+            compact
+            and compact[-1]["status"] == r["status"]
+            and compact[-1]["to"] >= _day_before(r["from"])
+        ):
+            compact[-1]["to"] = r["to"]
+        else:
+            compact.append(dict(r))
+    return compact
+
+
+def _day_before(d: str) -> str:
+    """Return the day before `d` as YYYY-MM-DD. Used for adjacency check."""
+    try:
+        return (date.fromisoformat(d) - timedelta(days=1)).isoformat()
+    except (TypeError, ValueError):
+        return d
+
+
+def _window_in_any_range(
+    ranges: list[dict],
+    win_from: str,
+    win_to: str,
+) -> bool:
+    """True when at least one range with status=complete|empty covers [win_from, win_to]."""
+    for r in ranges:
+        if r.get("status") not in ("complete", "empty"):
+            continue
+        if (r.get("from", "") <= win_from and win_to <= r.get("to", "")):
+            return True
+    return False
+
+
 async def _chunked_economic_fetch(
     fmp,
     from_date: str,
     to_date: str,
-) -> tuple[list[dict], Optional[str]]:
+) -> tuple[list[dict], Optional[str], list[dict]]:
     """
     Fetch economic releases in ~2-month chunks so each FMP call stays
     well under the provider's ~7000-row response cap.
 
     Deduplication across chunks uses the stable MD5 identity so events
     that appear at chunk boundaries only count once.
+
+    Returns (events, error_message, coverage_ranges) where each range is:
+        {"from": "YYYY-MM-DD", "to": "YYYY-MM-DD", "status": "complete"|"failed"}
     """
     from services.catalyst_calendar_service import _fetch_economic_releases
 
@@ -577,10 +647,11 @@ async def _chunked_economic_fetch(
         from_dt = date.fromisoformat(from_date)
         to_dt   = date.fromisoformat(to_date)
     except (TypeError, ValueError):
-        return [], f"invalid dates: {from_date} / {to_date}"
+        return [], f"invalid dates: {from_date} / {to_date}", []
 
     all_events: list[dict] = []
     seen_ids: set[str] = set()
+    ranges: list[dict] = []
     cur = from_dt
 
     while cur <= to_dt:
@@ -592,6 +663,7 @@ async def _chunked_economic_fetch(
             chunk = await _fetch_economic_releases(fmp, c_from, c_to)
         except Exception as e:
             print(f"[calendar_snapshot] chunked fetch error {c_from}→{c_to}: {e}")
+            ranges.append({"from": c_from, "to": c_to, "status": "failed"})
             cur = chunk_end + timedelta(days=1)
             continue
 
@@ -603,13 +675,16 @@ async def _chunked_economic_fetch(
                 all_events.append(ev)
                 added += 1
 
+        chunk_status = "complete" if chunk else "empty"
+        ranges.append({"from": c_from, "to": c_to, "status": chunk_status})
+
         print(
             f"[calendar_snapshot] chunk {c_from}→{c_to}: "
-            f"raw={len(chunk)} added={added} total={len(all_events)}"
+            f"raw={len(chunk)} added={added} total={len(all_events)} status={chunk_status}"
         )
         cur = chunk_end + timedelta(days=1)
 
-    return all_events, None
+    return all_events, None, ranges
 
 
 def _horizon_is_complete(slot: Optional[dict], requested_end: str) -> bool:
@@ -844,16 +919,18 @@ def get_snapshot_window(
         source = "horizon" if broad else ("legacy" if legacy else "none")
         pool = broad if broad else legacy
         selected = _select_events_for_window(pool, win_from, win_to)
-        # Coverage uses the ACTUAL persisted event span, not the meta
-        # intended-fetch window.  The meta horizon_start/horizon_end describe
-        # what the provider was asked for; the actual collection may be
-        # narrower (e.g. capped fetches, provider 402 historical denial).
-        # Using actual bounds prevents "no_events_in_window" being reported
-        # for dates the provider never actually supplied.
-        actual_start, actual_end = _actual_bounds(pool)
-        coverage_complete = _window_covered(
-            actual_start, actual_end, win_from, win_to,
-        )
+        # Coverage uses explicit provider-chunk coverage ranges when available,
+        # falling back to _actual_bounds() for legacy snapshots that predate
+        # the ranges model.  A chunk that was successfully fetched is a
+        # trustworthy range; a chunk that failed is an explicit gap.
+        ranges = (env.get("horizon") or {}).get("coverage_ranges") or []
+        if ranges:
+            coverage_complete = _window_in_any_range(ranges, win_from, win_to)
+        else:
+            actual_start, actual_end = _actual_bounds(pool)
+            coverage_complete = _window_covered(
+                actual_start, actual_end, win_from, win_to,
+            )
         empty_reason = _window_empty_reason(coverage_complete, selected, source,
                                                status=env.get("status", ""))
     if from_date or to_date:
@@ -920,9 +997,16 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
     use_horizon = tab in _TABS_WITH_HORIZON
 
     # Read prior slot first so we can decide delta vs full-backfill.
+    # Guarded — a transient Neon read failure must not crash the refresh.
     if use_horizon:
-        prior_check = _neon_read(tab)
+        try:
+            prior_check = _neon_read(tab)
+        except Exception as e:
+            print(f"[calendar_snapshot] refresh_tab neon read error: {e} — falling back to disk")
+            prior_check = _normalize_slot(_read_disk().get(tab))
         prior_events = (prior_check.get("events") or []) if prior_check else []
+        prior_meta = (prior_check.get("meta") or {}) if prior_check else {}
+        prior_ranges = prior_meta.get("coverage_ranges") or []
         is_bootstrap_start = False
         if prior_events:
             # Existing history present — fetch only a delta window so the
@@ -954,186 +1038,197 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
             )
     else:
         is_bootstrap_start = False
+        prior_ranges = []
         fetch_from, fetch_to = _week_window_for(tab)
 
-    t0 = time.monotonic()
+    try:
+        t0 = time.monotonic()
+        chunk_ranges: list[dict] = []
 
-    if use_horizon:
-        # ── Horizon tabs: chunked fetch + merge with existing collection ──
-        events, err = await _chunked_economic_fetch(fmp, fetch_from, fetch_to)
-        if err:
-            print(f"[calendar_snapshot] refresh_tab({tab}) chunked fetch error: {err}")
-    else:
-        try:
-            events, err = await _fetch_tab(
-                fmp, tab, fetch_from, fetch_to, watchlist, portfolio,
-                limit=1000, mode="upcoming",
-            )
-        except Exception as e:
-            print(f"[calendar_snapshot] refresh_tab({tab}) fetch error: {e}")
-            events, err = [], str(e)
-
-    ms = int((time.monotonic() - t0) * 1000)
-
-    # Post-filter to the requested window. Some fetchers (e.g. treasury_macro)
-    # ignore date params and return historical rows beyond the requested range;
-    # those belong in previous_week (Recent view), not current_week (Week view).
-    if not use_horizon:
-        before_filter = len(events)
-        events = [
-            e for e in events
-            if fetch_from <= (e.get("date") or "")[:10] <= fetch_to
-        ]
-        if len(events) != before_filter:
-            print(
-                f"[calendar_snapshot] refresh tab={tab} date-filter: "
-                f"{before_filter} → {len(events)} (dropped {before_filter - len(events)} outside {fetch_from}→{fetch_to})"
-            )
-
-    print(
-        f"[calendar_snapshot] refresh tab={tab} window={fetch_from}→{fetch_to} "
-        f"events={len(events)} err={err} ms={ms}"
-    )
-
-    # Read current row from Neon to figure out what to promote into previous_week.
-    prior = _neon_read(tab)
-    if prior is None:
-        # No DB row yet (or Neon unreachable for read) — fall back to disk
-        # for the prior, so we don't lose previous_week if Neon was just
-        # transiently down.
-        store = _read_disk()
-        prior = _normalize_slot(store.get(tab))
-
-    prior_current = prior.get("current_week") or []
-    prior_previous = prior.get("previous_week") or []
-
-    if use_horizon:
-        # ── Horizon tabs: merge with existing collection ──────────────────
-        prior_evts = prior.get("events") or []
-        if err and prior_evts:
-            # On fetch error, keep prior valid horizon so consumers never see
-            # a suddenly empty state.
-            print(
-                f"[calendar_snapshot] refresh tab={tab} fetch error — "
-                f"preserving prior horizon events={len(prior_evts)}"
-            )
-            all_events = prior_evts
+        if use_horizon:
+            # ── Horizon tabs: chunked fetch + merge with existing collection ──
+            events, err, chunk_ranges = await _chunked_economic_fetch(fmp, fetch_from, fetch_to)
+            if err:
+                print(f"[calendar_snapshot] refresh_tab({tab}) chunked fetch error: {err}")
         else:
-            all_events = _merge_horizon_events(prior_evts, events or [])
-            dropped = (len(prior_evts) + len(events or [])) - len(all_events)
-            if dropped:
-                print(
-                    f"[calendar_snapshot] refresh tab={tab} merge: "
-                    f"prior={len(prior_evts)} new={len(events or [])} "
-                    f"merged={len(all_events)} (dedup dropped {dropped})"
-                )
-
-        monday_str, friday_str = _week_window_for(tab)
-        cw_events = _select_events_for_window(all_events, monday_str, friday_str)
-
-        prev_from, prev_to = _previous_week_window_for(tab)
-        pw_events = _select_events_for_window(all_events, prev_from, prev_to)
-        # If derived pw is empty (e.g. capped horizon), preserve persisted pw.
-        if not pw_events:
-            pw_events = prior_previous or []
-
-        promoted_previous = pw_events or prior_previous or []
-        prev_events: list[dict] = []
-
-        horizon_start = fetch_from
-        horizon_end   = fetch_to
-    else:
-        # ── Existing per-week flow (non-horizon tabs) ──────────────────────
-        all_events = events or []
-        promoted_previous = prior_current or prior_previous or []
-
-        # Seed previous_week directly when there is nothing to promote. This
-        # handles the first refresh ever (and any subsequent refresh that lost
-        # both slots) so the Recent tab is non-empty without waiting an extra
-        # week. Treasury_macro is intentionally skipped — its feed is
-        # point-in-time and a prior-week range is meaningless. Done outside the
-        # lock to avoid holding it across an HTTP fetch.
-        prev_events = []
-        if not promoted_previous and tab != "treasury_macro":
-            pw_from, pw_to = _previous_week_window_for(tab)
-            t1 = time.monotonic()
             try:
-                prev_events, prev_err = await _fetch_tab(
-                    fmp, tab, pw_from, pw_to, watchlist, portfolio,
+                events, err = await _fetch_tab(
+                    fmp, tab, fetch_from, fetch_to, watchlist, portfolio,
                     limit=1000, mode="upcoming",
                 )
             except Exception as e:
-                print(f"[calendar_snapshot] previous_week seed fetch error tab={tab}: {e}")
-                prev_events, prev_err = [], str(e)
-            print(
-                f"[calendar_snapshot] seed previous_week tab={tab} "
-                f"window={pw_from}→{pw_to} events={len(prev_events)} "
-                f"err={prev_err} ms={int((time.monotonic() - t1) * 1000)}"
-            )
+                print(f"[calendar_snapshot] refresh_tab({tab}) fetch error: {e}")
+                events, err = [], str(e)
 
-        horizon_start = fetch_from
-        horizon_end   = fetch_to
+        ms = int((time.monotonic() - t0) * 1000)
 
-    async with _lock:
-        if use_horizon:
-            new_previous = promoted_previous or []
-            new_current = cw_events or []
-        else:
-            new_previous = promoted_previous or prev_events or []
-            new_current = events or []
+        # Post-filter to the requested window. Some fetchers (e.g. treasury_macro)
+        # ignore date params and return historical rows beyond the requested range;
+        # those belong in previous_week (Recent view), not current_week (Week view).
+        if not use_horizon:
+            before_filter = len(events)
+            events = [
+                e for e in events
+                if fetch_from <= (e.get("date") or "")[:10] <= fetch_to
+            ]
+            if len(events) != before_filter:
+                print(
+                    f"[calendar_snapshot] refresh tab={tab} date-filter: "
+                    f"{before_filter} → {len(events)} (dropped {before_filter - len(events)} outside {fetch_from}→{fetch_to})"
+                )
 
-        new_meta: dict[str, Any] = {
-            "last_updated": datetime.now(timezone.utc).isoformat(),
-            "status":       "ready" if new_current else (
-                "stale" if new_previous else "empty"
-            ),
-            "window":       {
-                "from": fetch_from,
-                "to":   fetch_to,
-            },
-            "fetch_error":  err,
-            # Preserve schedule marker if it was set previously.
-            **{k: v for k, v in (prior.get("meta") or {}).items()
-               if k in ("last_run_week",)},
-        }
+        print(
+            f"[calendar_snapshot] refresh tab={tab} window={fetch_from}→{fetch_to} "
+            f"events={len(events)} err={err} ms={ms}"
+        )
 
-        if use_horizon:
-            # horizon_start reflects the actual earliest stored event date,
-            # not the intended fetch window (history accumulates over time).
-            actual_start, actual_end = _actual_bounds(all_events)
-            new_meta["horizon_start"] = actual_start or horizon_start
-            new_meta["horizon_end"]   = horizon_end   # intended future boundary
-            new_meta["past_days"]     = _HORIZON_PAST_DAYS
-            new_meta["future_days"]   = _HORIZON_FUTURE_DAYS
-            new_meta["event_count"]   = len(all_events)
-
-        new_slot = {
-            "current_week": new_current,
-            "previous_week": new_previous,
-            "events": all_events if use_horizon else [],
-            "meta": new_meta,
-        }
-
-        # Primary persistence: Neon.
-        neon_ok = _neon_write(tab, new_slot)
-
-        # Best-effort disk mirror so a local dev process can still serve a
-        # snapshot if Neon is unavailable. NEVER source of truth.
+        # Read current row from Neon to figure out what to promote into previous_week.
+        # Guarded — transient Neon read failure must not crash the refresh coroutine.
         try:
-            store = _read_disk()
-            store[tab] = new_slot
-            _write_disk(store)
+            prior = _neon_read(tab)
         except Exception as e:
-            print(f"[calendar_snapshot] disk mirror failed tab={tab}: {e}")
+            print(f"[calendar_snapshot] refresh_tab second neon read error tab={tab}: {e}")
+            prior = None
+        if prior is None:
+            # No DB row yet (or Neon unreachable for read) — fall back to disk
+            # for the prior, so we don't lose previous_week if Neon was just
+            # transiently down.
+            store = _read_disk()
+            prior = _normalize_slot(store.get(tab))
 
-        if not neon_ok:
-            print(
-                f"[calendar_snapshot] WARN tab={tab} Neon write FAILED — "
-                f"deployed API will not see this refresh until Neon is back"
-            )
+        prior_current = prior.get("current_week") or []
+        prior_previous = prior.get("previous_week") or []
 
-    if is_bootstrap_start:
-        _bootstrapping[tab] = False
+        if use_horizon:
+            # ── Horizon tabs: merge with existing collection ──────────────────
+            prior_evts = prior.get("events") or []
+            if err and prior_evts:
+                # On fetch error, keep prior valid horizon so consumers never see
+                # a suddenly empty state.
+                print(
+                    f"[calendar_snapshot] refresh tab={tab} fetch error — "
+                    f"preserving prior horizon events={len(prior_evts)}"
+                )
+                all_events = prior_evts
+            else:
+                all_events = _merge_horizon_events(prior_evts, events or [])
+                dropped = (len(prior_evts) + len(events or [])) - len(all_events)
+                if dropped:
+                    print(
+                        f"[calendar_snapshot] refresh tab={tab} merge: "
+                        f"prior={len(prior_evts)} new={len(events or [])} "
+                        f"merged={len(all_events)} (dedup dropped {dropped})"
+                    )
+
+            monday_str, friday_str = _week_window_for(tab)
+            cw_events = _select_events_for_window(all_events, monday_str, friday_str)
+
+            prev_from, prev_to = _previous_week_window_for(tab)
+            pw_events = _select_events_for_window(all_events, prev_from, prev_to)
+            # If derived pw is empty (e.g. capped horizon), preserve persisted pw.
+            if not pw_events:
+                pw_events = prior_previous or []
+
+            promoted_previous = pw_events or prior_previous or []
+            prev_events: list[dict] = []
+
+            horizon_start = fetch_from
+            horizon_end   = fetch_to
+        else:
+            # ── Existing per-week flow (non-horizon tabs) ──────────────────────
+            all_events = events or []
+            promoted_previous = prior_current or prior_previous or []
+
+            # Seed previous_week directly when there is nothing to promote. This
+            # handles the first refresh ever (and any subsequent refresh that lost
+            # both slots) so the Recent tab is non-empty without waiting an extra
+            # week. Treasury_macro is intentionally skipped — its feed is
+            # point-in-time and a prior-week range is meaningless. Done outside the
+            # lock to avoid holding it across an HTTP fetch.
+            prev_events = []
+            if not promoted_previous and tab != "treasury_macro":
+                pw_from, pw_to = _previous_week_window_for(tab)
+                t1 = time.monotonic()
+                try:
+                    prev_events, prev_err = await _fetch_tab(
+                        fmp, tab, pw_from, pw_to, watchlist, portfolio,
+                        limit=1000, mode="upcoming",
+                    )
+                except Exception as e:
+                    print(f"[calendar_snapshot] previous_week seed fetch error tab={tab}: {e}")
+                    prev_events, prev_err = [], str(e)
+                print(
+                    f"[calendar_snapshot] seed previous_week tab={tab} "
+                    f"window={pw_from}→{pw_to} events={len(prev_events)} "
+                    f"err={prev_err} ms={int((time.monotonic() - t1) * 1000)}"
+                )
+
+            horizon_start = fetch_from
+            horizon_end   = fetch_to
+
+        async with _lock:
+            if use_horizon:
+                new_previous = promoted_previous or []
+                new_current = cw_events or []
+            else:
+                new_previous = promoted_previous or prev_events or []
+                new_current = events or []
+
+            new_meta: dict[str, Any] = {
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "status":       "ready" if new_current else (
+                    "stale" if new_previous else "empty"
+                ),
+                "window":       {
+                    "from": fetch_from,
+                    "to":   fetch_to,
+                },
+                "fetch_error":  err,
+                # Preserve schedule marker if it was set previously.
+                **{k: v for k, v in (prior.get("meta") or {}).items()
+                   if k in ("last_run_week",)},
+            }
+
+            if use_horizon:
+                # horizon_start reflects the actual earliest stored event date,
+                # not the intended fetch window (history accumulates over time).
+                actual_start, actual_end = _actual_bounds(all_events)
+                merged_ranges = _merge_coverage_ranges(prior_ranges, chunk_ranges)
+                new_meta["horizon_start"]    = actual_start or horizon_start
+                new_meta["horizon_end"]      = horizon_end   # intended future boundary
+                new_meta["past_days"]        = _HORIZON_PAST_DAYS
+                new_meta["future_days"]      = _HORIZON_FUTURE_DAYS
+                new_meta["event_count"]      = len(all_events)
+                new_meta["coverage_ranges"]  = merged_ranges
+
+            new_slot = {
+                "current_week": new_current,
+                "previous_week": new_previous,
+                "events": all_events if use_horizon else [],
+                "meta": new_meta,
+            }
+
+            # Primary persistence: Neon.
+            neon_ok = _neon_write(tab, new_slot)
+
+            # Best-effort disk mirror so a local dev process can still serve a
+            # snapshot if Neon is unavailable. NEVER source of truth.
+            try:
+                store = _read_disk()
+                store[tab] = new_slot
+                _write_disk(store)
+            except Exception as e:
+                print(f"[calendar_snapshot] disk mirror failed tab={tab}: {e}")
+
+            if not neon_ok:
+                print(
+                    f"[calendar_snapshot] WARN tab={tab} Neon write FAILED — "
+                    f"deployed API will not see this refresh until Neon is back"
+                )
+
+    finally:
+        if is_bootstrap_start:
+            _bootstrapping[tab] = False
 
     return get_snapshot(tab)
 
