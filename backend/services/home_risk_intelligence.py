@@ -16,8 +16,11 @@ Design contract:
 
   - Composer cache: home:risk_intel:v1 (60 s TTL), LKG: home:risk_intel:v1:lkg (4 h)
   - Canonical scoring is delegated to swing_regime_service (pure, testable).
-  - trade_decision is a projection from swing_regime - no independent VIX mapping.
-  - risk_cluster is a fully coherent projection from swing_regime.
+  - risk_cluster.triggers are canonical pillar-based display triggers.
+  - legacy_triggers / legacy_trigger_count / legacy_headline / legacy_summary
+    preserve old diagnostics for inspection only.
+  - why_market_is_moving is a canonical swing-regime explanation.
+  - legacy_why_market_is_moving preserves old bullets for inspection only.
 """
 from __future__ import annotations
 
@@ -142,27 +145,33 @@ def _read_rate_history() -> dict:
     source = "unavailable"
     status = "unavailable"
 
+    # 1. In-memory cache
     hit = cache.get(_DGS10_CACHE_KEY)
     if hit and isinstance(hit, list) and len(hit) >= 2:
         history = hit
         source = "strategy:hist:dgs10:1830 (in-memory cache)"
         status = "available"
-    else:
-        try:
-            from data.pg_storage import strategy_hist_read
-            neon = strategy_hist_read(_DGS10_CACHE_KEY, 86400)
-            if neon and isinstance(neon, list) and len(neon) >= 2:
-                history = neon
-                source = "strategy:hist:dgs10:1830 (Neon, <=24h stale)"
-                status = "stale"
-        except Exception:
-            pass
+        return {"history": history, "history_source": source, "history_status": status}
 
-    return {
-        "history":         history,
-        "history_source":  source,
-        "history_status":  status,
-    }
+    # 2. Neon fresh fallback (max 24h)
+    try:
+        from data.pg_storage import strategy_hist_read
+        neon = strategy_hist_read(_DGS10_CACHE_KEY, 86400)
+        if neon and isinstance(neon, list) and len(neon) >= 2:
+            return {"history": neon, "history_source": "strategy:hist:dgs10:1830 (Neon, <=24h stale)", "history_status": "stale"}
+    except Exception:
+        pass
+
+    # 3. Neon any-age fallback (weekend / holiday / delayed precompute)
+    try:
+        from data.pg_storage import strategy_hist_read
+        neon = strategy_hist_read(_DGS10_CACHE_KEY, None)
+        if neon and isinstance(neon, list) and len(neon) >= 2:
+            return {"history": neon, "history_source": "strategy:hist:dgs10:1830 (Neon, any-age stale)", "history_status": "stale"}
+    except Exception:
+        pass
+
+    return {"history": [], "history_source": source, "history_status": status}
 
 
 def _compute_yield_changes(history: list[dict], current_yield: float | None) -> dict:
@@ -211,12 +220,12 @@ def _compute_yield_changes(history: list[dict], current_yield: float | None) -> 
     change_20d = _bps_change(20, "20d")
 
     return {
-        "history_as_of":       latest_date,
-        "change_1d_bps":       change_1d,
-        "change_5d_bps":       change_5d,
-        "change_20d_bps":      change_20d,
-        "history_source":      "strategy:hist:dgs10:1830",
-        "history_status":      "available",
+        "history_as_of":  latest_date,
+        "change_1d_bps":  change_1d,
+        "change_5d_bps":  change_5d,
+        "change_20d_bps": change_20d,
+        "history_source": "strategy:hist:dgs10:1830",
+        "history_status": "available",
     }
 
 
@@ -228,9 +237,12 @@ _VIXCLS_CACHE_KEY = "strategy:hist:vixcls:1830"
 
 
 def _read_vixcls_history() -> list[dict]:
+    # 1. In-memory cache
     hit = cache.get(_VIXCLS_CACHE_KEY)
     if hit and isinstance(hit, list):
         return hit
+
+    # 2. Neon fresh fallback (max 24h)
     try:
         from data.pg_storage import strategy_hist_read
         neon = strategy_hist_read(_VIXCLS_CACHE_KEY, 86400)
@@ -238,6 +250,16 @@ def _read_vixcls_history() -> list[dict]:
             return neon
     except Exception:
         pass
+
+    # 3. Neon any-age fallback (weekend / holiday)
+    try:
+        from data.pg_storage import strategy_hist_read
+        neon = strategy_hist_read(_VIXCLS_CACHE_KEY, None)
+        if neon and isinstance(neon, list):
+            return neon
+    except Exception:
+        pass
+
     return []
 
 
@@ -285,6 +307,258 @@ def _filter_upcoming_events(snapshot: dict, days_ahead: int = 7) -> list[dict]:
 
     out.sort(key=lambda e: e["date"])
     return out
+
+
+# -----------------------------------------------------------------------------
+# Canonical display trigger builder
+# -----------------------------------------------------------------------------
+
+def _pillar_status_from_score(score: int) -> str:
+    if score >= 65:    return "red"
+    elif score >= 45:  return "orange"
+    elif score >= 25:  return "yellow"
+    else:              return "green"
+
+
+def _build_canonical_trigger_list(swing_regime: dict, yc: dict, sector_data: dict) -> list[dict]:
+    pillars = swing_regime.get("pillars", {})
+    ev = swing_regime.get("event_overlay", {})
+    triggers: list[dict] = []
+
+    # --- Trend & Breadth ---
+    tb = pillars.get("trend_and_breadth", {})
+    tb_comp = tb.get("components", {})
+    tb_risk = tb.get("risk_score") or 50
+    tb_dir = tb.get("direction", "UNKNOWN")
+    breadth_1d = tb_comp.get("breadth_1d")
+    spx_7d = tb_comp.get("spx_return_7d")
+    eq_avg = tb_comp.get("equity_1d_avg")
+
+    tb_value_parts = []
+    if breadth_1d is not None:
+        tb_value_parts.append(f"{breadth_1d:.0f}/100 breadth")
+    if eq_avg is not None:
+        tb_value_parts.append(f"SPY/QQQ {eq_avg:+.1f}% 1D")
+    if spx_7d is not None:
+        tb_value_parts.append(f"SPX {spx_7d:+.1f}% 7D")
+    tb_value = " · ".join(tb_value_parts) if tb_value_parts else None
+
+    tb_msg = f"Equity trend {tb_dir.lower()}"
+    if breadth_1d is not None and breadth_1d < 40:
+        tb_msg += " — narrow participation"
+    elif breadth_1d is not None and breadth_1d >= 70:
+        tb_msg += " — broad participation"
+
+    triggers.append({
+        "key": "trend_and_breadth", "label": "Trend & Breadth",
+        "status": _pillar_status_from_score(tb_risk),
+        "value": tb_value,
+        "threshold": "",
+        "message": tb_msg,
+        "direction": tb_dir, "timeframe": "multi-timeframe",
+        "risk_score": tb_risk, "source_pillar": "trend_and_breadth",
+    })
+
+    # --- Volatility & Credit ---
+    vc = pillars.get("volatility_and_credit", {})
+    vc_comp = vc.get("components", {})
+    vc_risk = vc.get("risk_score") or 50
+    vc_dir = vc.get("direction", "UNKNOWN")
+    vix_val = vc_comp.get("vix")
+    hyg_val = vc_comp.get("hyg_change_1d")
+
+    vc_value_parts = []
+    if vix_val is not None:
+        vc_value_parts.append(f"VIX {vix_val:.1f}")
+    if hyg_val is not None:
+        vc_value_parts.append(f"HYG {hyg_val:+.1f}%")
+    vc_value = " · ".join(vc_value_parts) if vc_value_parts else None
+
+    vc_msg = f"Volatility {vc_dir.lower()}"
+    if vix_val is not None and vix_val >= 25:
+        vc_msg += " — stress zone"
+    elif vix_val is not None and vix_val >= 20:
+        vc_msg += " — elevated"
+    if hyg_val is not None and hyg_val <= -1.0:
+        vc_msg += " · credit stress"
+    elif hyg_val is not None and hyg_val <= -0.3:
+        vc_msg += " · credit watch"
+
+    triggers.append({
+        "key": "volatility_and_credit", "label": "Volatility & Credit",
+        "status": _pillar_status_from_score(vc_risk),
+        "value": vc_value,
+        "threshold": "",
+        "message": vc_msg,
+        "direction": vc_dir, "timeframe": "1D · 7D",
+        "risk_score": vc_risk, "source_pillar": "volatility_and_credit",
+    })
+
+    # --- Rates & Dollar ---
+    rd = pillars.get("rates_and_dollar", {})
+    rd_comp = rd.get("components", {})
+    rd_risk = rd.get("risk_score") or 50
+    rd_dir = rd.get("direction", "UNKNOWN")
+    us10y_val = rd_comp.get("us10y")
+    chg_5d = rd_comp.get("us10y_change_5d_bps")
+    dxy_val = rd_comp.get("dxy")
+    dxy_chg = rd_comp.get("dxy_change_1d")
+
+    rd_value_parts = []
+    if us10y_val is not None:
+        if chg_5d is not None:
+            rd_value_parts.append(f"{us10y_val:.2f}% · {chg_5d:+.0f} bps/5D")
+        else:
+            rd_value_parts.append(f"{us10y_val:.2f}%")
+    if dxy_val is not None and dxy_chg is not None:
+        rd_value_parts.append(f"DXY {dxy_val:.1f} ({dxy_chg:+.1f}%)")
+    rd_value = " · ".join(rd_value_parts) if rd_value_parts else None
+
+    rd_msg = f"Rates/Dollar {rd_dir.lower()}"
+    if us10y_val is not None and us10y_val >= 4.75 and chg_5d is not None and chg_5d < -5:
+        rd_msg = f"10Y restrictive at {us10y_val:.2f}% but easing ({chg_5d:+.0f} bps/5D)"
+    elif us10y_val is not None and chg_5d is not None and chg_5d > 5:
+        rd_msg = f"10Y at {us10y_val:.2f}% · rising +{chg_5d:.0f} bps over 5 sessions"
+    elif us10y_val is not None and us10y_val >= 4.75:
+        rd_msg = f"10Y elevated at {us10y_val:.2f}%"
+    if dxy_chg is not None and dxy_chg >= 0.5:
+        rd_msg += " · dollar strengthening"
+
+    triggers.append({
+        "key": "rates_and_dollar", "label": "Rates & Dollar",
+        "status": _pillar_status_from_score(rd_risk),
+        "value": rd_value,
+        "threshold": "",
+        "message": rd_msg,
+        "direction": rd_dir, "timeframe": "1D · 5D · 20D",
+        "risk_score": rd_risk, "source_pillar": "rates_and_dollar",
+    })
+
+    # --- Leadership & Cross-Asset ---
+    lc = pillars.get("leadership_and_cross_asset", {})
+    lc_comp = lc.get("components", {})
+    lc_risk = lc.get("risk_score") or 50
+    lc_dir = lc.get("direction", "UNKNOWN")
+    btc_val = lc_comp.get("btc_change_24h")
+    cvd_val = lc_comp.get("cyclical_vs_defensive_spread")
+    posture_val = lc_comp.get("market_posture")
+
+    lc_value_parts = []
+    if btc_val is not None:
+        lc_value_parts.append(f"BTC {btc_val:+.1f}%")
+    if cvd_val is not None:
+        lc_value_parts.append(f"Cyc/Def {cvd_val:+.1f}%")
+    if posture_val:
+        lc_value_parts.append(f"{posture_val}")
+    lc_value = " · ".join(lc_value_parts) if lc_value_parts else None
+
+    lc_msg = f"Cross-asset {lc_dir.lower()}"
+    if btc_val is not None and btc_val <= -5.0:
+        lc_msg += " — BTC risk-off"
+    if cvd_val is not None and cvd_val <= -1.0:
+        lc_msg += " · defensive rotation"
+    elif cvd_val is not None and cvd_val >= 2.0:
+        lc_msg += " · risk-on rotation"
+
+    triggers.append({
+        "key": "leadership_and_cross_asset", "label": "Leadership & Cross-Asset",
+        "status": _pillar_status_from_score(lc_risk),
+        "value": lc_value,
+        "threshold": "",
+        "message": lc_msg,
+        "direction": lc_dir, "timeframe": "1D · 30D",
+        "risk_score": lc_risk, "source_pillar": "leadership_and_cross_asset",
+    })
+
+    # --- Event overlay trigger ---
+    if ev.get("active"):
+        ev_severity = ev.get("severity", "MODERATE")
+        ev_status = "orange" if ev_severity == "HIGH" else "yellow"
+        triggers.append({
+            "key": "event_risk", "label": "Event Risk",
+            "status": ev_status,
+            "value": f"{ev.get('next_event', '')} ({ev.get('days_until_event', '?')}d)",
+            "threshold": "",
+            "message": f"{ev.get('next_event', 'Event')} in {ev.get('days_until_event', '?')} days — event risk reduces position size, not a directional signal",
+            "direction": "UNKNOWN", "timeframe": "calendar",
+            "risk_score": 0, "source_pillar": "event_overlay",
+        })
+
+    return triggers
+
+
+# -----------------------------------------------------------------------------
+# Canonical why_market_is_moving builder
+# -----------------------------------------------------------------------------
+
+def _build_canonical_why_bullets(swing_regime: dict, market_open: bool) -> list[str]:
+    bullets: list[str] = []
+
+    risk_level = swing_regime.get("risk_level", "UNKNOWN")
+    direction = swing_regime.get("regime_direction", "UNKNOWN")
+    trade_bias = swing_regime.get("trade_bias", "UNKNOWN")
+    assessment = swing_regime.get("assessment_status", "PARTIAL")
+    driver = swing_regime.get("dominant_driver", "")
+    pillars = swing_regime.get("pillars", {})
+    ev = swing_regime.get("event_overlay", {})
+
+    if not market_open:
+        bullets.append("US cash market is closed; equity and breadth signals reflect the latest completed session.")
+
+    if assessment == "INSUFFICIENT_DATA":
+        bullets.append("Insufficient data available — no directional conclusion should be drawn.")
+        return bullets[:3]
+
+    bias_str = trade_bias.replace("_", " ").lower()
+    bullets.append(f"Swing risk is {risk_level} and {direction.lower()}; {bias_str} bias.")
+
+    # Dominant driver details
+    if driver == "rate_and_dollar_pressure":
+        rd = pillars.get("rates_and_dollar", {}).get("components", {})
+        us10y = rd.get("us10y")
+        chg_5d = rd.get("us10y_change_5d_bps")
+        if us10y is not None and chg_5d is not None and chg_5d < -5 and us10y >= 4.5:
+            bullets.append(f"10Y is still restrictive at {us10y:.2f}% but has fallen {abs(chg_5d):.0f} bps over five sessions.")
+        elif us10y is not None and chg_5d is not None and chg_5d > 5:
+            bullets.append(f"10Y is at {us10y:.2f}% and has risen {chg_5d:.0f} bps over five sessions — rate pressure accelerating.")
+        elif us10y is not None:
+            bullets.append(f"10Y remains at {us10y:.2f}% — rate headwind persisting.")
+    elif driver == "broad_market_trend":
+        tb = pillars.get("trend_and_breadth", {}).get("components", {})
+        breadth_1d = tb.get("breadth_1d")
+        eq_avg = tb.get("equity_1d_avg")
+        if breadth_1d is not None and breadth_1d < 40:
+            bullets.append(f"Breadth remains narrow, with only {breadth_1d:.0f}% of sectors advancing.")
+        elif eq_avg is not None and eq_avg <= -1.0:
+            bullets.append(f"Equities are under pressure (SPY/QQQ avg {eq_avg:+.1f}% 1D).")
+        elif eq_avg is not None and eq_avg >= 1.0:
+            bullets.append(f"Equities showing strength (SPY/QQQ avg {eq_avg:+.1f}% 1D).")
+    elif driver == "volatility_stress":
+        vc = pillars.get("volatility_and_credit", {}).get("components", {})
+        vix_val = vc.get("vix")
+        if vix_val is not None:
+            bullets.append(f"VIX elevated at {vix_val:.1f} — heightened option-market uncertainty.")
+    elif driver == "cross_asset_deleveraging":
+        lc = pillars.get("leadership_and_cross_asset", {}).get("components", {})
+        btc_val = lc.get("btc_change_24h")
+        cvd_val = lc.get("cyclical_vs_defensive_spread")
+        if btc_val is not None and btc_val <= -5.0:
+            bullets.append(f"Bitcoin {btc_val:+.1f}% — risk-off appetite in crypto markets.")
+        if cvd_val is not None and cvd_val <= -1.0:
+            bullets.append("Defensives are leading cyclicals — sector rotation toward safety.")
+
+    # Event overlay bullet
+    if ev.get("active"):
+        ev_title = ev.get("next_event") or "Event"
+        ev_days = ev.get("days_until_event")
+        if ev_days is not None:
+            bullets.append(f"{ev_title} is due in {ev_days} day{'s' if ev_days != 1 else ''}; event risk reduces position size but does not create a bearish directional signal.")
+
+    # Fallback
+    if len(bullets) < 2:
+        bullets.append("Markets trading within monitored parameters — no single dominant risk driver detected.")
+
+    return bullets[:3]
 
 
 # -----------------------------------------------------------------------------
@@ -517,10 +791,10 @@ def _assess_risk_cluster(
 
 
 # -----------------------------------------------------------------------------
-# "Why market is moving" - deterministic short bullets
+# Legacy "Why market is moving" - preserved for backward compat
 # -----------------------------------------------------------------------------
 
-def _build_why_bullets(
+def _build_legacy_why_bullets(
     *,
     vix: float | None,
     vix_change_pct: float | None,
@@ -585,6 +859,15 @@ def _is_us_market_open() -> bool:
     return now_et.weekday() < 5 and (9 * 60 + 30) <= mins < (16 * 60)
 
 
+def _compute_market_context(market_open: bool, macro_age: int | None) -> str:
+    if market_open and macro_age is not None and macro_age <= 900:
+        return "live_session"
+    elif not market_open:
+        return "closed_last_session"
+    else:
+        return "stale"
+
+
 # -----------------------------------------------------------------------------
 # Legacy risk-cluster to canonical projection
 # -----------------------------------------------------------------------------
@@ -592,24 +875,24 @@ def _is_us_market_open() -> bool:
 def _project_risk_cluster_from_swing_regime(
     swing_regime: dict,
     legacy: dict,
+    canonical_triggers: list[dict],
 ) -> dict:
     """
     Build a fully coherent risk_cluster from the canonical swing_regime.
 
+    risk_cluster.triggers  = canonical pillar-based display triggers
     risk_cluster.severity  = swing_regime.risk_level
     risk_cluster.score     = swing_regime.risk_score
     risk_cluster.active    = true for ELEVATED/HIGH/EXTREME
-
-    Canonical fields (from swing_regime):
-      - headline:   risk level + regime direction + trade bias
-      - summary:    swing_regime.one_line
-      - trigger_count: number of at-risk pillars (pillar risk_score >= 45)
+    risk_cluster.headline  = risk level + regime direction + trade bias
+    risk_cluster.summary   = swing_regime.one_line
+    risk_cluster.trigger_count = number of at-risk pillars (pillar risk_score >= 45)
 
     Legacy diagnostics (preserved additively):
-      - triggers:              list from legacy trigger assessment
-      - legacy_trigger_count:  old red/orange count
-      - legacy_headline:       old headline
-      - legacy_summary:        old summary
+      - legacy_triggers
+      - legacy_trigger_count
+      - legacy_headline
+      - legacy_summary
     """
     risk_level = swing_regime.get("risk_level", "LOW")
     direction  = swing_regime.get("regime_direction", "UNKNOWN")
@@ -631,19 +914,19 @@ def _project_risk_cluster_from_swing_regime(
         )
         active = risk_level in ("ELEVATED", "HIGH", "EXTREME")
 
-    result = {
+    return {
         "active":                   active,
         "severity":                 risk_level,
         "score":                    swing_regime.get("risk_score", 50),
         "headline":                 headline,
         "summary":                  summary,
         "trigger_count":            canonical_trigger_count,
-        "triggers":                 legacy.get("triggers", []),
+        "triggers":                 canonical_triggers,
+        "legacy_triggers":          legacy.get("triggers", []),
         "legacy_trigger_count":     legacy.get("legacy_trigger_count", 0),
         "legacy_headline":          legacy.get("legacy_headline", ""),
         "legacy_summary":           legacy.get("legacy_summary", ""),
     }
-    return result
 
 
 # -----------------------------------------------------------------------------
@@ -735,6 +1018,7 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
     # Rate history context
     yc = _compute_yield_changes(rate_hist.get("history", []), us10y)
     us10y_chg_bps = yc.get("change_1d_bps")
+    yc_status = rate_hist.get("history_status", "unavailable")
 
     # VIX 7-session return (real % change, not vix_min)
     vix_7d_ret = _compute_vix_7d_return(vixcls_hist)
@@ -751,7 +1035,7 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
             "change_bps":    us10y_chg_bps,
             "change_source": yc.get("history_source"),
             "change_as_of":  yc.get("history_as_of"),
-            "change_status": yc.get("history_status"),
+            "change_status": yc_status,
         },
         "vix":  {"symbol": "VIX", "price": vix,  "change_pct": vix_chg},
         "dxy":  {"symbol": "DXY", "price": dxy,  "change_pct": dxy_chg_pct},
@@ -816,7 +1100,10 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
     # 8. Project trade_decision from swing_regime
     trade_decision = _project_trade_decision_from_swing_regime(swing_regime, vix_payload)
 
-    # 9. Build legacy risk cluster + project canonical risk_cluster
+    # 9. Build canonical display triggers
+    canonical_triggers = _build_canonical_trigger_list(swing_regime, yc, sector_data)
+
+    # 10. Build legacy risk cluster
     breadth_float = float(breadth_score) if isinstance(breadth_score, (int, float)) else None
     legacy_rc = _assess_risk_cluster(
         vix=vix, vix_change_pct=vix_chg,
@@ -826,18 +1113,24 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
         hyg_change_pct=hyg_chg,
         has_upcoming_high_impact_event=has_hi_impact,
     )
-    risk_cluster = _project_risk_cluster_from_swing_regime(swing_regime, legacy_rc)
+    risk_cluster = _project_risk_cluster_from_swing_regime(swing_regime, legacy_rc, canonical_triggers)
 
-    # 10. Why bullets
+    # 11. Market open
+    market_open = _is_us_market_open()
+
+    # 12. Why bullets (canonical)
+    why_bullets = _build_canonical_why_bullets(swing_regime, market_open)
+
+    # 13. Legacy why bullets
     vix_sig_title = (vix_payload.get("vix_regime_signal") or {}).get("signal_title")
-    why_bullets = _build_why_bullets(
+    legacy_why_bullets = _build_legacy_why_bullets(
         vix=vix, vix_change_pct=vix_chg,
         spy_change_pct=spy_chg, qqq_change_pct=qqq_chg,
         btc_change_pct=btc_chg, us10y=us10y,
         dxy_change_pct=dxy_chg_pct, vix_signal_title=vix_sig_title,
     )
 
-    # 11. Freshness
+    # 14. Freshness
     macro_gen_at = vix_payload.get("generated_at")
     cal_updated  = econ_snap.get("last_updated")
     macro_age = _ts_age(macro_gen_at, now_utc)
@@ -851,6 +1144,7 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
         "market_snapshot_status":      _freshness_status(macro_age, 900),
         "calendar_status":             _freshness_status(cal_age,   86400 * 7),
         "macro_status":                _freshness_status(macro_age, 900),
+        "market_context":              _compute_market_context(market_open, macro_age),
         "diagnostic_sources": [
             "macro:dashboard:v3 (MacroProvider.get_dashboard, 15-min TTL) - SPY/QQQ/DIA/VIX/10Y/DXY/HYG",
             "strategy:vix_regime:v1 (build_vix_regime_payload, 15-min TTL) - SAME engine as Macro",
@@ -863,26 +1157,27 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
         ],
     }
 
-    # 12. Assemble result
+    # 15. Assemble result
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     print(
         f"[RISK_INTEL] built in {elapsed_ms}ms - "
         f"swing_level={swing_regime['risk_level']} swing_score={swing_regime['risk_score']} "
         f"bias={swing_regime['trade_bias']} status={swing_regime['assessment_status']} "
         f"events={len(upcoming_events)} breadth={breadth_float} "
-        f"10y_chg_1d={us10y_chg_bps}"
+        f"10y_chg_1d={us10y_chg_bps} mkt={data_freshness['market_context']}"
     )
 
     result = {
-        "as_of":                    now_utc.isoformat(),
-        "market_open":              _is_us_market_open(),
-        "data_freshness":           data_freshness,
-        "market_snapshot":          market_snapshot,
-        "trade_decision":           trade_decision,
-        "risk_cluster":             risk_cluster,
-        "swing_regime":             swing_regime,
-        "upcoming_economic_events": upcoming_events,
-        "why_market_is_moving":     why_bullets,
+        "as_of":                     now_utc.isoformat(),
+        "market_open":               market_open,
+        "data_freshness":            data_freshness,
+        "market_snapshot":           market_snapshot,
+        "trade_decision":            trade_decision,
+        "risk_cluster":              risk_cluster,
+        "swing_regime":              swing_regime,
+        "upcoming_economic_events":  upcoming_events,
+        "why_market_is_moving":      why_bullets,
+        "legacy_why_market_is_moving": legacy_why_bullets,
     }
 
     cache.set(_RISK_INTEL_KEY,     result, _RISK_INTEL_TTL)
