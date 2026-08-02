@@ -44,6 +44,7 @@ recent snapshot. Never the source of truth.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -94,6 +95,14 @@ _bootstrapping: dict[str, bool] = {}
 # the same result so duplicate provider work cannot happen.
 _refresh_tasks: dict[str, asyncio.Task] = {}
 _refresh_coordinator_lock = asyncio.Lock()
+
+# Macro sources that share one coordinated refresh cycle.
+_MACRO_TABS: frozenset[str] = frozenset({"economic_releases", "treasury_macro"})
+
+# In-flight macro-cycle coalescing.  One task for the combined macro cycle;
+# concurrent callers await the same result.
+_macro_cycle_tasks: dict[str, asyncio.Task] = {}
+_macro_cycle_lock = asyncio.Lock()
 
 
 # ── Neon-backed primary persistence ─────────────────────────────────────────
@@ -1135,14 +1144,18 @@ def get_snapshot_window(
             coverage_complete = False
             empty_reason = "snapshot_empty"
     else:
-        source = "horizon" if broad else ("legacy" if legacy else "none")
-        pool = broad if broad else legacy
-        selected = _select_events_for_window(pool, win_from, win_to)
         # Coverage uses explicit provider-chunk coverage ranges when available,
         # falling back to _actual_bounds() for legacy snapshots that predate
         # the ranges model.  The continuous union of all successful ranges
         # (complete + empty) is the authoritative coverage.
         ranges = (env.get("horizon") or {}).get("coverage_ranges") or []
+        has_ranges = bool(ranges)
+        # A horizon snapshot is identified by either a broad events collection
+        # OR explicit coverage ranges.  Ranges with an empty events array mean
+        # a successfully fetched empty window, not a missing snapshot.
+        source = "horizon" if (broad or has_ranges) else ("legacy" if legacy else "none")
+        pool = broad if broad else legacy
+        selected = _select_events_for_window(pool, win_from, win_to)
         if ranges:
             ranges = _normalize_coverage_ranges(ranges)
             coverage_complete = _window_covered_by_ranges(ranges, win_from, win_to)
@@ -1185,6 +1198,14 @@ def get_snapshot_window(
     return out
 
 
+def _cleanup_refresh_task(tab: str, task: asyncio.Task) -> None:
+    """Remove a completed per-tab refresh task from the registry by identity."""
+    # No lock needed: dict ops are atomic in the event-loop thread and we only
+    # pop our own task object.
+    if _refresh_tasks.get(tab) is task:
+        _refresh_tasks.pop(tab, None)
+
+
 async def refresh_tab(tab: str, fmp_key: str) -> dict:
     """
     Public refresh entry point.  Coordinates concurrent callers so that only
@@ -1194,6 +1215,10 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
     check, weekly scheduler, manual backfill) may request the same tab, but
     the first caller starts the work and later callers await the in-flight
     task instead of running duplicate provider fetches.
+
+    Cancellation-safe: if a waiter is cancelled, the underlying provider task
+    continues and the registry remains populated until the task completes.
+    Other waiters still receive the completed result.
     """
     if tab not in TARGET_TABS:
         raise ValueError(f"refresh_tab: unsupported tab {tab!r}")
@@ -1202,17 +1227,100 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
         return get_snapshot(tab)
 
     async with _refresh_coordinator_lock:
-        task = _refresh_tasks.get(tab)
-        if task is None or task.done():
+        existing = _refresh_tasks.get(tab)
+        if existing is None or existing.done():
             task = asyncio.create_task(_refresh_tab_core(tab, fmp_key))
+            task.add_done_callback(functools.partial(_cleanup_refresh_task, tab))
             _refresh_tasks[tab] = task
+        else:
+            task = existing
 
-    try:
-        return await task
-    finally:
-        async with _refresh_coordinator_lock:
-            if _refresh_tasks.get(tab) is task:
-                _refresh_tasks.pop(tab, None)
+    return await asyncio.shield(task)
+
+
+def _is_macro_tab(tab: str) -> bool:
+    return tab in _MACRO_TABS
+
+
+def _cleanup_macro_cycle_task(task: asyncio.Task) -> None:
+    """Remove a completed macro-cycle task from the registry by identity."""
+    if _macro_cycle_tasks.get("macro_cycle") is task:
+        _macro_cycle_tasks.pop("macro_cycle", None)
+
+
+async def refresh_macro_sources(fmp_key: str) -> dict:
+    """
+    Coordinated refresh of both macro sources (economic_releases + treasury_macro).
+
+    Runs the two distinct upstream adapters concurrently while reusing the
+    per-tab refresh_tab() coalescer, so:
+      • a direct Economic Releases refresh overlapping this cycle shares the
+        same Economic Releases task
+      • a direct Treasury refresh overlapping this cycle shares the same
+        Treasury task
+      • two concurrent calls to refresh_macro_sources() share one macro cycle
+
+    Returns a dict with per-source envelopes and an aggregate status:
+      {
+        "economic_releases": <envelope>,
+        "treasury_macro":    <envelope>,
+        "status":            "ready" | "partial" | "failed"
+      }
+
+    Cancellation-safe: waiter cancellation does not cancel the underlying
+    provider work or clear the in-flight registry prematurely.
+    """
+    if not fmp_key:
+        print("[calendar_snapshot] refresh_macro_sources skipped: missing FMP key")
+        return {
+            "economic_releases": get_snapshot("economic_releases"),
+            "treasury_macro": get_snapshot("treasury_macro"),
+            "status": "failed",
+        }
+
+    async with _macro_cycle_lock:
+        existing = _macro_cycle_tasks.get("macro_cycle")
+        if existing is None or existing.done():
+            task = asyncio.create_task(_refresh_macro_sources_core(fmp_key))
+            task.add_done_callback(_cleanup_macro_cycle_task)
+            _macro_cycle_tasks["macro_cycle"] = task
+        else:
+            task = existing
+
+    return await asyncio.shield(task)
+
+
+async def _refresh_macro_sources_core(fmp_key: str) -> dict:
+    """Core implementation of the coordinated macro refresh cycle."""
+    results: dict[str, dict] = {}
+    statuses: list[str] = []
+
+    async def _refresh_one(tab: str) -> None:
+        try:
+            results[tab] = await refresh_tab(tab, fmp_key)
+            statuses.append("ready")
+        except Exception as e:
+            print(f"[calendar_snapshot] refresh_macro_sources error tab={tab}: {e}")
+            results[tab] = get_snapshot(tab)
+            statuses.append("failed")
+
+    await asyncio.gather(
+        _refresh_one("economic_releases"),
+        _refresh_one("treasury_macro"),
+    )
+
+    if all(s == "ready" for s in statuses):
+        status = "ready"
+    elif any(s == "ready" for s in statuses):
+        status = "partial"
+    else:
+        status = "failed"
+
+    return {
+        "economic_releases": results["economic_releases"],
+        "treasury_macro": results["treasury_macro"],
+        "status": status,
+    }
 
 
 async def _refresh_tab_core(tab: str, fmp_key: str) -> dict:
@@ -1559,6 +1667,10 @@ async def check_and_refresh_stale(fmp_key: str, delay_secs: int = 45) -> None:
     concurrently with weekly_scheduler_loop — the async lock in refresh_tab
     prevents duplicate writes.
 
+    Macro sources (economic_releases, treasury_macro) are refreshed through
+    one coordinated macro cycle when any macro tab is stale.  Non-macro tabs
+    are refreshed individually.
+
     Call as `asyncio.create_task(check_and_refresh_stale(fmp_key))` from
     the application lifespan hook.
     """
@@ -1567,6 +1679,10 @@ async def check_and_refresh_stale(fmp_key: str, delay_secs: int = 45) -> None:
         return
     await asyncio.sleep(delay_secs)
     print(f"[calendar_snapshot] startup stale-check: et_monday={_et_week_monday()}")
+
+    macro_stale: list[str] = []
+    other_stale: list[str] = []
+
     for tab in TARGET_TABS:
         try:
             slot = _neon_read(tab)
@@ -1577,12 +1693,29 @@ async def check_and_refresh_stale(fmp_key: str, delay_secs: int = 45) -> None:
                 stored_from = ((slot.get("meta") or {}).get("window") or {}).get("from", "N/A")
                 print(
                     f"[calendar_snapshot] startup stale-check: tab={tab} STALE "
-                    f"(stored_from={stored_from!r}) — refreshing now"
+                    f"(stored_from={stored_from!r}) — will refresh"
                 )
-                await refresh_tab(tab, fmp_key)
+                if _is_macro_tab(tab):
+                    macro_stale.append(tab)
+                else:
+                    other_stale.append(tab)
             else:
                 stored_from = ((slot.get("meta") or {}).get("window") or {}).get("from", "N/A")
                 print(f"[calendar_snapshot] startup stale-check: tab={tab} current (stored_from={stored_from!r})")
+        except Exception as e:
+            print(f"[calendar_snapshot] startup stale-check error tab={tab}: {e}")
+
+    if macro_stale:
+        print(f"[calendar_snapshot] startup stale-check: running coordinated macro cycle for {macro_stale}")
+        try:
+            await refresh_macro_sources(fmp_key)
+        except Exception as e:
+            print(f"[calendar_snapshot] startup stale-check macro cycle error: {e}")
+
+    for tab in other_stale:
+        try:
+            print(f"[calendar_snapshot] startup stale-check: refreshing non-macro tab={tab}")
+            await refresh_tab(tab, fmp_key)
         except Exception as e:
             print(f"[calendar_snapshot] startup stale-check error tab={tab}: {e}")
 
@@ -1593,10 +1726,13 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
     at startup can still recover later without restart).
 
     Two firing modes:
-    1. Sunday scheduled refresh (existing): fires each tab at its configured
-       ET hour once per ISO week (last_run_week marker prevents re-runs).
-    2. Daily stale-check (new): Mon–Sat, every 60 minutes, refreshes any tab
-       whose stored window doesn't cover the current ET week.  Uses a
+    1. Sunday scheduled refresh: non-macro tabs fire individually at their
+       configured ET hour.  Macro sources (economic_releases, treasury_macro)
+       share ONE coordinated refresh cycle at the first macro slot that has
+       not yet run this ISO week.
+    2. Daily stale-check: Mon–Sat, every 60 minutes, refreshes any tab whose
+       stored window doesn't cover the current ET week.  Macro sources share
+       one coordinated cycle when any macro tab is stale.  Uses a
        "stale:<week>" marker so each tab is refreshed at most once per week
        outside the Sunday window.
     """
@@ -1609,6 +1745,9 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
 
             # ── Sunday: scheduled full refresh ────────────────────────────────
             if now_et.weekday() == 6:
+                fmp_key = fmp_key_provider() if callable(fmp_key_provider) else fmp_key_provider
+                macro_slots: list[tuple[str, int, int]] = []
+                other_slots: list[tuple[str, int, int]] = []
                 for tab, hour, minute in _SCHEDULE:
                     if now_et.hour != hour:
                         continue
@@ -1616,7 +1755,33 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
                         continue
                     if _last_run_marker(tab) == week_marker:
                         continue
-                    fmp_key = fmp_key_provider() if callable(fmp_key_provider) else fmp_key_provider
+                    if _is_macro_tab(tab):
+                        macro_slots.append((tab, hour, minute))
+                    else:
+                        other_slots.append((tab, hour, minute))
+
+                # One macro cycle refreshes both macro sources together.
+                if macro_slots and fmp_key:
+                    try:
+                        print(
+                            f"[calendar_snapshot] scheduler firing macro cycle "
+                            f"tabs={[s[0] for s in macro_slots]} et={now_et.isoformat()}"
+                        )
+                        result = await refresh_macro_sources(fmp_key)
+                        for tab, _, _ in macro_slots:
+                            env = result.get(tab) or {}
+                            # Set marker only for sources that actually succeeded.
+                            if env.get("status") != "empty" and not env.get("fetch_error"):
+                                _set_last_run_marker(tab, week_marker)
+                            else:
+                                print(
+                                    f"[calendar_snapshot] scheduler macro source={tab} "
+                                    f"did not succeed, marker not set"
+                                )
+                    except Exception as e:
+                        print(f"[calendar_snapshot] scheduler macro cycle error: {e}")
+
+                for tab, _, _ in other_slots:
                     if not fmp_key:
                         print(f"[calendar_snapshot] scheduler: missing FMP key, skipping {tab}")
                         continue
@@ -1630,6 +1795,8 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
             # ── Mon–Sat: stale-tab check (hourly cadence via sleep below) ────
             else:
                 stale_marker = f"stale:{week_marker}"
+                macro_stale: list[str] = []
+                other_stale: list[tuple[str, dict]] = []
                 for tab in TARGET_TABS:
                     if _last_run_marker(tab) in (week_marker, stale_marker):
                         continue  # already refreshed this week (Sunday run or prior stale check)
@@ -1639,17 +1806,41 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
                             store = _read_disk()
                             slot = _normalize_slot(store.get(tab))
                         if _snapshot_is_stale(slot, tab):
-                            fmp_key = fmp_key_provider() if callable(fmp_key_provider) else fmp_key_provider
-                            if not fmp_key:
-                                continue
-                            stored_from = ((slot.get("meta") or {}).get("window") or {}).get("from", "N/A")
-                            print(
-                                f"[calendar_snapshot] stale-check (daily) firing "
-                                f"tab={tab} stored_from={stored_from!r} "
-                                f"et={now_et.isoformat()}"
-                            )
-                            await refresh_tab(tab, fmp_key)
-                            _set_last_run_marker(tab, stale_marker)
+                            if _is_macro_tab(tab):
+                                macro_stale.append(tab)
+                            else:
+                                other_stale.append((tab, slot))
+                    except Exception as e:
+                        print(f"[calendar_snapshot] stale-check error tab={tab}: {e}")
+
+                fmp_key = fmp_key_provider() if callable(fmp_key_provider) else fmp_key_provider
+
+                if macro_stale and fmp_key:
+                    print(
+                        f"[calendar_snapshot] stale-check (daily) firing macro cycle "
+                        f"tabs={macro_stale} et={now_et.isoformat()}"
+                    )
+                    try:
+                        result = await refresh_macro_sources(fmp_key)
+                        for tab in macro_stale:
+                            env = result.get(tab) or {}
+                            if env.get("status") != "empty" and not env.get("fetch_error"):
+                                _set_last_run_marker(tab, stale_marker)
+                    except Exception as e:
+                        print(f"[calendar_snapshot] stale-check macro cycle error: {e}")
+
+                for tab, slot in other_stale:
+                    if not fmp_key:
+                        continue
+                    stored_from = ((slot.get("meta") or {}).get("window") or {}).get("from", "N/A")
+                    print(
+                        f"[calendar_snapshot] stale-check (daily) firing "
+                        f"tab={tab} stored_from={stored_from!r} "
+                        f"et={now_et.isoformat()}"
+                    )
+                    try:
+                        await refresh_tab(tab, fmp_key)
+                        _set_last_run_marker(tab, stale_marker)
                     except Exception as e:
                         print(f"[calendar_snapshot] stale-check error tab={tab}: {e}")
 
@@ -1693,7 +1884,34 @@ async def _manual_backfill(tabs: list[str]) -> int:
         print(f"[backfill] WARN: Neon init check failed: {e}")
 
     failures: list[str] = []
-    for tab in tabs:
+    macro_tabs = [tab for tab in tabs if _is_macro_tab(tab)]
+    other_tabs = [tab for tab in tabs if tab in TARGET_TABS and not _is_macro_tab(tab)]
+
+    # When both macro sources are requested, run one coordinated cycle.
+    if len(macro_tabs) > 1:
+        print(f"[backfill] → running coordinated macro cycle for {macro_tabs} ...")
+        try:
+            result = await refresh_macro_sources(fmp_key)
+            for tab in macro_tabs:
+                envelope = result.get(tab) or {}
+                cw = len(envelope.get("current_week") or [])
+                pw = len(envelope.get("previous_week") or [])
+                status = envelope.get("status")
+                last = envelope.get("last_updated")
+                print(
+                    f"[backfill] ✓ tab={tab} status={status} "
+                    f"current_week={cw} previous_week={pw} last_updated={last}"
+                )
+                if status == "empty":
+                    failures.append(tab)
+        except Exception as e:
+            print(f"[backfill] ✗ macro cycle ERROR: {e}")
+            failures.extend(macro_tabs)
+    elif macro_tabs:
+        # Only one macro tab requested — keep per-tab behavior.
+        other_tabs = macro_tabs + other_tabs
+
+    for tab in other_tabs:
         if tab not in TARGET_TABS:
             print(f"[backfill] skipping unsupported tab: {tab!r}")
             failures.append(tab)

@@ -29,6 +29,7 @@ from services.calendar_snapshot_service import (
     _merge_horizon_events,
     _window_covered,
     get_snapshot_window,
+    weekly_scheduler_loop,
 )
 
 
@@ -1967,3 +1968,502 @@ class TestRefreshCoalescing:
         assert results[0]["tab"] == "economic_releases"
         assert results[1]["tab"] == "economic_releases"
         assert results[2]["tab"] == "treasury_macro"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Coordinated macro refresh cycle
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestMacroRefreshCycle:
+    """refresh_macro_sources coordinates both macro sources in one cycle."""
+
+    def test_one_macro_cycle_invokes_economic_once(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        calls: list[str] = []
+
+        async def _fake_core(tab: str, fmp_key: str) -> dict:
+            calls.append(tab)
+            await asyncio.sleep(0.02)
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _fake_core)
+
+        result = asyncio.run(_svc.refresh_macro_sources("dummy-key"))
+        assert calls.count("economic_releases") == 1
+        assert calls.count("treasury_macro") == 1
+        assert result["status"] == "ready"
+        assert result["economic_releases"]["tab"] == "economic_releases"
+
+    def test_two_concurrent_macro_cycles_run_each_source_once(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        calls: list[str] = []
+
+        async def _slow_core(tab: str, fmp_key: str) -> dict:
+            calls.append(tab)
+            await asyncio.sleep(0.05)
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _slow_core)
+
+        async def _run():
+            return await asyncio.gather(
+                _svc.refresh_macro_sources("dummy-key"),
+                _svc.refresh_macro_sources("dummy-key"),
+            )
+
+        results = asyncio.run(_run())
+        assert calls.count("economic_releases") == 1
+        assert calls.count("treasury_macro") == 1
+        assert results[0]["status"] == "ready"
+        assert results[1]["status"] == "ready"
+
+    def test_direct_economic_refresh_overlapping_macro_cycle_coalesces(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        calls: list[str] = []
+
+        async def _slow_core(tab: str, fmp_key: str) -> dict:
+            calls.append(tab)
+            await asyncio.sleep(0.05)
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _slow_core)
+
+        async def _run():
+            return await asyncio.gather(
+                _svc.refresh_macro_sources("dummy-key"),
+                _svc.refresh_tab("economic_releases", "dummy-key"),
+            )
+
+        results = asyncio.run(_run())
+        assert calls.count("economic_releases") == 1
+        assert calls.count("treasury_macro") == 1
+
+    def test_direct_treasury_refresh_overlapping_macro_cycle_coalesces(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        calls: list[str] = []
+
+        async def _slow_core(tab: str, fmp_key: str) -> dict:
+            calls.append(tab)
+            await asyncio.sleep(0.05)
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _slow_core)
+
+        async def _run():
+            return await asyncio.gather(
+                _svc.refresh_macro_sources("dummy-key"),
+                _svc.refresh_tab("treasury_macro", "dummy-key"),
+            )
+
+        results = asyncio.run(_run())
+        assert calls.count("economic_releases") == 1
+        assert calls.count("treasury_macro") == 1
+
+    def test_partial_macro_cycle_failure_is_truthful(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        async def _mixed_core(tab: str, fmp_key: str) -> dict:
+            if tab == "economic_releases":
+                return {"tab": tab, "status": "ready"}
+            raise RuntimeError("treasury down")
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _mixed_core)
+
+        result = asyncio.run(_svc.refresh_macro_sources("dummy-key"))
+        assert result["status"] == "partial"
+        assert result["economic_releases"]["status"] == "ready"
+
+    def test_later_macro_cycle_retries_after_failure(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        calls: dict[str, int] = {}
+
+        async def _failing_then_ok(tab: str, fmp_key: str) -> dict:
+            calls[tab] = calls.get(tab, 0) + 1
+            if calls[tab] == 1 and tab == "treasury_macro":
+                raise RuntimeError("treasury down")
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _failing_then_ok)
+
+        result1 = asyncio.run(_svc.refresh_macro_sources("dummy-key"))
+        assert result1["status"] == "partial"
+        result2 = asyncio.run(_svc.refresh_macro_sources("dummy-key"))
+        assert result2["status"] == "ready"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Cancellation safety for shared refresh tasks
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestRefreshCancellationSafety:
+    """Waiter cancellation must not cancel the shared provider task."""
+
+    def test_cancelling_tab_waiter_does_not_cancel_shared_task(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        calls: list[str] = []
+
+        async def _slow_core(tab: str, fmp_key: str) -> dict:
+            calls.append("start")
+            await asyncio.sleep(0.1)
+            calls.append("done")
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _slow_core)
+
+        async def _waiter_cancels():
+            task = asyncio.create_task(_svc.refresh_tab("economic_releases", "key"))
+            await asyncio.sleep(0.01)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        async def _later_waiter():
+            await asyncio.sleep(0.02)
+            return await _svc.refresh_tab("economic_releases", "key")
+
+        async def _run():
+            await asyncio.gather(_waiter_cancels(), _later_waiter())
+
+        asyncio.run(_run())
+        assert calls == ["start", "done"]  # core ran to completion exactly once
+
+    def test_tab_task_registry_clears_after_completion(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        async def _core(tab: str, fmp_key: str) -> dict:
+            await asyncio.sleep(0.01)
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _core)
+
+        asyncio.run(_svc.refresh_tab("economic_releases", "key"))
+        assert _svc._refresh_tasks.get("economic_releases") is None
+
+    def test_cancelling_macro_cycle_waiter_does_not_cancel_cycle(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        calls: list[str] = []
+
+        async def _slow_refresh_tab(tab: str, fmp_key: str) -> dict:
+            calls.append(f"start:{tab}")
+            await asyncio.sleep(0.1)
+            calls.append(f"done:{tab}")
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "refresh_tab", _slow_refresh_tab)
+
+        async def _waiter_cancels():
+            task = asyncio.create_task(_svc.refresh_macro_sources("key"))
+            await asyncio.sleep(0.01)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        async def _later_waiter():
+            await asyncio.sleep(0.02)
+            return await _svc.refresh_macro_sources("key")
+
+        async def _run():
+            await asyncio.gather(_waiter_cancels(), _later_waiter())
+
+        asyncio.run(_run())
+        assert calls.count("start:economic_releases") == 1
+        assert calls.count("done:economic_releases") == 1
+        assert calls.count("start:treasury_macro") == 1
+        assert calls.count("done:treasury_macro") == 1
+
+    def test_macro_cycle_registry_clears_after_completion(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        async def _refresh_tab(tab: str, fmp_key: str) -> dict:
+            await asyncio.sleep(0.01)
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "refresh_tab", _refresh_tab)
+
+        asyncio.run(_svc.refresh_macro_sources("key"))
+        assert _svc._macro_cycle_tasks.get("macro_cycle") is None
+
+    def test_another_waiter_receives_completed_result(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        async def _slow_core(tab: str, fmp_key: str) -> dict:
+            await asyncio.sleep(0.05)
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _slow_core)
+
+        async def _early_waiter():
+            return await _svc.refresh_tab("economic_releases", "key")
+
+        async def _late_waiter():
+            await asyncio.sleep(0.01)
+            return await _svc.refresh_tab("economic_releases", "key")
+
+        async def _run():
+            return await asyncio.gather(_early_waiter(), _late_waiter())
+
+        results = asyncio.run(_run())
+        assert results[0]["status"] == "ready"
+        assert results[1]["status"] == "ready"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Scheduler / startup / manual orchestration integration
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestMacroSchedulerIntegration:
+    """Orchestration calls refresh_macro_sources once for macro sources."""
+
+    def test_startup_stale_check_invokes_one_macro_cycle(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        monkeypatch.setattr(_svc, "_et_week_monday", lambda: __import__("datetime").date(2026, 8, 3))
+
+        def _fake_neon_read(tab: str):
+            # economic_releases stale, treasury_macro current
+            if tab == "economic_releases":
+                return {
+                    "events": [],
+                    "meta": {"window": {"from": "2026-07-27"}},
+                    "status": "stale",
+                }
+            return {
+                "events": [],
+                "meta": {"window": {"from": "2026-08-03"}},
+                "status": "ready",
+            }
+
+        monkeypatch.setattr(_svc, "_neon_read", _fake_neon_read)
+
+        cycles: list[int] = []
+        tab_calls: list[str] = []
+
+        async def _fake_macro_cycle(fmp_key: str) -> dict:
+            cycles.append(1)
+            return {
+                "economic_releases": {"status": "ready"},
+                "treasury_macro": {"status": "ready"},
+                "status": "ready",
+            }
+
+        async def _fake_refresh_tab(tab: str, fmp_key: str) -> dict:
+            tab_calls.append(tab)
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "refresh_macro_sources", _fake_macro_cycle)
+        monkeypatch.setattr(_svc, "refresh_tab", _fake_refresh_tab)
+
+        asyncio.run(_svc.check_and_refresh_stale("key", delay_secs=0))
+        assert sum(cycles) == 1
+        # Non-macro tabs should still be checked but in this fixture they are current.
+
+    def test_sunday_scheduler_invokes_one_macro_cycle(self, monkeypatch):
+        import asyncio
+        from datetime import datetime, timezone
+        from services import calendar_snapshot_service as _svc
+
+        # Sunday 2026-08-02 at 04:00 ET (first macro slot)
+        sunday_et = datetime(2026, 8, 2, 4, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(_svc, "_et_now", lambda: sunday_et)
+        monkeypatch.setattr(_svc, "_iso_year_week", lambda dt: "2026-W31")
+        monkeypatch.setattr(_svc, "_last_run_marker", lambda tab: None)
+
+        cycles: list[int] = []
+
+        async def _fake_macro_cycle(fmp_key: str) -> dict:
+            cycles.append(1)
+            return {
+                "economic_releases": {"status": "ready"},
+                "treasury_macro": {"status": "ready"},
+                "status": "ready",
+            }
+
+        async def _fake_refresh_tab(tab: str, fmp_key: str) -> dict:
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "refresh_macro_sources", _fake_macro_cycle)
+        monkeypatch.setattr(_svc, "refresh_tab", _fake_refresh_tab)
+
+        async def _run_once():
+            task = asyncio.create_task(weekly_scheduler_loop(lambda: "key"))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(_run_once())
+        assert sum(cycles) == 1
+
+    def test_mon_sat_stale_check_invokes_one_macro_cycle(self, monkeypatch):
+        import asyncio
+        from datetime import datetime, timezone
+        from services import calendar_snapshot_service as _svc
+
+        # Tuesday 2026-08-04 at 10:00 ET
+        tuesday_et = datetime(2026, 8, 4, 10, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(_svc, "_et_now", lambda: tuesday_et)
+        monkeypatch.setattr(_svc, "_iso_year_week", lambda dt: "2026-W32")
+        monkeypatch.setattr(_svc, "_last_run_marker", lambda tab: None)
+
+        def _fake_neon_read(tab: str):
+            return {
+                "events": [],
+                "meta": {"window": {"from": "2026-07-27"}},
+                "status": "stale",
+            }
+
+        monkeypatch.setattr(_svc, "_neon_read", _fake_neon_read)
+
+        cycles: list[int] = []
+
+        async def _fake_macro_cycle(fmp_key: str) -> dict:
+            cycles.append(1)
+            return {
+                "economic_releases": {"status": "ready"},
+                "treasury_macro": {"status": "ready"},
+                "status": "ready",
+            }
+
+        async def _fake_refresh_tab(tab: str, fmp_key: str) -> dict:
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "refresh_macro_sources", _fake_macro_cycle)
+        monkeypatch.setattr(_svc, "refresh_tab", _fake_refresh_tab)
+
+        asyncio.run(_svc.check_and_refresh_stale("key", delay_secs=0))
+        assert sum(cycles) == 1
+
+    def test_manual_dual_macro_backfill_invokes_one_macro_cycle(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        cycles: list[int] = []
+        tab_calls: list[str] = []
+
+        async def _fake_macro_cycle(fmp_key: str) -> dict:
+            cycles.append(1)
+            return {
+                "economic_releases": {"status": "ready"},
+                "treasury_macro": {"status": "ready"},
+                "status": "ready",
+            }
+
+        async def _fake_refresh_tab(tab: str, fmp_key: str) -> dict:
+            tab_calls.append(tab)
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "refresh_macro_sources", _fake_macro_cycle)
+        monkeypatch.setattr(_svc, "refresh_tab", _fake_refresh_tab)
+        monkeypatch.setattr(_svc, "_neon_write", lambda tab, slot: True)
+        monkeypatch.setattr(_svc, "_read_disk", lambda: {})
+        monkeypatch.setattr(_svc, "_write_disk", lambda store: None)
+
+        rc = asyncio.run(_svc._manual_backfill(["economic_releases", "treasury_macro"]))
+        assert rc == 0
+        assert sum(cycles) == 1
+
+    def test_dividends_ipos_splits_schedules_remain_unchanged(self, monkeypatch):
+        import asyncio
+        from datetime import datetime, timezone
+        from services import calendar_snapshot_service as _svc
+
+        sunday_et = datetime(2026, 8, 2, 1, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(_svc, "_et_now", lambda: sunday_et)
+        monkeypatch.setattr(_svc, "_iso_year_week", lambda dt: "2026-W31")
+        monkeypatch.setattr(_svc, "_last_run_marker", lambda tab: None)
+
+        cycles: list[int] = []
+        tab_calls: list[str] = []
+
+        async def _fake_macro_cycle(fmp_key: str) -> dict:
+            cycles.append(1)
+            return {"status": "ready"}
+
+        async def _fake_refresh_tab(tab: str, fmp_key: str) -> dict:
+            tab_calls.append(tab)
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "refresh_macro_sources", _fake_macro_cycle)
+        monkeypatch.setattr(_svc, "refresh_tab", _fake_refresh_tab)
+
+        async def _run_once():
+            task = asyncio.create_task(weekly_scheduler_loop(lambda: "key"))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(_run_once())
+        assert "dividends" in tab_calls
+        assert sum(cycles) == 0  # macro cycle not run at hour 1
+
+    def test_existing_week_day_month_views_unchanged(self, monkeypatch):
+        from services import calendar_snapshot_service as _svc
+
+        env = {
+            "events": [
+                {"date": "2026-08-05", "eventName": "CPI MoM", "eventType": "economic_release"},
+            ],
+            "current_week": [],
+            "previous_week": [],
+            "last_updated": "2026-08-02T10:00:00Z",
+            "status": "ready",
+            "horizon": {
+                "horizon_start": "2026-07-18",
+                "horizon_end": "2026-10-29",
+                "coverage_ranges": [{"from": "2026-07-18", "to": "2026-10-29", "status": "complete"}],
+            },
+        }
+        monkeypatch.setattr(_svc, "get_snapshot", lambda tab: env)
+
+        week = _svc.get_snapshot_window("economic_releases", view="week", date="2026-08-03")
+        day = _svc.get_snapshot_window("economic_releases", view="day", date="2026-08-05")
+        month = _svc.get_snapshot_window("economic_releases", view="month", date="2026-08-01")
+
+        assert week["view"] == "week"
+        assert week["window_start"] == "2026-08-03"
+        assert day["view"] == "day"
+        assert day["window_start"] == "2026-08-05"
+        assert month["view"] == "month"
+        assert month["window_start"] == "2026-08-01"
+
+    def test_all_outputs_json_serialize(self, monkeypatch):
+        import json
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        async def _fake_refresh_tab(tab: str, fmp_key: str) -> dict:
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "refresh_tab", _fake_refresh_tab)
+
+        result = asyncio.run(_svc.refresh_macro_sources("key"))
+        # Must not raise.
+        json.dumps(result)

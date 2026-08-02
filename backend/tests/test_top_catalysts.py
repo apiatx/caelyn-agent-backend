@@ -1373,3 +1373,62 @@ def test_get_top_catalysts_uses_precomputed_macro_window(monkeypatch):
     assert env["macro_logical_event_count"] == 1
     # 2026-08-04 is Tuesday -> days[1]
     assert env["days"][1]["macro"][0]["title"] == "PPI MoM"
+
+
+def test_calendar_top_internal_provider_gap_reports_coverage_gap(monkeypatch):
+    """Calendar Top uses authoritative snapshot coverage-range semantics."""
+    _seed_snapshots(monkeypatch, {
+        "ipos": {"current_week": [], "previous_week": [], "last_updated": None,
+                 "status": "empty"},
+        "dividends": {"current_week": [], "previous_week": [], "last_updated": None,
+                      "status": "empty"},
+        "splits": {"current_week": [], "previous_week": [], "last_updated": None,
+                   "status": "empty"},
+    })
+    _seed_watchlist(monkeypatch, set(), set())
+    cache_key = "earnings:curated:week:2026-08-03:2026-08-07"
+    cache.set(cache_key, {"topEvents": [], "asOf": "2026-08-02T10:00:00Z"}, 60)
+
+    from services import calendar_snapshot_service as _snap_svc
+
+    def _fake_get_snapshot(tab: str):
+        if tab == "economic_releases":
+            return {
+                "events": [],
+                "current_week": [],
+                "previous_week": [],
+                "last_updated": "2026-08-02T10:00:00Z",
+                "status": "ready",
+                "horizon": {
+                    "horizon_start": "2026-07-18",
+                    "horizon_end": "2026-10-29",
+                    "coverage_ranges": [
+                        {"from": "2026-07-18", "to": "2026-08-04", "status": "complete"},
+                        {"from": "2026-08-06", "to": "2026-10-29", "status": "complete"},
+                    ],
+                },
+                "coverage": {"complete": False},
+            }
+        if tab == "treasury_macro":
+            return {"events": [], "current_week": [], "previous_week": [],
+                    "last_updated": None, "status": "empty"}
+        return {"current_week": [], "previous_week": [], "last_updated": None,
+                "status": "empty"}
+
+    monkeypatch.setattr(_snap_svc, "get_snapshot", _fake_get_snapshot)
+
+    from services.calendar_curation import get_canonical_macro_window as real_gcmw
+    captured: list[dict] = []
+
+    def _capture_gcmw(*args, **kwargs):
+        captured.append(kwargs)
+        return real_gcmw(*args, **kwargs)
+
+    monkeypatch.setattr(top_svc, "get_canonical_macro_window", _capture_gcmw)
+
+    env = get_top_catalysts(today=date(2026, 8, 2))
+    assert len(captured) == 1
+    passed_envelope = captured[0].get("economic_envelope") or {}
+    assert passed_envelope.get("empty_reason") == "coverage_gap"
+    assert passed_envelope.get("coverage_complete") is False
+    assert env["macro_source_event_count"] == 0

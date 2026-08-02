@@ -1680,6 +1680,93 @@ def test_get_canonical_macro_window_preloaded_coverage_false(monkeypatch):
     assert out["coverage_complete"] is False
 
 
+def test_preloaded_empty_events_authoritative(monkeypatch):
+    """Explicit empty `events` in preloaded envelope does not fall back."""
+    from services import calendar_snapshot_service as _snap_svc
+    from services.calendar_curation import get_canonical_macro_window
+
+    monkeypatch.setattr(_snap_svc, "get_snapshot", lambda tab: {"events": []})
+
+    envelope = {
+        "events": [],
+        "current_week": [
+            _make_test_econ(eventName="CPI MoM", title="CPI MoM",
+                            event_family="cpi", date="2026-07-29"),
+        ],
+        "last_updated": "2026-08-02T10:00:00Z",
+        "status": "ready",
+        "coverage_complete": True,
+        "empty_reason": "no_events_in_window",
+    }
+
+    out = get_canonical_macro_window(
+        "2026-08-01", "2026-08-31",
+        include_treasury_context=False,
+        economic_envelope=envelope,
+    )
+    assert out["macro_logical_events"] == []
+    assert out["empty_reason"] == "no_events_in_window"
+    assert out["coverage_complete"] is True
+
+
+def test_preloaded_populated_events_authoritative(monkeypatch):
+    """Preloaded `events` are used exactly, ignoring current_week."""
+    from services import calendar_snapshot_service as _snap_svc
+    from services.calendar_curation import get_canonical_macro_window
+
+    monkeypatch.setattr(_snap_svc, "get_snapshot", lambda tab: {"events": []})
+
+    envelope = {
+        "events": [
+            _make_test_econ(eventName="PPI MoM", title="PPI MoM",
+                            event_family="ppi", date="2026-08-05"),
+        ],
+        "current_week": [
+            _make_test_econ(eventName="CPI MoM", title="CPI MoM",
+                            event_family="cpi", date="2026-08-06"),
+        ],
+        "last_updated": "2026-08-02T10:00:00Z",
+        "status": "ready",
+        "coverage_complete": True,
+    }
+
+    out = get_canonical_macro_window(
+        "2026-08-01", "2026-08-31",
+        include_treasury_context=False,
+        economic_envelope=envelope,
+    )
+    assert len(out["macro_logical_events"]) == 1
+    assert out["macro_logical_events"][0]["event_family"] == "ppi"
+
+
+def test_legacy_envelope_without_events_uses_current_week(monkeypatch):
+    """Non-preloaded legacy envelope without `events` falls back to current_week."""
+    from services import calendar_snapshot_service as _snap_svc
+    from services.calendar_curation import get_canonical_macro_window
+
+    def _fake_get_snapshot(tab: str):
+        if tab == "economic_releases":
+            return {
+                "current_week": [
+                    _make_test_econ(eventName="CPI MoM", title="CPI MoM",
+                                    event_family="cpi", date="2026-08-05"),
+                ],
+                "events": [],
+                "last_updated": "2026-08-02T10:00:00Z",
+                "status": "ready",
+            }
+        return {"events": [], "last_updated": None, "status": "empty"}
+
+    monkeypatch.setattr(_snap_svc, "get_snapshot", _fake_get_snapshot)
+
+    out = get_canonical_macro_window(
+        "2026-08-01", "2026-08-31",
+        include_treasury_context=False,
+    )
+    assert len(out["macro_logical_events"]) == 1
+    assert out["macro_logical_events"][0]["event_family"] == "cpi"
+
+
 if __name__ == "__main__":
     # Tiny self-running mode without pytest.
     fns = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]

@@ -997,8 +997,14 @@ def get_canonical_macro_window(
     source deduplication.
 
     Callers that already hold a snapshot envelope (e.g. the Economic Releases
-    requested-window route) may pass `economic_envelope` / `treasury_envelope`
-    to avoid a second snapshot read.
+    requested-window route, or Home/Calendar Top planning-week consumers that
+    used `get_snapshot_window`) may pass `economic_envelope` /
+    `treasury_envelope` to avoid a second snapshot read and to preserve the
+    authoritative coverage-range verdict.
+
+    When an envelope is explicitly supplied and contains the `events` key,
+    that exact array is authoritative — even if it is empty.  Only legacy
+    non-preloaded snapshots fall back to `current_week`.
 
     Returns a dict with:
       • window_start / window_end
@@ -1007,6 +1013,9 @@ def get_canonical_macro_window(
       • macro_logical_events (economic + de-duplicated treasury)
       • source_counts
       • last_updated
+      • coverage_complete, empty_reason, coverage, coverage_ranges
+      • horizon_start, horizon_end, actual_start, actual_end
+      • status, is_stale
 
     This function makes ZERO provider calls and ZERO snapshot writes.
     """
@@ -1022,6 +1031,7 @@ def get_canonical_macro_window(
     horizon_start: Optional[str] = None
     horizon_end: Optional[str] = None
     coverage_complete = True
+    empty_reason: Optional[str] = None
 
     # Economic releases: prefer the rolling-horizon `events` collection.
     # If the caller already loaded the envelope, reuse it to avoid a second
@@ -1030,7 +1040,16 @@ def get_canonical_macro_window(
     if econ_env.get("last_updated"):
         last_updated_candidates.append(str(econ_env["last_updated"]))
     econ_horizon = econ_env.get("horizon") or {}
-    econ_pool = econ_env.get("events") or econ_env.get("current_week") or []
+
+    # Presence-based source selection.  A preloaded envelope with an explicit
+    # (possibly empty) `events` key is authoritative; never fall back to
+    # current_week for those callers.  Legacy callers that did not preload an
+    # envelope keep the previous fallback behavior.
+    if economic_envelope is not None and "events" in economic_envelope:
+        econ_pool = list(economic_envelope.get("events") or [])
+    else:
+        econ_pool = econ_env.get("events") or econ_env.get("current_week") or []
+
     for ev in econ_pool:
         if not isinstance(ev, dict):
             continue
@@ -1056,6 +1075,7 @@ def get_canonical_macro_window(
     # verdict, trust it over the coarse horizon-end check.
     if economic_envelope is not None and "coverage_complete" in economic_envelope:
         coverage_complete = bool(economic_envelope["coverage_complete"])
+        empty_reason = economic_envelope.get("empty_reason")
     else:
         h_start = (econ_horizon.get("horizon_start") or "")
         if not has_broad_horizon:
@@ -1069,10 +1089,15 @@ def get_canonical_macro_window(
 
     # Treasury: optional point-in-time context.
     if include_treasury_context:
-        tres_env = treasury_envelope if treasury_envelope is not None else get_snapshot("treasury_macro") or {}
+        if treasury_envelope is not None and "events" in treasury_envelope:
+            tres_env = treasury_envelope
+            tres_pool = list(treasury_envelope.get("events") or [])
+        else:
+            tres_env = treasury_envelope if treasury_envelope is not None else get_snapshot("treasury_macro") or {}
+            tres_pool = tres_env.get("events") or tres_env.get("current_week") or []
+
         if tres_env.get("last_updated"):
             last_updated_candidates.append(str(tres_env["last_updated"]))
-        tres_pool = tres_env.get("events") or tres_env.get("current_week") or []
         for ev in tres_pool:
             if not isinstance(ev, dict):
                 continue
@@ -1115,6 +1140,17 @@ def get_canonical_macro_window(
 
     tres_unique = [ev for ev in tres_curated if not _treasury_is_duplicate(ev)]
 
+    # Preserve authoritative coverage metadata from the source envelope when
+    # available, enriching the canonical output without re-deriving it.
+    coverage_ranges = econ_env.get("coverage_ranges") or (
+        (econ_env.get("meta") or {}).get("coverage_ranges") if isinstance(econ_env.get("meta"), dict) else None
+    ) or []
+    actual_dates = sorted(
+        (e.get("date") or "")[:10] for e in econ_source if (e.get("date") or "")[:10]
+    )
+    actual_start = actual_dates[0] if actual_dates else None
+    actual_end = actual_dates[-1] if actual_dates else None
+
     return {
         "window_start": start_date,
         "window_end": end_date,
@@ -1129,8 +1165,15 @@ def get_canonical_macro_window(
         },
         "last_updated": max(last_updated_candidates) if last_updated_candidates else None,
         "coverage_complete": coverage_complete,
+        "empty_reason": empty_reason,
+        "coverage": cov or {"complete": coverage_complete},
+        "coverage_ranges": coverage_ranges,
         "horizon_start": horizon_start,
         "horizon_end": horizon_end,
+        "actual_start": actual_start,
+        "actual_end": actual_end,
+        "status": econ_env.get("status"),
+        "is_stale": econ_env.get("is_stale"),
         "source_windows": source_windows,
     }
 

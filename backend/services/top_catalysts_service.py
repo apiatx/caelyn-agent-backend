@@ -59,6 +59,7 @@ from services.calendar_curation import (
 )
 from services.calendar_snapshot_service import (
     get_snapshot as _get_snapshot,
+    get_snapshot_window as _get_snapshot_window,
 )
 
 
@@ -720,12 +721,21 @@ def get_top_catalysts(
     # Releases or Home Top Catalysts.  Callers that already computed the window
     # (e.g. Home) pass it in so the pipeline runs exactly once per request.
     if macro_window is None:
+        # Use the snapshot service's authoritative range selector for Economic
+        # Releases so internal provider gaps and covered-empty windows are
+        # reported exactly as the snapshot sees them.
+        econ_envelope = _get_snapshot_window(
+            "economic_releases", view="week", date=week_start_str,
+        )
+        tres_envelope = _get_snapshot("treasury_macro")
         macro_window = get_canonical_macro_window(
             week_start_str,
             week_end_str,
             include_treasury_context=True,
             watchlist=watchlist,
             portfolio=portfolio,
+            economic_envelope=econ_envelope,
+            treasury_envelope=tres_envelope,
         )
     if macro_window.get("last_updated"):
         last_updated_candidates.append(str(macro_window["last_updated"]))

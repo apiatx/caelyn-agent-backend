@@ -1278,6 +1278,9 @@ def _home_snapshot(events, horizon_start="2026-07-18", horizon_end="2026-10-29")
             "horizon_start": horizon_start,
             "horizon_end":   horizon_end,
             "event_count":   len(events),
+            "coverage_ranges": [
+                {"from": horizon_start, "to": horizon_end, "status": "complete"},
+            ],
         },
         "coverage": {
             "complete":     True,
@@ -1495,7 +1498,7 @@ def test_home_legacy_snapshot_incomplete_for_future_week():
     with mock.patch("config.FMP_API_KEY", None):
         result = _run_home(date(2026, 8, 1), econ_env)
     assert result["coverage_complete"] is False
-    assert result["empty_reason"] == "snapshot_horizon_incomplete"
+    assert result["empty_reason"] == "legacy_snapshot_without_horizon"
     assert len(result["catalysts"]) == 0
 
 
@@ -1531,7 +1534,7 @@ def test_home_no_provider_fetch_when_horizon_incomplete():
     assert rt.call_count == 0
     assert result["refresh_attempted"] is False
     assert result["coverage_complete"] is False
-    assert result["empty_reason"] == "snapshot_horizon_incomplete"
+    assert result["empty_reason"] == "legacy_snapshot_without_horizon"
 
 
 def test_home_computes_canonical_macro_window_once():
@@ -1602,6 +1605,70 @@ def test_home_computes_canonical_macro_window_once():
     assert captured_macro_window is not None
     assert captured_macro_window["macro_logical_events"][0]["eventName"] == "CPI MoM"
     assert result["coverage_complete"] is True
+
+
+def _home_snapshot_with_ranges(events, ranges, horizon_start="2026-07-18", horizon_end="2026-10-29"):
+    """Fixture with explicit coverage_ranges for coverage-semantics tests."""
+    env = _home_snapshot(events, horizon_start, horizon_end)
+    env["horizon"]["coverage_ranges"] = ranges
+    return env
+
+
+def test_home_internal_provider_gap_reports_coverage_gap():
+    """A failed chunk inside the planning window reports coverage_gap."""
+    env = _home_snapshot_with_ranges(
+        events=[],
+        ranges=[
+            {"from": "2026-07-18", "to": "2026-08-04", "status": "complete"},
+            {"from": "2026-08-06", "to": "2026-10-29", "status": "complete"},
+            # 2026-08-05 is a failed/uncovered gap
+        ],
+    )
+    result = _run_home(date(2026, 8, 1), env)
+    assert result["coverage_complete"] is False
+    assert result["empty_reason"] == "coverage_gap"
+
+
+def test_home_covered_empty_week_reports_no_events():
+    """A covered window with zero events reports no_events_in_window."""
+    env = _home_snapshot_with_ranges(
+        events=[],
+        ranges=[{"from": "2026-07-18", "to": "2026-10-29", "status": "complete"}],
+    )
+    result = _run_home(date(2026, 8, 1), env)
+    assert result["coverage_complete"] is True
+    assert result["empty_reason"] == "no_events_in_window"
+
+
+def test_home_outside_horizon_reports_outside_horizon():
+    """A window outside stored coverage reports outside_horizon."""
+    env = _home_snapshot_with_ranges(
+        events=[],
+        ranges=[{"from": "2026-07-18", "to": "2026-07-31", "status": "complete"}],
+        horizon_start="2026-07-18",
+        horizon_end="2026-07-31",
+    )
+    result = _run_home(date(2026, 8, 1), env)
+    assert result["coverage_complete"] is False
+    assert result["empty_reason"] == "outside_horizon"
+
+
+def test_home_coverage_metadata_survives_canonical_output():
+    """Coverage ranges, actual bounds and horizon metadata flow through."""
+    env = _home_snapshot_with_ranges(
+        events=[
+            _make_econ(id="cpi", title="CPI MoM", eventName="CPI MoM",
+                       event_family="cpi", signal_tier="major", country="US",
+                       date="2026-08-05"),
+        ],
+        ranges=[{"from": "2026-07-18", "to": "2026-10-29", "status": "complete"}],
+        horizon_start="2026-07-18",
+        horizon_end="2026-10-29",
+    )
+    result = _run_home(date(2026, 8, 1), env)
+    assert result["coverage_complete"] is True
+    assert result["horizon_start"] == "2026-07-18"
+    assert result["horizon_end"] == "2026-10-29"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

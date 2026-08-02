@@ -21,6 +21,10 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from services.calendar_curation import get_canonical_macro_window
+from services.calendar_snapshot_service import (
+    get_snapshot as _get_snapshot,
+    get_snapshot_window as _get_snapshot_window,
+)
 from services.top_catalysts_service import resolve_top_catalysts_week
 
 
@@ -558,12 +562,21 @@ async def build_home_top_catalysts(
     # source dedupe so Home Top Catalysts never diverges from Calendar Top or
     # Economic Releases.  Pure snapshot read — no provider calls, no request-
     # time refreshes.
+    # Use the snapshot service's authoritative range selector for Economic
+    # Releases so internal provider gaps and covered-empty windows are reported
+    # exactly as the snapshot sees them.
+    econ_envelope = _get_snapshot_window(
+        "economic_releases", view="week", date=week_start,
+    )
+    tres_envelope = _get_snapshot("treasury_macro")
     macro_window = get_canonical_macro_window(
         week_start,
         week_end,
         include_treasury_context=True,
         watchlist=set(),
         portfolio=set(),
+        economic_envelope=econ_envelope,
+        treasury_envelope=tres_envelope,
     )
     macro_logical = macro_window.get("macro_logical_events") or []
     source_windows = macro_window.get("source_windows") or {}
@@ -591,13 +604,17 @@ async def build_home_top_catalysts(
     earnings_flat.sort(key=lambda e: -float(e.get("rankScore") or 0))
 
     if not macro_logical:
-        if window_mode == "next_week_planning":
-            empty_reason = (
-                "snapshot_horizon_incomplete"
-                if not coverage_complete else "no_events_in_planning_window"
-            )
-        elif window_mode == "current_week":
-            empty_reason = "current_week_snapshots_empty"
+        # Prefer the authoritative empty_reason from the canonical window
+        # (e.g. coverage_gap, outside_horizon, no_events_in_window) when available.
+        empty_reason = macro_window.get("empty_reason")
+        if not empty_reason:
+            if window_mode == "next_week_planning":
+                empty_reason = (
+                    "snapshot_horizon_incomplete"
+                    if not coverage_complete else "no_events_in_planning_window"
+                )
+            elif window_mode == "current_week":
+                empty_reason = "current_week_snapshots_empty"
 
     total_source = (
         len(earnings_flat) + len(other_flat)
