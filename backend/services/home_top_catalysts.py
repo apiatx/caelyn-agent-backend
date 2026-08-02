@@ -1,34 +1,26 @@
 """
 Home Compact Top Catalysts feed — GET /api/home/top-catalysts.
 
-Reuses existing cached data sources only (zero new external API calls during
-normal Mon–Fri operation):
+Reuses existing cached data sources only (zero external API calls):
   • top_catalysts_service.get_top_catalysts() — earnings + other (IPO/split/div)
-  • calendar_snapshot_service.get_snapshot()  — full macro pool for grouping
+  • services.calendar_curation.get_canonical_macro_window() — macro logical events
 
 Weekend planning-window behavior (Sat/Sun):
   On Saturday/Sunday ET the planning window advances to the NEXT Mon–Fri week.
-  Snapshot data in Neon still holds the previous week, so we fetch next-week
-  macro events directly from FMP using _fetch_tab (same function the snapshot
-  service uses), cache them in process-local memory for 23 h, and return them
-  without touching the Neon snapshot slots that Calendar uses.
+  The shared rolling-horizon snapshot already covers that week, so Home reads
+  the same canonical macro window as Calendar Top Catalysts and Economic
+  Releases.  No request-time provider refreshes.
 
 The Calendar page's existing /api/catalysts/top endpoint is NOT modified.
 This module applies its own grouping/ranking/limiting layer on top.
 """
 from __future__ import annotations
 
-import asyncio
 import re
-import time as _time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
-from services.calendar_curation import (
-    curate_economic_logical_events,
-    curate_events as _curate_events,
-)
-from services.calendar_snapshot_service import HORIZON_TABS as _HORIZON_TABS
+from services.calendar_curation import get_canonical_macro_window
 from services.top_catalysts_service import resolve_top_catalysts_week
 
 
@@ -161,16 +153,7 @@ _MAX_EARNINGS      = 3
 _MAX_OTHER         = 2
 _MAX_TOTAL         = 8
 
-# Tabs fetched for next-week planning (in-memory only, not written to Neon)
-_PLANNING_TABS = ("economic_releases", "treasury_macro")
 
-# In-memory cache for planning-window data (Sat/Sun next-week fetch).
-# Keyed by "{tab}:{monday_iso}:{friday_iso}". NOT shared with calendar snapshots.
-_planning_cache: dict[str, dict] = {}
-_planning_locks: dict[str, asyncio.Lock] = {}
-
-# 23 h — survives from Saturday morning through Sunday evening.
-_PLANNING_CACHE_TTL = 23 * 3600
 
 
 # ── Planning window helper ────────────────────────────────────────────────────
@@ -269,172 +252,6 @@ def _is_us_macro(ev: dict) -> bool:
     if str(ev.get("companyName") or "").strip().upper() == "US TREASURY":
         return True
     return False
-
-
-# ── Planning-window in-memory fetch (Sat/Sun only) ───────────────────────────
-
-def _get_planning_lock(key: str) -> asyncio.Lock:
-    """Return (creating if absent) the per-key asyncio Lock."""
-    if key not in _planning_locks:
-        _planning_locks[key] = asyncio.Lock()
-    return _planning_locks[key]
-
-
-async def _fetch_planning_tab(
-    tab: str,
-    monday: date,
-    friday: date,
-    fmp_key: str,
-) -> tuple[list[dict], str]:
-    """
-    Fetch events for one tab for the planning window (next Mon–Fri).
-
-    Results are stored in the process-local `_planning_cache` only — they are
-    NOT written to Neon and do NOT touch the calendar snapshot slots that the
-    Calendar page reads.
-
-    Returns (events, cache_status) where cache_status ∈
-      {"hit", "miss_fetched", "miss_fetch_error", "no_fmp_key"}.
-    """
-    cache_key = f"{tab}:{monday.isoformat()}:{friday.isoformat()}"
-
-    # Check in-memory cache (outside lock — fast path)
-    cached = _planning_cache.get(cache_key)
-    if cached and (_time.monotonic() - cached["fetched_at"]) < _PLANNING_CACHE_TTL:
-        print(
-            f"[home_top_catalysts] planning cache HIT  tab={tab} "
-            f"events={len(cached['events'])} key={cache_key}"
-        )
-        return cached["events"], "hit"
-
-    if not fmp_key:
-        print(f"[home_top_catalysts] planning fetch SKIP tab={tab}: no FMP key")
-        return [], "no_fmp_key"
-
-    # Acquire per-key lock to prevent concurrent duplicate fetches
-    lock = _get_planning_lock(cache_key)
-    async with lock:
-        # Double-check after acquiring lock
-        cached = _planning_cache.get(cache_key)
-        if cached and (_time.monotonic() - cached["fetched_at"]) < _PLANNING_CACHE_TTL:
-            return cached["events"], "hit"
-
-        from_date = monday.strftime("%Y-%m-%d")
-        to_date   = friday.strftime("%Y-%m-%d")
-        print(
-            f"[home_top_catalysts] planning fetch MISS tab={tab} "
-            f"window={from_date}→{to_date}"
-        )
-        try:
-            from services.catalyst_calendar_service import (
-                CatalystFMP,
-                _fetch_tab,
-                _load_watchlist_symbols,
-                _load_portfolio_symbols,
-            )
-            fmp       = CatalystFMP(fmp_key)
-            watchlist = _load_watchlist_symbols()
-            portfolio = _load_portfolio_symbols()
-
-            events, err = await _fetch_tab(
-                fmp, tab, from_date, to_date, watchlist, portfolio,
-                limit=1000, mode="upcoming",
-            )
-            if err:
-                print(f"[home_top_catalysts] planning fetch error tab={tab}: {err}")
-
-            # Restrict to exact window (some fetchers over-return)
-            events = [
-                e for e in events
-                if from_date <= (e.get("date") or "") <= to_date
-            ]
-            print(
-                f"[home_top_catalysts] planning fetch tab={tab} "
-                f"events={len(events)} err={err}"
-            )
-
-            _planning_cache[cache_key] = {
-                "events": events,
-                "fetched_at": _time.monotonic(),
-            }
-            return events, "miss_fetched"
-
-        except Exception as exc:
-            print(f"[home_top_catalysts] planning fetch exception tab={tab}: {exc}")
-            _planning_cache[cache_key] = {
-                "events": [],
-                "fetched_at": _time.monotonic(),
-            }
-            return [], "miss_fetch_error"
-
-
-async def _ensure_planning_data(
-    monday: date,
-    friday: date,
-    fmp_key: str,
-) -> tuple[list[dict], dict]:
-    """
-    For next-week planning: ensure macro events exist for [monday, friday].
-    Runs _fetch_planning_tab for each planning tab concurrently.
-    Returns (all_events, diagnostics_dict).
-    """
-    tasks = {
-        tab: asyncio.create_task(_fetch_planning_tab(tab, monday, friday, fmp_key))
-        for tab in _PLANNING_TABS
-    }
-    all_events: list[dict] = []
-    diag: dict[str, Any] = {}
-    refresh_attempted = False
-    refresh_succeeded = False
-
-    for tab, task in tasks.items():
-        events, status = await task
-        all_events.extend(events)
-        diag[tab] = {"cache_status": status, "count": len(events)}
-        if status in ("miss_fetched", "miss_fetch_error"):
-            refresh_attempted = True
-        if status == "miss_fetched":
-            refresh_succeeded = True
-
-    diag["refresh_attempted"] = refresh_attempted
-    diag["refresh_succeeded"] = refresh_succeeded
-    return all_events, diag
-
-
-# ── Proactive Saturday warmup (called by scheduler in main.py) ───────────────
-
-async def warm_planning_window() -> None:
-    """
-    Pre-warm next-week planning data on Saturday ET.
-    Safe to call concurrently — lock inside _fetch_planning_tab prevents storms.
-    Called by the home_planning_warmup_loop background task in main.py.
-    """
-    from config import FMP_API_KEY as _fmp_key
-    if not _fmp_key:
-        print("[home_top_catalysts] warm_planning_window: no FMP key, skip")
-        return
-
-    monday, friday, mode = _planning_window()
-    if mode != "next_week_planning":
-        print(
-            f"[home_top_catalysts] warm_planning_window: mode={mode!r} "
-            f"(not Sat/Sun), skip"
-        )
-        return
-
-    print(
-        f"[home_top_catalysts] warm_planning_window: "
-        f"warming {monday.isoformat()}→{friday.isoformat()}"
-    )
-    for tab in _PLANNING_TABS:
-        try:
-            events, status = await _fetch_planning_tab(tab, monday, friday, _fmp_key)
-            print(
-                f"[home_top_catalysts] warm_planning_window tab={tab} "
-                f"events={len(events)} status={status}"
-            )
-        except Exception as exc:
-            print(f"[home_top_catalysts] warm_planning_window error tab={tab}: {exc}")
 
 
 # ── Home logical-event helpers ─────────────────────────────────────────────
@@ -714,9 +531,9 @@ async def build_home_top_catalysts(
     """
     Build the compact Home Top Catalysts feed.
 
-    Zero new external API calls during Mon–Fri (pure cache reads).
-    On Sat/Sun, fetches next-week macro events from FMP on-demand and caches
-    them in process memory for 23 h — does NOT touch Neon or Calendar snapshots.
+    Zero external API calls — pure reads from existing cached services.
+    On Sat/Sun the planning window advances to the next Mon–Fri week, which is
+    already covered by the shared rolling-horizon snapshot.
 
     `today_override` (ET date) is for testing/validation only.
 
@@ -725,7 +542,6 @@ async def build_home_top_catalysts(
       Sat–Sun → next week      (window_mode="next_week_planning")
     """
     from services.top_catalysts_service import get_top_catalysts
-    from services.calendar_snapshot_service import get_snapshot as _get_snapshot
 
     monday, friday, window_mode = _planning_window(today_override)
     week_start   = monday.isoformat()
@@ -756,152 +572,41 @@ async def build_home_top_catalysts(
     earnings_flat.sort(key=lambda e: -float(e.get("rankScore") or 0))
 
     # ── 2. Macro pool ────────────────────────────────────────────────────────
-    # Read from the snapshot's broad-horizon `events` collection (preferred)
-    # or fall back to `current_week` for backward compatibility.  No separate
-    # FMP call is made from Home — the snapshot already caches the rolling
-    # forward horizon.
-    macro_raw: list[dict] = []
-    snapshot_source_windows: dict[str, str] = {}
-    coverage_complete = True
-    horizon_start: Optional[str] = None
-    horizon_end: Optional[str] = None
+    # One canonical reader/transformation handles both sources and the cross-
+    # source dedupe so Home Top Catalysts never diverges from Calendar Top or
+    # Economic Releases.  Pure snapshot read — no provider calls, no request-
+    # time refreshes.
+    macro_window = get_canonical_macro_window(
+        week_start,
+        week_end,
+        include_treasury_context=True,
+        watchlist=set(),
+        portfolio=set(),
+    )
+    macro_logical = macro_window.get("macro_logical_events") or []
+    source_windows = macro_window.get("source_windows") or {}
+    coverage_complete = bool(macro_window.get("coverage_complete"))
+    horizon_start = macro_window.get("horizon_start")
+    horizon_end = macro_window.get("horizon_end")
 
-    for tab in _PLANNING_TABS:
-        try:
-            env = _get_snapshot(tab) or {}
-            horizon = env.get("horizon") or {}
-            stored_horizon_end = (horizon.get("horizon_end") or "")
-
-            # Prefer broad events collection (rolling horizon).
-            all_evts = env.get("events") or []
-            if all_evts:
-                found = []
-                for ev in all_evts:
-                    if not isinstance(ev, dict):
-                        continue
-                    d = _parse_date(ev.get("date"))
-                    if d and monday <= d <= friday:
-                        found.append(ev)
-                macro_raw.extend(found)
-
-                if horizon.get("horizon_start") and not horizon_start:
-                    horizon_start = horizon.get("horizon_start")
-                if stored_horizon_end and (not horizon_end or stored_horizon_end > horizon_end):
-                    horizon_end = stored_horizon_end
-
-                # Check coverage: horizon must cover the planning week.
-                h_start = (horizon.get("horizon_start") or "")
-                if (
-                    (stored_horizon_end and stored_horizon_end < week_end)
-                    or (h_start and h_start > week_start)
-                ):
-                    coverage_complete = False
-            else:
-                # Fall back to current_week for old snapshots without events.
-                found_legacy = []
-                for ev in (env.get("current_week") or []):
-                    if not isinstance(ev, dict):
-                        continue
-                    d = _parse_date(ev.get("date"))
-                    if d and monday <= d <= friday:
-                        found_legacy.append(ev)
-                macro_raw.extend(found_legacy)
-                if not found_legacy and tab in _HORIZON_TABS:
-                    # A legacy snapshot without a broad horizon only covers the
-                    # current (and previous) week.  A planning window outside
-                    # that span is not covered by cached data — report it so a
-                    # refresh is requested instead of a false empty state.
-                    # Non-horizon tabs (e.g. treasury_macro) are point-in-time
-                    # and never cover a future planning week, so they must not
-                    # flip the coverage flag.
-                    coverage_complete = False
-
-            stored = (env.get("window") or {})
-            cov = env.get("coverage") or {}
-            snapshot_source_windows[tab] = (
-                f"{stored.get('stored_from','?')}→{stored.get('stored_to','?')}"
-                f" horizon_end={stored_horizon_end or 'N/A'}"
-                f" coverage={'ok' if cov.get('complete') else 'incomplete'}"
+    if not macro_logical:
+        if window_mode == "next_week_planning":
+            empty_reason = (
+                "snapshot_horizon_incomplete"
+                if not coverage_complete else "no_events_in_planning_window"
             )
-        except Exception as exc:
-            print(f"[home_top_catalysts] snapshot read failed tab={tab}: {exc}")
+        elif window_mode == "current_week":
+            empty_reason = "current_week_snapshots_empty"
 
-    # On Sat/Sun with no planning-window events: if coverage is incomplete,
-    # the snapshot needs a refresh.  Trigger it via the snapshot service's
-    # existing guarded path (not a direct FMP call from Home).  The stale
-    # snapshot's status (with empty_reason) is returned to the caller.
-    if window_mode == "next_week_planning" and not macro_raw:
-        if not coverage_complete:
-            # Snapshot horizon doesn't reach the planning Friday.
-            # Trigger a request-time background refresh through the snapshot
-            # service (same guarded path as /api/catalysts/events).
-            try:
-                from config import FMP_API_KEY as _fmp_key
-            except Exception:
-                _fmp_key = None
-            if _fmp_key:
-                print(
-                    f"[home_top_catalysts] next_week_planning: snapshots incomplete "
-                    f"for {week_start}→{week_end}, requesting snapshot refresh"
-                )
-                refresh_attempted = True
-                import asyncio as _aio
-                from services.calendar_snapshot_service import refresh_tab as _rt
-                for tab in _PLANNING_TABS:
-                    try:
-                        _aio.create_task(_rt(tab, _fmp_key))
-                    except Exception as _rte:
-                        print(f"[home_top_catalysts] snapshot refresh trigger error tab={tab}: {_rte}")
-                        refresh_succeeded = False
-                    else:
-                        refresh_succeeded = True if not refresh_succeeded else refresh_succeeded
-            empty_reason = "snapshot_horizon_incomplete"
-        else:
-            # Complete horizon but genuinely zero events in the planning window.
-            empty_reason = "no_events_in_planning_window"
-
-    elif window_mode == "current_week" and not macro_raw:
-        empty_reason = "current_week_snapshots_empty"
-
-    total_source = len(earnings_flat) + len(macro_raw) + len(other_flat)
-
-    # ── 3. Categorize and group macro events ─────────────────────────────────
-    #    3a. Split by source so each follows its correct canonical curation path.
-    econ_raw = [
-        ev for ev in macro_raw
-        if (ev.get("eventType") or "").lower() in ("economic_release", "economic_releases")
-    ]
-    tres_raw = [
-        ev for ev in macro_raw
-        if (ev.get("eventType") or "").lower() in ("treasury_rate", "treasury_macro")
-    ]
-
-    #    3b. Shared canonical logical-event transformation for economic releases.
-    econ_logical = curate_economic_logical_events(
-        econ_raw, cap=500, watchlist=set(), portfolio=set(),
+    total_source = (
+        len(earnings_flat) + len(other_flat)
+        + macro_window.get("source_counts", {}).get("economic_source", 0)
+        + macro_window.get("source_counts", {}).get("treasury_source", 0)
     )
 
-    #    3c. Treasury/macro is curated separately so unique yield/curve records
-    #        are preserved and not swallowed by the economic family grouper.
-    tres_curated = _curate_events("treasury_macro", tres_raw, cap=500)
-
-    #    3d. Deterministic cross-source dedupe.  Scheduled dated auctions already
-    #        have a canonical Economic Releases representation; drop treasury_macro
-    #        rows that duplicate them.  Unique point-in-time records remain.
-    econ_keys: set[tuple[str, str]] = set()
-    for ev in econ_logical:
-        title = (ev.get("display_title") or ev.get("title") or ev.get("eventName") or "").strip().lower()
-        econ_keys.add((title, (ev.get("date") or "")[:10]))
-
-    def _treasury_is_duplicate(ev: dict) -> bool:
-        title = (ev.get("eventName") or ev.get("title") or ev.get("indicatorName") or "").strip().lower()
-        return (title, (ev.get("date") or "")[:10]) in econ_keys
-
-    tres_unique = [ev for ev in tres_curated if not _treasury_is_duplicate(ev)]
-    macro_logical = econ_logical + tres_unique
-
-    #    3e. Exclude non-US macro events.  US Treasury point-in-time records are
-    #        kept even when country is missing because the source tab is US Treasury.
+    # ── 3. Categorize and group macro events ─────────────────────────────────
+    #    Exclude non-US macro events.  US Treasury point-in-time records are
+    #    kept even when country is missing because the source tab is US Treasury.
     macro_us = [ev for ev in macro_logical if _classify_macro(ev) and _is_us_macro(ev)]
 
     #    3f. Classify each canonical logical event into Home categories.
@@ -982,7 +687,7 @@ async def build_home_top_catalysts(
         "refresh_attempted":    refresh_attempted,
         "refresh_succeeded":    refresh_succeeded,
         "cache_status":         cache_statuses,
-        "source_windows":       snapshot_source_windows,
+            "source_windows":       source_windows,
         "empty_reason":         empty_reason,
         # Rolling-horizon coverage
         "coverage_complete":    coverage_complete,

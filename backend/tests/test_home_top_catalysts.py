@@ -1517,6 +1517,23 @@ def test_home_no_provider_fetch_when_horizon_complete():
     assert result["coverage_complete"] is True
 
 
+def test_home_no_provider_fetch_when_horizon_incomplete():
+    """No refresh_tab (provider) call is made even when the horizon is incomplete."""
+    cw = [_make_econ(id="jul", title="CPI MoM", eventName="CPI MoM",
+                     event_family="cpi", signal_tier="major",
+                     signal_reason="r", country="US", date="2026-07-29")]
+    econ_env = _home_legacy_snapshot(cw=cw, pw=[])
+    with mock.patch(
+        "services.calendar_snapshot_service.refresh_tab",
+        new=mock.AsyncMock(),
+    ) as rt:
+        result = _run_home(date(2026, 8, 1), econ_env)
+    assert rt.call_count == 0
+    assert result["refresh_attempted"] is False
+    assert result["coverage_complete"] is False
+    assert result["empty_reason"] == "snapshot_horizon_incomplete"
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Unified window + canonical tier regression tests (Aug 3–7, 2026)
 # ═══════════════════════════════════════════════════════════════════════════════

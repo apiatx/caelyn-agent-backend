@@ -1502,6 +1502,126 @@ def test_curate_economic_logical_events_major_child_establishes_parent_tier():
     assert "Monthly payroll release" in emp["signal_reason"]
 
 
+# ── Canonical macro-window tests ───────────────────────────────────────────
+
+def _make_test_econ(**kw) -> dict:
+    defaults = {
+        "eventType": "economic_release",
+        "country": "US",
+        "date": "2026-08-05",
+        "signal_tier": "major",
+        "signal_reason": "Test release",
+    }
+    defaults.update(kw)
+    return _build_event(**defaults)
+
+
+def _make_test_treasury(**kw) -> dict:
+    defaults = {
+        "eventType": "treasury_rate",
+        "country": "US",
+        "date": "2026-08-05",
+        "maturity": "10Y",
+    }
+    defaults.update(kw)
+    return _build_event(**defaults)
+
+
+def test_get_canonical_macro_window_groups_families(monkeypatch):
+    """Economic releases are grouped into family cards."""
+    from services import calendar_snapshot_service as _snap_svc
+    snap = {
+        "economic_releases": {
+            "events": [
+                _make_test_econ(eventName="CPI MoM", title="CPI MoM",
+                                event_family="cpi"),
+                _make_test_econ(eventName="Core CPI MoM", title="Core CPI MoM",
+                                event_family="cpi"),
+            ],
+            "last_updated": "2026-08-02T10:00:00Z",
+            "status": "ready",
+            "horizon": {"horizon_start": "2026-08-01", "horizon_end": "2026-08-31"},
+        },
+        "treasury_macro": {"events": [], "last_updated": None, "status": "empty"},
+    }
+
+    def _fake_get_snapshot(tab: str):
+        return snap.get(tab, {"events": [], "last_updated": None, "status": "empty"})
+
+    monkeypatch.setattr(_snap_svc, "get_snapshot", _fake_get_snapshot)
+    from services.calendar_curation import get_canonical_macro_window
+
+    out = get_canonical_macro_window("2026-08-01", "2026-08-31")
+    assert len(out["macro_logical_events"]) == 1
+    assert out["macro_logical_events"][0]["event_family"] == "cpi"
+    assert out["source_counts"]["economic_source"] == 2
+    assert out["source_counts"]["economic_logical"] == 1
+    assert out["coverage_complete"] is True
+
+
+def test_get_canonical_macro_window_cross_source_dedupe(monkeypatch):
+    """Treasury events that duplicate economic releases are dropped."""
+    from services import calendar_snapshot_service as _snap_svc
+    snap = {
+        "economic_releases": {
+            "events": [
+                _make_test_econ(eventName="10-Year Treasury Auction",
+                                title="10-Year Treasury Auction",
+                                event_family="treasury_auction"),
+            ],
+            "last_updated": "2026-08-02T10:00:00Z",
+            "status": "ready",
+            "horizon": {"horizon_start": "2026-08-01", "horizon_end": "2026-08-31"},
+        },
+        "treasury_macro": {
+            "events": [
+                _make_test_treasury(indicatorName="10-Year Treasury Auction"),
+            ],
+            "last_updated": "2026-08-02T10:00:00Z",
+            "status": "ready",
+        },
+    }
+
+    def _fake_get_snapshot(tab: str):
+        return snap.get(tab, {"events": [], "last_updated": None, "status": "empty"})
+
+    monkeypatch.setattr(_snap_svc, "get_snapshot", _fake_get_snapshot)
+    from services.calendar_curation import get_canonical_macro_window
+
+    out = get_canonical_macro_window("2026-08-01", "2026-08-31")
+    assert out["source_counts"]["economic_source"] == 1
+    assert out["source_counts"]["treasury_source"] == 1
+    assert out["source_counts"]["economic_logical"] == 1
+    assert out["source_counts"]["treasury_logical"] == 0
+    assert len(out["macro_logical_events"]) == 1
+
+
+def test_get_canonical_macro_window_legacy_snapshot_incomplete(monkeypatch):
+    """Legacy snapshots without broad events report incomplete coverage."""
+    from services import calendar_snapshot_service as _snap_svc
+
+    def _fake_get_snapshot(tab: str):
+        if tab == "economic_releases":
+            return {
+                "current_week": [
+                    _make_test_econ(eventName="CPI MoM", title="CPI MoM",
+                                    event_family="cpi"),
+                ],
+                "previous_week": [],
+                "events": [],
+                "last_updated": "2026-08-02T10:00:00Z",
+                "status": "ready",
+            }
+        return {"events": [], "last_updated": None, "status": "empty"}
+
+    monkeypatch.setattr(_snap_svc, "get_snapshot", _fake_get_snapshot)
+    from services.calendar_curation import get_canonical_macro_window
+
+    out = get_canonical_macro_window("2026-08-01", "2026-08-31")
+    assert out["coverage_complete"] is False
+    assert len(out["macro_logical_events"]) == 1
+
+
 if __name__ == "__main__":
     # Tiny self-running mode without pytest.
     fns = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]

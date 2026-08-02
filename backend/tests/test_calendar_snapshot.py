@@ -1929,3 +1929,41 @@ class TestIntervalOverlay:
         assert any(r["status"] == "empty" and r["from"] == "2025-08-01" for r in merged)
         assert any(r["status"] == "failed" and r["from"] == "2025-09-01" and r["to"] == "2025-09-14" for r in merged)
         assert _window_covered_by_ranges(merged, "2025-10-05", "2025-10-09") is True
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Refresh coordinator coalescing
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestRefreshCoalescing:
+    """Duplicate concurrent refresh requests must share one in-flight task."""
+
+    def test_concurrent_refresh_tab_runs_once(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        calls: list[str] = []
+
+        async def _slow_core(tab: str, fmp_key: str) -> dict:
+            calls.append(tab)
+            await asyncio.sleep(0.05)
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _slow_core)
+
+        async def _run():
+            return await asyncio.gather(
+                _svc.refresh_tab("economic_releases", "dummy-key"),
+                _svc.refresh_tab("economic_releases", "dummy-key"),
+                _svc.refresh_tab("treasury_macro", "dummy-key"),
+            )
+
+        results = asyncio.run(_run())
+
+        # Each tab refreshed exactly once, but both economic_releases callers
+        # received the same shared result.
+        assert calls.count("economic_releases") == 1
+        assert calls.count("treasury_macro") == 1
+        assert results[0]["tab"] == "economic_releases"
+        assert results[1]["tab"] == "economic_releases"
+        assert results[2]["tab"] == "treasury_macro"

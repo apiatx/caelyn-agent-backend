@@ -47,6 +47,10 @@ def _seed_snapshots(monkeypatch, mapping: dict):
              "status": "empty"},
         )
     monkeypatch.setattr(top_svc, "_get_snapshot", fake)
+    # get_canonical_macro_window imports get_snapshot directly from the
+    # snapshot service, so patch that module attribute too.
+    from services import calendar_snapshot_service as _snap_svc
+    monkeypatch.setattr(_snap_svc, "get_snapshot", fake)
 
 
 def _seed_watchlist(monkeypatch, syms: set[str], pf: set[str] | None = None):

@@ -90,6 +90,11 @@ _lock = asyncio.Lock()
 # truthfully to the frontend.
 _bootstrapping: dict[str, bool] = {}
 
+# In-flight refresh coalescing.  One task per tab; concurrent callers await
+# the same result so duplicate provider work cannot happen.
+_refresh_tasks: dict[str, asyncio.Task] = {}
+_refresh_coordinator_lock = asyncio.Lock()
+
 
 # ── Neon-backed primary persistence ─────────────────────────────────────────
 
@@ -1182,9 +1187,42 @@ def get_snapshot_window(
 
 async def refresh_tab(tab: str, fmp_key: str) -> dict:
     """
-    Run the existing FMP fetcher for `tab`, promote current→previous,
-    save the new current_week and meta. Persists to Neon (source of truth)
-    and best-effort to disk (emergency fallback). Returns the new envelope.
+    Public refresh entry point.  Coordinates concurrent callers so that only
+    one refresh task per tab runs at a time and all awaiters share its result.
+
+    This is the macro refresh coordinator: multiple triggers (startup stale
+    check, weekly scheduler, manual backfill) may request the same tab, but
+    the first caller starts the work and later callers await the in-flight
+    task instead of running duplicate provider fetches.
+    """
+    if tab not in TARGET_TABS:
+        raise ValueError(f"refresh_tab: unsupported tab {tab!r}")
+    if not fmp_key:
+        print(f"[calendar_snapshot] refresh_tab({tab}) skipped: missing FMP key")
+        return get_snapshot(tab)
+
+    async with _refresh_coordinator_lock:
+        task = _refresh_tasks.get(tab)
+        if task is None or task.done():
+            task = asyncio.create_task(_refresh_tab_core(tab, fmp_key))
+            _refresh_tasks[tab] = task
+
+    try:
+        return await task
+    finally:
+        async with _refresh_coordinator_lock:
+            if _refresh_tasks.get(tab) is task:
+                _refresh_tasks.pop(tab, None)
+
+
+async def _refresh_tab_core(tab: str, fmp_key: str) -> dict:
+    """
+    Core refresh implementation for `tab`.  Do not call directly; use
+    `refresh_tab` so concurrent work is coalesced.
+
+    Runs the existing FMP fetcher, promotes current→previous, saves the new
+    current_week and meta, and persists to Neon (source of truth) and
+    best-effort to disk (emergency fallback). Returns the new envelope.
 
     For tabs in _TABS_WITH_HORIZON, fetches the broad rolling horizon in
     ~2-month chunks (to avoid FMP's ~7000-row response cap), merges new

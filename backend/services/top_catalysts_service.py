@@ -55,8 +55,7 @@ from services.calendar_curation import (
     MC_FLOOR,
     _canonical_symbol,
     _is_preferred_or_junk,
-    curate_economic_logical_events,
-    curate_events as _curate_events,
+    get_canonical_macro_window,
 )
 from services.calendar_snapshot_service import (
     get_snapshot as _get_snapshot,
@@ -709,65 +708,33 @@ def get_top_catalysts(
             earnings_flat.append((score, normalized))
             seen_per_day_sym[key] = True
 
-    # ── 2. Macro (shared canonical logical-event transformation) ───────────
-    # Phase A: read the broad horizon when available, fall back to current_week.
-    macro_source_events: list[dict] = []
-    for tab in ("economic_releases", "treasury_macro"):
-        try:
-            env = _get_snapshot(tab) or {}
-        except Exception as e:
-            print(f"[top_catalysts] snapshot read failed tab={tab}: {e}")
-            continue
-        if env.get("last_updated"):
-            last_updated_candidates.append(str(env["last_updated"]))
-        # Prefer the rolling horizon `events` collection; fall back to legacy
-        # current_week for older snapshots.
-        pool = env.get("events") if (env.get("events") and tab == "economic_releases") else (env.get("current_week") or [])
-        for ev in pool:
-            if not isinstance(ev, dict):
-                continue
-            d = _parse_date(ev.get("date"))
-            if not d or d < monday or d > friday:
-                continue
-            macro_source_events.append({**ev, "_source_tab": tab})
-
-    # Phase B: split by source and apply the appropriate canonical curation.
-    econ_raw = [ev for ev in macro_source_events if ev.get("_source_tab") == "economic_releases"]
-    tres_raw = [ev for ev in macro_source_events if ev.get("_source_tab") == "treasury_macro"]
-
-    # Shared canonical logical-event pipeline for economic releases.
-    econ_logical = curate_economic_logical_events(
-        econ_raw, cap=500, watchlist=watchlist, portfolio=portfolio,
+    # ── 2. Macro (shared canonical macro-window pipeline) ──────────────────
+    # One canonical reader/transformation handles both sources and the cross-
+    # source dedupe so Calendar Top Catalysts never diverges from Economic
+    # Releases or Home Top Catalysts.
+    macro_window = get_canonical_macro_window(
+        week_start_str,
+        week_end_str,
+        include_treasury_context=True,
+        watchlist=watchlist,
+        portfolio=portfolio,
     )
+    if macro_window.get("last_updated"):
+        last_updated_candidates.append(str(macro_window["last_updated"]))
 
-    # Treasury/macro is curated separately so point-in-time yield/curve records
-    # are preserved without being swallowed by the economic family grouper.
-    tres_curated = _curate_events("treasury_macro", tres_raw, cap=500)
+    macro_source_count = (
+        macro_window.get("source_counts", {}).get("economic_source", 0)
+        + macro_window.get("source_counts", {}).get("treasury_source", 0)
+    )
+    macro_logical_count = len(macro_window.get("macro_logical_events") or [])
 
-    # Phase C: deterministic cross-source dedupe.
-    # Scheduled dated auctions from treasury_macro collapse to the canonical
-    # Economic Releases event; unique yield/curve records remain.
-    econ_keys: set[tuple[str, str]] = set()
-    for ev in econ_logical:
-        title = (ev.get("display_title") or ev.get("title") or ev.get("eventName") or "").strip().lower()
-        econ_keys.add((title, (ev.get("date") or "")[:10]))
-
-    def _treasury_is_duplicate(ev: dict) -> bool:
-        title = (ev.get("eventName") or ev.get("title") or ev.get("indicatorName") or "").strip().lower()
-        return (title, (ev.get("date") or "")[:10]) in econ_keys
-
-    tres_unique = [ev for ev in tres_curated if not _treasury_is_duplicate(ev)]
-
-    macro_source_count = len(econ_raw) + len(tres_raw)
-    macro_logical_count = len(econ_logical) + len(tres_unique)
-
-    # Phase D: normalise canonical logical events into the response shape.
+    # Normalise canonical logical events into the response shape.
     # Top Catalysts surfaces US releases only (plus US Treasury point-in-time
     # records); foreign canonical events are intentionally dropped here so the
     # Economic Releases tab retains its full global view.
     macro_per_day: dict[str, list[dict]] = {}
     seen_macro: set[tuple[str, str]] = set()
-    for ev in econ_logical + tres_unique:
+    for ev in macro_window.get("macro_logical_events") or []:
         if not _is_us_macro_event(ev):
             continue
         tag = _macro_type_for_logical_event(ev)

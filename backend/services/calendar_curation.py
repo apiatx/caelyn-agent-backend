@@ -976,6 +976,151 @@ def curate_economic_logical_events(
     return packaged[: max(1, int(cap))]
 
 
+# ── Canonical macro-window reader/transformation ───────────────────────────
+
+def get_canonical_macro_window(
+    start_date: str,
+    end_date: str,
+    *,
+    include_treasury_context: bool = True,
+    watchlist: Optional[set[str]] = None,
+    portfolio: Optional[set[str]] = None,
+) -> dict:
+    """
+    One shared macro-catalyst window for all consumers.
+
+    Reads the existing Neon snapshots (economic_releases + treasury_macro),
+    selects events that fall inside [start_date, end_date], runs the shared
+    canonical logical-event transformation, and performs deterministic cross-
+    source deduplication.
+
+    Returns a dict with:
+      • window_start / window_end
+      • economic_logical_events
+      • treasury_logical_events
+      • macro_logical_events (economic + de-duplicated treasury)
+      • source_counts
+      • last_updated
+
+    This function makes ZERO provider calls and ZERO snapshot writes.
+    """
+    from services.calendar_snapshot_service import get_snapshot
+
+    watchlist = watchlist or set()
+    portfolio = portfolio or set()
+
+    last_updated_candidates: list[str] = []
+    econ_source: list[dict] = []
+    tres_source: list[dict] = []
+    source_windows: dict[str, str] = {}
+    horizon_start: Optional[str] = None
+    horizon_end: Optional[str] = None
+    coverage_complete = True
+
+    # Economic releases: prefer the rolling-horizon `events` collection.
+    econ_env = get_snapshot("economic_releases") or {}
+    if econ_env.get("last_updated"):
+        last_updated_candidates.append(str(econ_env["last_updated"]))
+    econ_horizon = econ_env.get("horizon") or {}
+    econ_pool = econ_env.get("events") or econ_env.get("current_week") or []
+    for ev in econ_pool:
+        if not isinstance(ev, dict):
+            continue
+        d = (ev.get("date") or "")[:10]
+        if start_date <= d <= end_date:
+            econ_source.append(ev)
+
+    stored = (econ_env.get("window") or {})
+    cov = econ_env.get("coverage") or {}
+    stored_horizon_end = (econ_horizon.get("horizon_end") or "")
+    has_broad_horizon = bool(econ_env.get("events"))
+    if econ_horizon.get("horizon_start") and not horizon_start:
+        horizon_start = econ_horizon.get("horizon_start")
+    if stored_horizon_end and (not horizon_end or stored_horizon_end > horizon_end):
+        horizon_end = stored_horizon_end
+    source_windows["economic_releases"] = (
+        f"{stored.get('stored_from','?')}→{stored.get('stored_to','?')}"
+        f" horizon_end={stored_horizon_end or 'N/A'}"
+        f" coverage={'ok' if cov.get('complete') else 'incomplete'}"
+    )
+    h_start = (econ_horizon.get("horizon_start") or "")
+    if not has_broad_horizon:
+        # Legacy snapshot without a rolling horizon cannot cover a future week.
+        coverage_complete = False
+    elif (
+        (stored_horizon_end and stored_horizon_end < end_date)
+        or (h_start and h_start > start_date)
+    ):
+        coverage_complete = False
+
+    # Treasury: optional point-in-time context.
+    if include_treasury_context:
+        tres_env = get_snapshot("treasury_macro") or {}
+        if tres_env.get("last_updated"):
+            last_updated_candidates.append(str(tres_env["last_updated"]))
+        tres_pool = tres_env.get("events") or tres_env.get("current_week") or []
+        for ev in tres_pool:
+            if not isinstance(ev, dict):
+                continue
+            d = (ev.get("date") or "")[:10]
+            if start_date <= d <= end_date:
+                tres_source.append(ev)
+
+        tres_stored = (tres_env.get("window") or {})
+        tres_cov = tres_env.get("coverage") or {}
+        source_windows["treasury_macro"] = (
+            f"{tres_stored.get('stored_from','?')}→{tres_stored.get('stored_to','?')}"
+            f" coverage={'ok' if tres_cov.get('complete') else 'incomplete'}"
+        )
+
+    # Shared canonical logical-event transformation.
+    econ_logical = curate_economic_logical_events(
+        econ_source, cap=500, watchlist=watchlist, portfolio=portfolio,
+    )
+    tres_curated = curate_events(
+        "treasury_macro", tres_source, cap=500,
+    ) if include_treasury_context else []
+
+    # Deterministic cross-source dedupe.  Scheduled dated auctions that already
+    # have a canonical Economic Releases representation are dropped from the
+    # treasury stream; unique yield/curve records remain.
+    econ_keys: set[tuple[str, str]] = set()
+    for ev in econ_logical:
+        title = (
+            ev.get("display_title") or ev.get("title") or
+            ev.get("eventName") or ""
+        ).strip().lower()
+        econ_keys.add((title, (ev.get("date") or "")[:10]))
+
+    def _treasury_is_duplicate(ev: dict) -> bool:
+        title = (
+            ev.get("eventName") or ev.get("title") or
+            ev.get("indicatorName") or ""
+        ).strip().lower()
+        return (title, (ev.get("date") or "")[:10]) in econ_keys
+
+    tres_unique = [ev for ev in tres_curated if not _treasury_is_duplicate(ev)]
+
+    return {
+        "window_start": start_date,
+        "window_end": end_date,
+        "economic_logical_events": econ_logical,
+        "treasury_logical_events": tres_unique,
+        "macro_logical_events": econ_logical + tres_unique,
+        "source_counts": {
+            "economic_source": len(econ_source),
+            "treasury_source": len(tres_source),
+            "economic_logical": len(econ_logical),
+            "treasury_logical": len(tres_unique),
+        },
+        "last_updated": max(last_updated_candidates) if last_updated_candidates else None,
+        "coverage_complete": coverage_complete,
+        "horizon_start": horizon_start,
+        "horizon_end": horizon_end,
+        "source_windows": source_windows,
+    }
+
+
 # ── Public entry point ─────────────────────────────────────────────────────
 
 def curate_events(

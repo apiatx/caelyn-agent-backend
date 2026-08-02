@@ -47,6 +47,7 @@ from services.calendar_curation import (
     CURATED_TABS as _CURATED_TABS,
     DEFAULT_CAP_PER_SLICE as _CURATION_CAP,
     curate_envelope as _curate_envelope,
+    get_canonical_macro_window as _get_canonical_macro_window,
 )
 from services.top_catalysts_service import (
     DEFAULT_CAP as _TOP_DEFAULT_CAP,
@@ -247,32 +248,22 @@ async def catalyst_events(
                 tab, snap, cap=_CURATION_CAP, watchlist=wl, portfolio=pf,
             )
             if window_requested and tab in _HORIZON_TABS:
-                # Curate the selected window the same way current_week is
-                # curated (hard filter, dedup, family grouping, scoring).
-                # Month keeps a larger cap so it returns all matching events.
-                from services.calendar_curation import curate_events as _curate_events
-                win_cap = (
-                    _MONTH_VIEW_CAP
-                    if (view or "").strip().lower() == "month"
-                    else _CURATION_CAP
+                # Curate the selected window through the shared canonical macro
+                # window so Economic Releases, Calendar Top, and Home Top all
+                # see the same logical events.
+                macro_window = _get_canonical_macro_window(
+                    snap.get("window_start") or snap.get("window", {}).get("requested_from"),
+                    snap.get("window_end") or snap.get("window", {}).get("requested_to"),
+                    include_treasury_context=False,
+                    watchlist=wl,
+                    portfolio=pf,
                 )
-                snap["events"] = _curate_events(
-                    tab, snap.get("events") or [],
-                    cap=win_cap, watchlist=wl, portfolio=pf,
-                )
+                snap["events"] = macro_window.get("macro_logical_events") or []
                 snap["event_count"] = len(snap["events"])
-
-        # If the snapshot is stale (wrong week), trigger a background refresh
-        # so the NEXT request gets current data. This handles restarts that
-        # land on Mon–Sat before the weekly_scheduler fires its stale check.
-        if snap.get("is_stale") and FMP_API_KEY:
-            try:
-                import asyncio as _aio
-                from services.calendar_snapshot_service import refresh_tab as _rt
-                _aio.create_task(_rt(tab, FMP_API_KEY))
-                print(f"[catalyst] request-time stale refresh triggered tab={tab}")
-            except Exception as _rte:
-                print(f"[catalyst] request-time stale refresh error tab={tab}: {_rte}")
+                # Preserve truthful coverage metadata from the snapshot.
+                snap["coverage_complete"] = macro_window.get("coverage_complete")
+                snap["horizon_start"] = macro_window.get("horizon_start")
+                snap["horizon_end"] = macro_window.get("horizon_end")
 
         # Additive window metadata (horizon tabs, requested-window path only).
         _window_fields = (

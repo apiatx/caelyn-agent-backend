@@ -338,32 +338,6 @@ async def _terminal_prewarm():
         print(f"[TERMINAL_PREWARM] error (non-fatal): {_pw_err}")
 
 
-async def _home_planning_warmup_loop():
-    """
-    Hourly background loop. On Saturday ET, proactively warms next-week macro
-    events for the Home Top Catalysts planning feed into the process-local cache.
-    On other days it is a no-op (cheap early-exit check once per hour).
-    The in-process cache has a 23h TTL so the first Saturday request is served
-    instantly instead of triggering an inline FMP fetch.
-    """
-    await asyncio.sleep(60)           # brief startup delay — non-blocking
-    while True:
-        try:
-            try:
-                from zoneinfo import ZoneInfo as _ZI
-            except ImportError:
-                from backports.zoneinfo import ZoneInfo as _ZI  # type: ignore
-            from datetime import datetime as _dt
-            now_et = _dt.now(_ZI("America/New_York"))
-            if now_et.weekday() == 5:  # Saturday only
-                from services.home_top_catalysts import warm_planning_window
-                print("[HOME_PLANNING_WARMUP] Saturday detected — warming next-week catalysts")
-                await warm_planning_window()
-        except Exception as _hwl_err:
-            print(f"[HOME_PLANNING_WARMUP] error (non-fatal): {_hwl_err}")
-        await asyncio.sleep(3600)     # re-check every hour
-
-
 async def _odds_scanner_loop():
     """
     Tracked Odds Registry — scan and persist loop.
@@ -1221,11 +1195,6 @@ async def lifespan(app):
         print("[SCREENER_HUB] Scheduler task registered")
     except Exception as _e:
         print(f"[STARTUP] Screener Hub scheduler init error: {_e}")
-    # ── Home Top Catalysts Saturday planning warmup ─────────────────────────
-    # Proactively fetches next-week macro events on Saturday ET so the first
-    # /api/home/top-catalysts request is served from the in-process cache
-    # rather than triggering an on-demand FMP fetch inline.
-    asyncio.create_task(_home_planning_warmup_loop())
     # Tracked Odds Registry: fetch → match → persist → delta → cache, every 30 min.
     # Runs at 90 s so it beats the intelligence loop (120 s) on first cycle.
     asyncio.create_task(_odds_scanner_loop())
