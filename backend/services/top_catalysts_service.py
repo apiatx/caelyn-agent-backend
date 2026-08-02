@@ -44,13 +44,19 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover
+    from backports.zoneinfo import ZoneInfo  # type: ignore
+
 from data.cache import cache
 from services.calendar_curation import (
     CANONICAL_SYMBOL_MAP,
     MC_FLOOR,
     _canonical_symbol,
     _is_preferred_or_junk,
-    group_economic_events_to_families,
+    curate_economic_logical_events,
+    curate_events as _curate_events,
 )
 from services.calendar_snapshot_service import (
     get_snapshot as _get_snapshot,
@@ -143,10 +149,39 @@ def _load_portfolio_set() -> set[str]:
 
 # ── Week bounds ─────────────────────────────────────────────────────────────
 
-def _week_bounds(today: Optional[date] = None) -> tuple[date, date]:
-    today = today or datetime.now(timezone.utc).date()
-    monday = today - timedelta(days=today.weekday())
+def resolve_top_catalysts_week(
+    today_et: Optional[date] = None,
+) -> tuple[date, date, str]:
+    """
+    Return (monday, friday, window_mode) for the Top Catalysts planning week.
+
+    Planning rules (America/New_York):
+      Mon–Fri  → current week's Mon–Fri   window_mode="current_week"
+      Sat–Sun  → next week's Mon–Friday   window_mode="next_week_planning"
+
+    `today_et` accepts a unit-test override; otherwise defaults to the real ET
+    date.  Both Calendar Top Catalysts and Home Top Catalysts use this single
+    helper so their windows can never drift.
+    """
+    if today_et is None:
+        today_et = datetime.now(ZoneInfo("America/New_York")).date()
+
+    wd = today_et.weekday()  # 0=Mon … 6=Sun
+    if wd >= 5:  # Saturday (5) or Sunday (6)
+        days_to_monday = 7 - wd
+        monday = today_et + timedelta(days=days_to_monday)
+        mode = "next_week_planning"
+    else:
+        monday = today_et - timedelta(days=wd)
+        mode = "current_week"
+
     friday = monday + timedelta(days=4)
+    return monday, friday, mode
+
+
+def _week_bounds(today: Optional[date] = None) -> tuple[date, date]:
+    """Legacy thin wrapper kept for existing tests and callers."""
+    monday, friday, _ = resolve_top_catalysts_week(today)
     return monday, friday
 
 
@@ -493,31 +528,80 @@ def _normalize_macro_event(ev: dict, tag: str) -> dict:
     return out
 
 
-# Family → Top Catalysts whitelist tag.  Only families already present in
-# _MACRO_WHITELIST_PATTERNS appear here.
+# Canonical event_family / release_group → Top Catalysts macroType tag.
+# Maintains backward-compatible macroType names while covering the full shared
+# canonical logical-event taxonomy.
 _FAMILY_TO_TOP_TAG: dict[str, str] = {
     "cpi": "CPI",
     "ppi": "PPI",
     "pce": "PCE",
     "eci": "ECI",
     "gdp": "GDP",
+    "fomc_decision": "FOMC",
+    "fomc_minutes": "FOMC",
+    "treasury_auction": "Treasury Auctions",
+}
+
+_RELEASE_GROUP_TO_TOP_TAG: dict[str, str] = {
+    "employment_report": "Employment Report",
+    "jobless_claims_report": "Jobless Claims Report",
+    "jolts_report": "JOLTS Report",
+    "ism_manufacturing_report": "ISM Manufacturing Report",
+    "ism_services_report": "ISM Services Report",
+    "factory_orders_report": "Factory Orders Report",
 }
 
 
-def _normalize_macro_family_entry(ev: dict, tag: str) -> dict:
+def _is_us_macro_event(ev: dict) -> bool:
+    """True for US macro releases or US Treasury point-in-time records."""
+    country = str(ev.get("country") or "").strip().upper()
+    if country in ("US", "USA", "UNITED STATES"):
+        return True
+    et = (ev.get("eventType") or "").lower()
+    if et in ("treasury_rate", "treasury_macro"):
+        return True
+    return False
+
+
+def _macro_type_for_logical_event(ev: dict) -> Optional[str]:
+    """Return the backward-compatible macroType tag for a canonical logical event."""
+    family = (ev.get("event_family") or "").lower()
+    rg = (ev.get("release_group") or "").lower()
+    if family in _FAMILY_TO_TOP_TAG:
+        return _FAMILY_TO_TOP_TAG[family]
+    if rg in _RELEASE_GROUP_TO_TOP_TAG:
+        return _RELEASE_GROUP_TO_TOP_TAG[rg]
+    # Legacy title-based classification for any event not yet in the maps.
+    return _classify_macro(ev)
+
+
+def _normalize_macro_logical_event(ev: dict, tag: str) -> dict:
+    """
+    Normalize a canonical logical event (family card, package card, or discrete
+    macro event) into the Top Catalysts response shape.
+
+    Preserves canonical fields so the frontend can render explicit tiers and
+    child metadata consistently across Calendar, Home and Economic Releases.
+    """
     out: dict[str, Any] = {
-        "title":         ev.get("display_title") or ev.get("title") or tag,
+        "title":         ev.get("display_title") or ev.get("title") or ev.get("eventName") or tag,
         "date":          (ev.get("date") or "")[:10],
         "eventType":     "macro",
         "macroType":     tag,
         "sourceTab":     "macro",
-        "whyThisMatters": [f"{tag} release"],
+        "whyThisMatters": [ev.get("signal_reason") or f"{tag} release"],
+        "type":          "macro_family" if ev.get("type") == "macro_family" else "macro",
+        "event_family":  ev.get("event_family"),
+        "release_group": ev.get("release_group"),
+        "signal_tier":   ev.get("signal_tier"),
+        "signal_reason": ev.get("signal_reason"),
+        "lead_metric":   ev.get("lead_metric"),
         "children":      ev.get("children") or [],
         "event_count":   ev.get("event_count") or len(ev.get("children") or []),
-        "type":          "macro_family",
+        "canonical_id":  ev.get("id"),
     }
     for k in ("time", "country", "importance", "actual", "estimate", "previous",
-              "unit", "eventName"):
+              "unit", "eventName", "indicatorName"):
         v = ev.get(k)
         if v is not None and v != "":
             out[k] = v
@@ -572,7 +656,10 @@ def get_top_catalysts(
     """
     cap = max(MIN_CAP, min(int(cap or DEFAULT_CAP), MAX_CAP))
     monday, friday = _week_bounds(today)
+    _, _, window_mode = resolve_top_catalysts_week(today)
     week_label = f"{monday.isoformat()}/{friday.isoformat()}"
+    week_start_str = monday.isoformat()
+    week_end_str = friday.isoformat()
 
     watchlist = _load_watchlist_set()
     portfolio = _load_portfolio_set()
@@ -622,9 +709,9 @@ def get_top_catalysts(
             earnings_flat.append((score, normalized))
             seen_per_day_sym[key] = True
 
-    # ── 2. Macro (whitelist only, not scored) ──────────────────────────────
-    # Phase A: collect whitelisted individual events per day across both tabs.
-    raw_per_day: dict[str, list[dict]] = {}
+    # ── 2. Macro (shared canonical logical-event transformation) ───────────
+    # Phase A: read the broad horizon when available, fall back to current_week.
+    macro_source_events: list[dict] = []
     for tab in ("economic_releases", "treasury_macro"):
         try:
             env = _get_snapshot(tab) or {}
@@ -633,44 +720,66 @@ def get_top_catalysts(
             continue
         if env.get("last_updated"):
             last_updated_candidates.append(str(env["last_updated"]))
-        for ev in (env.get("current_week") or []):
+        # Prefer the rolling horizon `events` collection; fall back to legacy
+        # current_week for older snapshots.
+        pool = env.get("events") if (env.get("events") and tab == "economic_releases") else (env.get("current_week") or [])
+        for ev in pool:
             if not isinstance(ev, dict):
                 continue
             d = _parse_date(ev.get("date"))
             if not d or d < monday or d > friday:
                 continue
-            tag = _classify_macro(ev)
-            if not tag:
-                continue
-            day = d.isoformat()
-            raw_per_day.setdefault(day, []).append(ev)
+            macro_source_events.append({**ev, "_source_tab": tab})
 
-    # Phase B: for each day, group approved US families, normalise the rest.
+    # Phase B: split by source and apply the appropriate canonical curation.
+    econ_raw = [ev for ev in macro_source_events if ev.get("_source_tab") == "economic_releases"]
+    tres_raw = [ev for ev in macro_source_events if ev.get("_source_tab") == "treasury_macro"]
+
+    # Shared canonical logical-event pipeline for economic releases.
+    econ_logical = curate_economic_logical_events(
+        econ_raw, cap=500, watchlist=watchlist, portfolio=portfolio,
+    )
+
+    # Treasury/macro is curated separately so point-in-time yield/curve records
+    # are preserved without being swallowed by the economic family grouper.
+    tres_curated = _curate_events("treasury_macro", tres_raw, cap=500)
+
+    # Phase C: deterministic cross-source dedupe.
+    # Scheduled dated auctions from treasury_macro collapse to the canonical
+    # Economic Releases event; unique yield/curve records remain.
+    econ_keys: set[tuple[str, str]] = set()
+    for ev in econ_logical:
+        title = (ev.get("display_title") or ev.get("title") or ev.get("eventName") or "").strip().lower()
+        econ_keys.add((title, (ev.get("date") or "")[:10]))
+
+    def _treasury_is_duplicate(ev: dict) -> bool:
+        title = (ev.get("eventName") or ev.get("title") or ev.get("indicatorName") or "").strip().lower()
+        return (title, (ev.get("date") or "")[:10]) in econ_keys
+
+    tres_unique = [ev for ev in tres_curated if not _treasury_is_duplicate(ev)]
+
+    macro_source_count = len(econ_raw) + len(tres_raw)
+    macro_logical_count = len(econ_logical) + len(tres_unique)
+
+    # Phase D: normalise canonical logical events into the response shape.
+    # Top Catalysts surfaces US releases only (plus US Treasury point-in-time
+    # records); foreign canonical events are intentionally dropped here so the
+    # Economic Releases tab retains its full global view.
     macro_per_day: dict[str, list[dict]] = {}
-    for day in sorted(raw_per_day):
-        grouped = group_economic_events_to_families(raw_per_day[day])
-        day_list: list[dict] = []
-        seen: set[tuple] = set()
-        for item in grouped:
-            if item.get("type") == "macro_family":
-                family = (item.get("event_family") or "").lower()
-                top_tag = _FAMILY_TO_TOP_TAG.get(family)
-                if top_tag is None:
-                    continue
-                day_list.append(_normalize_macro_family_entry(item, top_tag))
-            else:
-                tag = _classify_macro(item)
-                if not tag:
-                    continue
-                country = (item.get("country") or "").upper()
-                if country != "US":
-                    continue
-                if (tag, (item.get("date") or "")[:10]) in seen:
-                    continue
-                seen.add((tag, (item.get("date") or "")[:10]))
-                day_list.append(_normalize_macro_event(item, tag))
-        if day_list:
-            macro_per_day[day] = day_list
+    seen_macro: set[tuple[str, str]] = set()
+    for ev in econ_logical + tres_unique:
+        if not _is_us_macro_event(ev):
+            continue
+        tag = _macro_type_for_logical_event(ev)
+        if not tag:
+            continue
+        day = (ev.get("date") or "")[:10]
+        key = (tag, day)
+        if key in seen_macro:
+            continue
+        seen_macro.add(key)
+        normalized = _normalize_macro_logical_event(ev, tag)
+        macro_per_day.setdefault(day, []).append(normalized)
 
     # ── 3. Other (IPO/dividend/split) — default exclude, max 2-3 / week ────
     other_pool: list[tuple[float, dict]] = []
@@ -769,12 +878,17 @@ def get_top_catalysts(
     )
 
     return {
-        "tab":           "top_catalysts",
-        "mode":          "weekly",
-        "week":          week_label,
-        "days":          days_out,
-        "current_week":  flat,
-        "previous_week": [],
-        "last_updated":  last_updated,
-        "status":        status,
+        "tab":                    "top_catalysts",
+        "mode":                   "weekly",
+        "week":                   week_label,
+        "week_start":             week_start_str,
+        "week_end":               week_end_str,
+        "window_mode":            window_mode,
+        "days":                   days_out,
+        "current_week":           flat,
+        "previous_week":          [],
+        "last_updated":           last_updated,
+        "status":                 status,
+        "macro_source_event_count": macro_source_count,
+        "macro_logical_event_count": macro_logical_count,
     }

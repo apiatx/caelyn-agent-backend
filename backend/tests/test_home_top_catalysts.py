@@ -1515,3 +1515,82 @@ def test_home_no_provider_fetch_when_horizon_complete():
     assert rt.call_count == 0
     assert result["refresh_attempted"] is False
     assert result["coverage_complete"] is True
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Unified window + canonical tier regression tests (Aug 3–7, 2026)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_home_and_calendar_share_aug_3_7_window():
+    from services.top_catalysts_service import resolve_top_catalysts_week
+    monday, friday, mode = resolve_top_catalysts_week(date(2026, 8, 2))
+    home = _run_home(date(2026, 8, 1), _home_snapshot([]))
+    assert home["window_start"] == monday.isoformat()
+    assert home["window_end"] == friday.isoformat()
+    assert home["window_mode"] == mode
+
+
+def test_home_labor_major_only_with_major_employment_child():
+    events = [
+        _make_econ(id="nfp", title="Non Farm Payrolls", eventName="Non Farm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="Monthly payroll release",
+                   country="US", date="2026-08-07", time="08:30:00"),
+        _make_econ(id="ur", title="Unemployment Rate", eventName="Unemployment Rate",
+                   event_family="unemployment", signal_tier="secondary",
+                   signal_reason="Unemployment rate release",
+                   country="US", date="2026-08-07", time="08:30:00"),
+    ]
+    result = _run_home(date(2026, 8, 2), _home_snapshot(events))
+    labor = [c for c in result["catalysts"] if c.get("category") == "labor"]
+    assert labor
+    assert labor[0]["signal_tier"] == "major"
+    assert labor[0]["reason"] == "Monthly payroll release"
+    assert labor[0]["children"][0]["release_group"] == "employment_report"
+
+
+def test_home_labor_secondary_when_no_major_child():
+    events = [
+        _make_econ(id="claims", title="Initial Jobless Claims",
+                   eventName="Initial Jobless Claims", event_family="jobless_claims",
+                   signal_tier="secondary", signal_reason="Weekly jobless claims",
+                   country="US", date="2026-08-06", time="08:30:00"),
+    ]
+    result = _run_home(date(2026, 8, 2), _home_snapshot(events))
+    labor = [c for c in result["catalysts"] if c.get("category") == "labor"]
+    assert labor
+    assert labor[0]["signal_tier"] == "secondary"
+
+
+def test_home_duplicate_raw_rows_do_not_escalate_tier():
+    events = [
+        _make_econ(id="nfp1", title="Non Farm Payrolls", eventName="Non Farm Payrolls",
+                   event_family="payrolls", signal_tier="secondary",
+                   signal_reason="Monthly payroll release",
+                   country="US", date="2026-08-07", time="08:30:00"),
+        _make_econ(id="nfp2", title="Non Farm Payrolls", eventName="Non Farm Payrolls",
+                   event_family="payrolls", signal_tier="secondary",
+                   signal_reason="Monthly payroll release",
+                   country="US", date="2026-08-07", time="08:30:00"),
+    ]
+    result = _run_home(date(2026, 8, 2), _home_snapshot(events))
+    labor = [c for c in result["catalysts"] if c.get("category") == "labor"]
+    assert labor
+    assert labor[0]["signal_tier"] == "secondary"
+    assert labor[0]["event_count"] == 1
+
+
+def test_home_uses_shared_canonical_ids():
+    events = [
+        _make_econ(id="nfp", title="Non Farm Payrolls", eventName="Non Farm Payrolls",
+                   event_family="payrolls", signal_tier="major",
+                   signal_reason="Monthly payroll release",
+                   country="US", date="2026-08-07", time="08:30:00"),
+    ]
+    result = _run_home(date(2026, 8, 2), _home_snapshot(events))
+    labor = [c for c in result["catalysts"] if c.get("category") == "labor"]
+    assert labor
+    child = labor[0]["children"][0]
+    assert child.get("release_group") == "employment_report"
+    assert child.get("signal_tier") == "major"
+    assert child.get("id")

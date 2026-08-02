@@ -25,10 +25,11 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from services.calendar_curation import (
-    group_economic_events_to_families,
-    group_events_to_release_packages,
+    curate_economic_logical_events,
+    curate_events as _curate_events,
 )
 from services.calendar_snapshot_service import HORIZON_TABS as _HORIZON_TABS
+from services.top_catalysts_service import resolve_top_catalysts_week
 
 
 # ── Tier ordering (reused from calendar_curation; local copy for independence) ─
@@ -180,30 +181,12 @@ def _planning_window(
     """
     Return (monday, friday, window_mode) for the Home Top Catalysts feed.
 
-    Planning rules (all in America/New_York):
+    Thin wrapper around the shared ``resolve_top_catalysts_week`` helper so
+    Calendar and Home Top Catalysts can never drift.  Planning rules (ET):
       Mon–Fri  → current week's Mon–Fri   window_mode="current_week"
       Sat–Sun  → *next* week's Mon–Fri    window_mode="next_week_planning"
-
-    `today_et` is accepted for unit-test overrides; defaults to the real ET date.
     """
-    if today_et is None:
-        try:
-            from zoneinfo import ZoneInfo
-        except ImportError:
-            from backports.zoneinfo import ZoneInfo  # type: ignore
-        today_et = datetime.now(ZoneInfo("America/New_York")).date()
-
-    wd = today_et.weekday()   # 0=Mon … 6=Sun
-    if wd >= 5:               # Saturday (5) or Sunday (6)
-        days_to_monday = 7 - wd
-        monday = today_et + timedelta(days=days_to_monday)
-        mode = "next_week_planning"
-    else:                     # Monday–Friday
-        monday = today_et - timedelta(days=wd)
-        mode = "current_week"
-
-    friday = monday + timedelta(days=4)
-    return monday, friday, mode
+    return resolve_top_catalysts_week(today_et)
 
 
 # ── General helpers ───────────────────────────────────────────────────────────
@@ -273,12 +256,19 @@ def _classify_macro(ev: dict) -> Optional[str]:
 
 
 def _is_us_macro(ev: dict) -> bool:
-    """True when the event has an explicit US country code — Home only."""
+    """True when the event is a US macro release — Home only."""
     raw = ev.get("country")
-    if raw is None:
-        return False
-    country = str(raw).strip().upper()
-    return country in ("US", "USA", "UNITED STATES")
+    if raw is not None:
+        country = str(raw).strip().upper()
+        if country in ("US", "USA", "UNITED STATES"):
+            return True
+    # US Treasury point-in-time records from treasury_macro often omit country.
+    et = (ev.get("eventType") or "").lower()
+    if et in ("treasury_rate", "treasury_macro"):
+        return True
+    if str(ev.get("companyName") or "").strip().upper() == "US TREASURY":
+        return True
+    return False
 
 
 # ── Planning-window in-memory fetch (Sat/Sun only) ───────────────────────────
@@ -748,10 +738,10 @@ async def build_home_top_catalysts(
     empty_reason: Optional[str] = None
 
     # ── 1. Base aggregation (earnings + other) from existing service ─────────
-    # get_top_catalysts() builds against the current ET Mon–Fri window.
-    # We re-filter by our planning window so that on Sat/Sun (next-week mode)
-    # last-week earnings/other days are excluded.
-    base = get_top_catalysts()
+    # get_top_catalysts() now uses the same shared ET planning window, so on
+    # Sat/Sun it already returns the upcoming week's earnings/other.  Pass the
+    # resolved Monday so both services agree on the exact window.
+    base = get_top_catalysts(today=monday)
     days = base.get("days") or []
 
     earnings_flat: list[dict] = []
@@ -876,21 +866,47 @@ async def build_home_top_catalysts(
     total_source = len(earnings_flat) + len(macro_raw) + len(other_flat)
 
     # ── 3. Categorize and group macro events ─────────────────────────────────
-    #    3a. Exclude non-US macro events from the default Home surface.
-    macro_us = [ev for ev in macro_raw if _classify_macro(ev) and _is_us_macro(ev)]
+    #    3a. Split by source so each follows its correct canonical curation path.
+    econ_raw = [
+        ev for ev in macro_raw
+        if (ev.get("eventType") or "").lower() in ("economic_release", "economic_releases")
+    ]
+    tres_raw = [
+        ev for ev in macro_raw
+        if (ev.get("eventType") or "").lower() in ("treasury_rate", "treasury_macro")
+    ]
 
-    #    3b. Pass eligible US economic events through the family grouper.
-    macro_logical = group_economic_events_to_families(macro_us)
+    #    3b. Shared canonical logical-event transformation for economic releases.
+    econ_logical = curate_economic_logical_events(
+        econ_raw, cap=500, watchlist=set(), portfolio=set(),
+    )
 
-    #    3c. Group remaining multi-row US release packages (Employment Report,
-    #        Jobless Claims, JOLTS, ISM Manufacturing/Services, Factory Orders)
-    #        into display-level package cards.
-    macro_logical = group_events_to_release_packages(macro_logical)
+    #    3c. Treasury/macro is curated separately so unique yield/curve records
+    #        are preserved and not swallowed by the economic family grouper.
+    tres_curated = _curate_events("treasury_macro", tres_raw, cap=500)
 
-    #    3d. Classify each logical event (family card, package card, or
-    #        discrete) into Home categories.
+    #    3d. Deterministic cross-source dedupe.  Scheduled dated auctions already
+    #        have a canonical Economic Releases representation; drop treasury_macro
+    #        rows that duplicate them.  Unique point-in-time records remain.
+    econ_keys: set[tuple[str, str]] = set()
+    for ev in econ_logical:
+        title = (ev.get("display_title") or ev.get("title") or ev.get("eventName") or "").strip().lower()
+        econ_keys.add((title, (ev.get("date") or "")[:10]))
+
+    def _treasury_is_duplicate(ev: dict) -> bool:
+        title = (ev.get("eventName") or ev.get("title") or ev.get("indicatorName") or "").strip().lower()
+        return (title, (ev.get("date") or "")[:10]) in econ_keys
+
+    tres_unique = [ev for ev in tres_curated if not _treasury_is_duplicate(ev)]
+    macro_logical = econ_logical + tres_unique
+
+    #    3e. Exclude non-US macro events.  US Treasury point-in-time records are
+    #        kept even when country is missing because the source tab is US Treasury.
+    macro_us = [ev for ev in macro_logical if _classify_macro(ev) and _is_us_macro(ev)]
+
+    #    3f. Classify each canonical logical event into Home categories.
     events_by_cat: dict[str, list[dict]] = {}
-    for ev in macro_logical:
+    for ev in macro_us:
         cat_id = _classify_macro(ev)
         if cat_id:
             events_by_cat.setdefault(cat_id, []).append(ev)

@@ -170,11 +170,13 @@ def test_macro_only_whitelist_in_response(monkeypatch):
 
     env = get_top_catalysts()
     macro_titles = [m["macroType"] for d in env["days"] for m in d["macro"]]
+    macro_card_titles = [m["title"] for d in env["days"] for m in d["macro"]]
     assert "CPI" in macro_titles
     assert "Treasury Auctions" in macro_titles
-    # Non-whitelist must be absent.
+    # ISM now forms a canonical release-package card via the shared pipeline.
+    assert "ISM Manufacturing Report" in macro_card_titles
+    # Non-whitelist low-signal discrete events must be absent.
     assert all("Retail" not in str(m.get("title", "")) for d in env["days"] for m in d["macro"])
-    assert all("ISM" not in str(m.get("title", "")) for d in env["days"] for m in d["macro"])
 
 
 # ── IPO/Dividend/Split exclusion + caps ────────────────────────────────────
@@ -1076,3 +1078,224 @@ def test_pce_family_card_still_produced_after_regex_fix(monkeypatch):
     assert entry["type"] == "macro_family"
     assert entry["event_count"] == 2
     assert entry["actual"] == 0.1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Unified planning-window regression tests (Aug 3–7, 2026)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_AUG3 = date(2026, 8, 3)
+_AUG7 = date(2026, 8, 7)
+
+
+def _seed_aug_week(monkeypatch):
+    """Patch the week bounds to the Aug 3–7 planning window."""
+    monkeypatch.setattr(top_svc, "_week_bounds", lambda *_: (_AUG3, _AUG7))
+
+
+def _make_aug_econ(**kw) -> dict:
+    """Build a synthetic economic event for the Aug 3–7 window."""
+    return {
+        "id": kw.get("id", "ev1"),
+        "eventType": "economic_release",
+        "eventName": kw.get("eventName", kw.get("title", "Event")),
+        "title": kw.get("title", kw.get("eventName", "Event")),
+        "date": kw.get("date", "2026-08-03"),
+        "time": kw.get("time"),
+        "country": kw.get("country", "US"),
+        "importance": kw.get("importance", "high"),
+        "actual": kw.get("actual"),
+        "estimate": kw.get("estimate"),
+        "previous": kw.get("previous"),
+        "event_family": kw.get("event_family"),
+        "signal_tier": kw.get("signal_tier"),
+        "signal_reason": kw.get("signal_reason"),
+    }
+
+
+def test_sunday_aug_2_resolves_to_aug_3_7(monkeypatch):
+    _seed_aug_week(monkeypatch)
+    _seed_snapshots(monkeypatch, {})
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    env = get_top_catalysts(today=date(2026, 8, 2))
+    assert env["week"] == "2026-08-03/2026-08-07"
+    assert env["week_start"] == "2026-08-03"
+    assert env["week_end"] == "2026-08-07"
+    assert env["window_mode"] == "next_week_planning"
+    assert all(d["date"] >= "2026-08-03" for d in env["days"])
+
+
+def test_saturday_aug_1_resolves_to_aug_3_7(monkeypatch):
+    _seed_aug_week(monkeypatch)
+    _seed_snapshots(monkeypatch, {})
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    env = get_top_catalysts(today=date(2026, 8, 1))
+    assert env["week"] == "2026-08-03/2026-08-07"
+    assert env["window_mode"] == "next_week_planning"
+
+
+def test_weekday_aug_3_resolves_to_current_week(monkeypatch):
+    _seed_aug_week(monkeypatch)
+    _seed_snapshots(monkeypatch, {})
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    env = get_top_catalysts(today=date(2026, 8, 3))
+    assert env["week"] == "2026-08-03/2026-08-07"
+    assert env["window_mode"] == "current_week"
+
+
+def test_ism_rows_form_one_canonical_card(monkeypatch):
+    _seed_aug_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "events": [
+                _make_aug_econ(id="ism1", title="ISM Manufacturing PMI",
+                               eventName="ISM Manufacturing PMI", date="2026-08-03",
+                               signal_tier="secondary", signal_reason="ISM business survey"),
+                _make_aug_econ(id="ism2", title="ISM Manufacturing New Orders",
+                               eventName="ISM Manufacturing New Orders", date="2026-08-03",
+                               signal_tier="secondary", signal_reason="ISM business survey"),
+                _make_aug_econ(id="ism3", title="ISM Manufacturing Employment",
+                               eventName="ISM Manufacturing Employment", date="2026-08-03",
+                               signal_tier="secondary", signal_reason="ISM business survey"),
+            ],
+            "current_week": [], "previous_week": [],
+            "last_updated": "2026-08-02T10:00:00Z", "status": "ready",
+        },
+    })
+    env = get_top_catalysts(today=date(2026, 8, 2))
+    ism_cards = [m for d in env["days"] for m in d["macro"]
+                 if m.get("macroType") == "ISM Manufacturing Report"]
+    assert len(ism_cards) == 1
+    assert ism_cards[0]["title"] == "ISM Manufacturing Report"
+    assert ism_cards[0]["event_count"] == 3
+    assert ism_cards[0]["signal_tier"] == "secondary"
+
+
+def test_employment_rows_form_one_major_card(monkeypatch):
+    _seed_aug_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "events": [
+                _make_aug_econ(id="nfp", title="Non Farm Payrolls",
+                               eventName="Non Farm Payrolls", date="2026-08-07",
+                               event_family="payrolls", signal_tier="major",
+                               signal_reason="Monthly payroll release"),
+                _make_aug_econ(id="ur", title="Unemployment Rate",
+                               eventName="Unemployment Rate", date="2026-08-07",
+                               event_family="unemployment", signal_tier="secondary",
+                               signal_reason="Unemployment rate release"),
+            ],
+            "current_week": [], "previous_week": [],
+            "last_updated": "2026-08-02T10:00:00Z", "status": "ready",
+        },
+    })
+    env = get_top_catalysts(today=date(2026, 8, 2))
+    emp_cards = [m for d in env["days"] for m in d["macro"]
+                 if m.get("macroType") == "Employment Report"]
+    assert len(emp_cards) == 1
+    assert emp_cards[0]["signal_tier"] == "major"
+    assert emp_cards[0]["signal_reason"] == "Monthly payroll release"
+    assert emp_cards[0]["event_count"] == 2
+
+
+def test_treasury_auction_duplicate_from_both_sources_collapses(monkeypatch):
+    _seed_aug_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "events": [
+                _make_aug_econ(id="t1", title="10-Year Treasury Auction",
+                               eventName="10-Year Treasury Auction", date="2026-08-05",
+                               event_family="treasury_auction", signal_tier="major",
+                               signal_reason="Treasury auction"),
+            ],
+            "current_week": [], "previous_week": [],
+            "last_updated": "2026-08-02T10:00:00Z", "status": "ready",
+        },
+        "treasury_macro": {
+            "events": [
+                {"eventType": "treasury_rate", "indicatorName": "10-Year Treasury Auction",
+                 "date": "2026-08-05", "country": "US", "importance": "high"},
+            ],
+            "current_week": [], "previous_week": [],
+            "last_updated": "2026-08-02T10:00:00Z", "status": "ready",
+        },
+    })
+    env = get_top_catalysts(today=date(2026, 8, 2))
+    auction_cards = [m for d in env["days"] for m in d["macro"]
+                     if m.get("macroType") == "Treasury Auctions"]
+    assert len(auction_cards) == 1
+
+
+def test_no_provider_call_at_request_time_with_aug_window(monkeypatch):
+    import httpx
+
+    def boom(*a, **k):
+        raise AssertionError("network call attempted at request time")
+
+    _seed_aug_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "events": [
+                _make_aug_econ(id="c1", title="CPI MoM", eventName="CPI MoM",
+                               event_family="cpi", signal_tier="major", date="2026-08-05"),
+            ],
+            "current_week": [], "previous_week": [],
+            "last_updated": "2026-08-02T10:00:00Z", "status": "ready",
+        },
+    })
+    monkeypatch.setattr(httpx, "AsyncClient", boom)
+    monkeypatch.setattr(httpx, "Client", boom)
+    env = get_top_catalysts(today=date(2026, 8, 2))
+    assert env["week"] == "2026-08-03/2026-08-07"
+    assert any(m.get("macroType") == "CPI" for d in env["days"] for m in d["macro"])
+
+
+def test_response_includes_window_and_macro_counts(monkeypatch):
+    _seed_aug_week(monkeypatch)
+    _seed_watchlist(monkeypatch, set())
+    _seed_options(monkeypatch, {})
+    _seed_sectors(monkeypatch, {})
+    _clear_earnings_cache()
+    _seed_snapshots(monkeypatch, {
+        "economic_releases": {
+            "events": [
+                _make_aug_econ(id="c1", title="CPI MoM", eventName="CPI MoM",
+                               event_family="cpi", signal_tier="major", date="2026-08-05"),
+                _make_aug_econ(id="c2", title="Core CPI MoM", eventName="Core CPI MoM",
+                               event_family="cpi", signal_tier="major", date="2026-08-05"),
+            ],
+            "current_week": [], "previous_week": [],
+            "last_updated": "2026-08-02T10:00:00Z", "status": "ready",
+        },
+    })
+    env = get_top_catalysts(today=date(2026, 8, 2))
+    assert env["week_start"] == "2026-08-03"
+    assert env["week_end"] == "2026-08-07"
+    assert env["window_mode"] == "next_week_planning"
+    assert env["macro_source_event_count"] == 2
+    assert env["macro_logical_event_count"] == 1

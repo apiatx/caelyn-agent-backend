@@ -470,11 +470,13 @@ def _hard_filter_economic(ev: dict) -> bool:
 
 
 def _hard_filter_treasury(ev: dict) -> bool:
-    mat = (ev.get("maturity") or ev.get("indicatorName") or "").upper().replace(" ", "")
+    raw = (ev.get("maturity") or ev.get("indicatorName") or "")
+    mat = re.sub(r"[^A-Z0-9]", "", raw.upper())
     if not mat:
         # Allow named curve/auction events through the title path.
-        title = ((ev.get("title") or "")
-                 + " " + (ev.get("eventName") or "")).lower()
+        title = " ".join(
+            str(ev.get(k) or "") for k in ("title", "eventName", "indicatorName")
+        ).lower()
         return any(k in title for k in ("auction", "treasury", "curve", "yield"))
     return any(k in mat for k in _TREASURY_KEY_MATURITIES)
 
@@ -901,6 +903,79 @@ def group_events_to_release_packages(events: list[dict]) -> list[dict]:
     return result
 
 
+# ── Shared canonical economic logical-event transformation ─────────────────
+
+def curate_economic_logical_events(
+    events: Iterable[dict],
+    *,
+    cap: int = DEFAULT_CAP_PER_SLICE,
+    watchlist: Optional[set[str]] = None,
+    portfolio: Optional[set[str]] = None,
+) -> list[dict]:
+    """
+    Transform raw individual economic-release rows into canonical logical
+    events (family cards + release-package cards + discrete events).
+
+    Order of operations:
+      1. hard filtering (economic_releases rules)
+      2. deterministic dedup
+      3. group_economic_events_to_families
+      4. group_events_to_release_packages
+      5. canonical scoring/ranking
+      6. stable output ordering
+
+    The output preserves canonical fields:
+      id, date, display_title, event_family, release_group, signal_tier,
+      signal_reason, lead_metric, children, actual/estimate/previous, unit.
+
+    This helper is used by:
+      • Economic Releases route curation
+      • Calendar Top Catalysts macro aggregation
+      • Home Top Catalysts macro aggregation
+    """
+    raw_list = [e for e in events if isinstance(e, dict)]
+    if not raw_list:
+        return []
+
+    watchlist = watchlist or set()
+    portfolio = portfolio or set()
+
+    # 1. Hard filter.
+    filtered = [e for e in raw_list if _hard_filter_economic(e)]
+
+    # 2. Dedup.
+    deduped = _dedup(filtered)
+
+    # 3. Family grouping.
+    grouped = group_economic_events_to_families(deduped)
+
+    # 4. Release-package grouping.
+    packaged = group_events_to_release_packages(grouped)
+
+    # 5. Score & rank using the existing economic scorer.
+    #    Family/package cards score by their strongest child (signal_tier) and
+    #    the lead child's economic importance.  This keeps the same relative
+    #    ordering the Economic Releases tab already uses.
+    def _score_logical(ev: dict) -> float:
+        # Prefer explicit signal_tier strength over the legacy score so a
+        # critical FOMC decision outranks a major CPI family.
+        tier_val = _TIER_ORDER.get((ev.get("signal_tier") or "").lower(), 0)
+        base = _score_economic(ev, watchlist, portfolio)
+        return (tier_val * 1000.0) + base
+
+    packaged.sort(
+        key=lambda e: (
+            _score_logical(e),
+            e.get("date") or "",
+            e.get("display_title") or e.get("title") or e.get("eventName") or "",
+        ),
+        reverse=True,
+    )
+
+    # 6. Trim.
+    return packaged[: max(1, int(cap))]
+
+
 # ── Public entry point ─────────────────────────────────────────────────────
 
 def curate_events(
@@ -948,10 +1023,13 @@ def curate_events(
     # 2. Dedup.
     deduped = _dedup(filtered)
 
-    # 2b. Family grouping — applies to economic_releases only.
+    # 2b. Family + release-package grouping — applies to economic_releases only.
     #     Runs after dedup, before scoring.  Raw Neon storage is unchanged.
     if tab == "economic_releases":
-        deduped = group_economic_events_to_families(deduped)
+        deduped = curate_economic_logical_events(
+            deduped, cap=cap, watchlist=watchlist, portfolio=portfolio,
+        )
+        return deduped
 
     # 3. Score & rank.
     if scorer is not None:

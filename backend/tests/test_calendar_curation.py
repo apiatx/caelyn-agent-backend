@@ -18,6 +18,7 @@ from services.calendar_curation import (
     DEFAULT_CAP_PER_SLICE,
     _canonical_symbol,
     _is_preferred_or_junk,
+    curate_economic_logical_events,
     curate_envelope,
     curate_events,
     group_economic_events_to_families,
@@ -87,10 +88,15 @@ def test_economic_drops_minor_country_noise():
          "country": "US", "date": "2026-05-03"},
     ]
     out = curate_events("economic_releases", raw, cap=50)
-    names = [e["eventName"] for e in out]
-    assert "Local Tractor Index" not in names
-    assert "CPI" in names
-    assert "Nonfarm Payrolls" in names
+    titles = [
+        e.get("display_title") or e.get("title") or e.get("eventName") or ""
+        for e in out
+    ]
+    assert "Local Tractor Index" not in titles
+    # CPI passes through as a discrete event; Nonfarm Payrolls becomes an
+    # Employment Report package card through the shared canonical pipeline.
+    assert any("CPI" in t for t in titles)
+    assert any("Employment Report" in t for t in titles)
     # Top should be a high-impact US release.
     assert out[0]["country"].upper() in ("US", "USA", "UNITED STATES")
 
@@ -1439,6 +1445,61 @@ def test_family_cards_pass_through_unchanged():
     emp_cards = [c for c in result if c.get("release_group") == "employment_report"]
     assert len(emp_cards) == 1
     assert emp_cards[0]["event_count"] == 2
+
+
+def test_curate_economic_logical_events_groups_ism_and_jolts():
+    raw = [
+        {"eventType": "economic_release", "eventName": "ISM Manufacturing PMI",
+         "country": "US", "date": "2026-08-03", "importance": "medium",
+         "signal_tier": "secondary", "signal_reason": "ISM business survey"},
+        {"eventType": "economic_release", "eventName": "ISM Manufacturing New Orders",
+         "country": "US", "date": "2026-08-03", "importance": "medium",
+         "signal_tier": "secondary", "signal_reason": "ISM business survey"},
+        {"eventType": "economic_release", "eventName": "JOLTs Job Openings",
+         "country": "US", "date": "2026-08-04", "importance": "medium",
+         "signal_tier": "secondary", "signal_reason": "JOLTS report"},
+        {"eventType": "economic_release", "eventName": "JOLTs Job Quits",
+         "country": "US", "date": "2026-08-04", "importance": "medium",
+         "signal_tier": "secondary", "signal_reason": "JOLTS report"},
+    ]
+    out = curate_economic_logical_events(raw, cap=50)
+    titles = [e.get("display_title") or e.get("title") or "" for e in out]
+    assert "ISM Manufacturing Report" in titles
+    assert "JOLTS Report" in titles
+    ism = [e for e in out if e.get("release_group") == "ism_manufacturing_report"][0]
+    jolts = [e for e in out if e.get("release_group") == "jolts_report"][0]
+    assert ism["event_count"] == 2
+    assert jolts["event_count"] == 2
+
+
+def test_curate_economic_logical_events_preserves_signal_reason():
+    raw = [
+        {"eventType": "economic_release", "eventName": "CPI MoM",
+         "country": "US", "date": "2026-08-05", "importance": "high",
+         "event_family": "cpi", "signal_tier": "major",
+         "signal_reason": "Major consumer inflation release"},
+    ]
+    out = curate_economic_logical_events(raw, cap=50)
+    assert len(out) == 1
+    assert out[0]["signal_tier"] == "major"
+    assert out[0]["signal_reason"] == "Major consumer inflation release"
+
+
+def test_curate_economic_logical_events_major_child_establishes_parent_tier():
+    raw = [
+        {"eventType": "economic_release", "eventName": "Non Farm Payrolls",
+         "country": "US", "date": "2026-08-07", "importance": "high",
+         "event_family": "payrolls", "signal_tier": "major",
+         "signal_reason": "Monthly payroll release"},
+        {"eventType": "economic_release", "eventName": "Unemployment Rate",
+         "country": "US", "date": "2026-08-07", "importance": "medium",
+         "event_family": "unemployment", "signal_tier": "secondary",
+         "signal_reason": "Unemployment rate release"},
+    ]
+    out = curate_economic_logical_events(raw, cap=50)
+    emp = [e for e in out if e.get("release_group") == "employment_report"][0]
+    assert emp["signal_tier"] == "major"
+    assert "Monthly payroll release" in emp["signal_reason"]
 
 
 if __name__ == "__main__":
