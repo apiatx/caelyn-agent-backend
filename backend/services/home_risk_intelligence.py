@@ -6,14 +6,16 @@ Design contract:
   - Sources reused (each retains its own upstream TTL):
       macro:dashboard:v3          MacroProvider.get_dashboard()   15-min TTL
       strategy:vix_regime:v1      build_vix_regime_payload()      15-min TTL  ← same engine as
-                                                                                 Macro "Should I Be Trading?"
+                                                                                  Macro "Should I Be Trading?"
       Neon calendar_snapshots     get_snapshot("economic_releases") weekly      ← same source as
-                                                                                 Calendar page
+                                                                                  Calendar page
       HL in-memory state          get_state_optional()            in-process   ← BTC price/change
       SR dashboard cache          sector_rotation.get_dashboard() 5-min TTL   ← breadth score
 
   - Composer cache: home:risk_intel:v1 (60 s TTL), LKG: home:risk_intel:v1:lkg (4 h)
-  - Risk cluster uses purely deterministic rules; no LLM involved.
+  - Canonical scoring is delegated to swing_regime_service (pure, testable).
+  - trade_decision is a projection from swing_regime — no independent VIX mapping.
+  - risk_cluster.severity/score/active MUST match swing_regime.risk_level/risk_score/active.
 """
 from __future__ import annotations
 
@@ -94,24 +96,47 @@ def _get_btc_from_hl() -> dict | None:
 # Breadth score from sector rotation dashboard (existing 5-min cache)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _get_breadth_score() -> float | None:
+async def _get_sector_data() -> dict:
     """
-    0-100 sector breadth: percentage of sectors with positive 1-day return.
+    Extract sector breadth (1D, 7D) and regime posture from the SR dashboard cache.
     Reuses SR dashboard cache — no new FMP call.
+
+    Returns dict with keys:
+      sector_breadth_1d   — 0-100, % sectors with positive 1-day return
+      sector_breadth_7d   — 0-100, % sectors with positive 7-day return (None if unavailable)
+      cyclical_vs_defensive_spread — float or None
+      market_posture       — "Risk-On" | "Risk-Off" | "Neutral"
+      sector_count         — number of sectors in denominator
     """
     try:
         from services.sector_rotation.service import get_dashboard as _sr_get
         sr = await _sr_get()
         if sr is None:
-            return None
+            return {"sector_breadth_1d": None}
         d = sr.model_dump() if hasattr(sr, "model_dump") else (sr if isinstance(sr, dict) else {})
         sectors = [s for s in (d.get("sectors") or []) if isinstance(s, dict)]
         if not sectors:
-            return None
-        pos = sum(1 for s in sectors if (s.get("change_1d") or 0) > 0)
-        return round(100.0 * pos / len(sectors))
+            return {"sector_breadth_1d": None}
+
+        pos_1d = sum(1 for s in sectors if (s.get("change_1d") or 0) > 0)
+        breadth_1d = round(100.0 * pos_1d / len(sectors))
+
+        c7d_vals = [s.get("change_7d") for s in sectors if s.get("change_7d") is not None]
+        breadth_7d = round(100.0 * sum(1 for v in c7d_vals if v > 0) / len(c7d_vals)) if c7d_vals else None
+
+        regime = d.get("regime") or {}
+        cyc_vs_def = regime.get("cyclical_vs_defensive")
+        posture = regime.get("market_posture") or ""
+
+        return {
+            "sector_breadth_1d":             breadth_1d,
+            "sector_breadth_7d":             breadth_7d,
+            "cyclical_vs_defensive_spread":  _r(cyc_vs_def, 2) if cyc_vs_def is not None else None,
+            "market_posture":                posture,
+            "sector_count":                  len(sectors),
+        }
     except Exception:
-        return None
+        return {"sector_breadth_1d": None}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -159,61 +184,68 @@ def _filter_upcoming_events(snapshot: dict, days_ahead: int = 7) -> list[dict]:
 #   MUST match the Macro → "Should I Be Trading?" tab.
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _build_trade_decision(vix_payload: dict) -> dict:
-    sig     = vix_payload.get("vix_regime_signal") or {}
+def _project_trade_decision_from_swing_regime(swing_regime: dict, vix_payload: dict) -> dict:
+    """
+    Project trade_decision from the canonical swing_regime result.
+    No longer maps from VIX alone — this eliminates the old contradiction.
+
+    Mapping:
+      swing_regime.trade_bias:
+        LONG             → label = "YES"
+        SELECTIVE_LONG   → label = "CAUTION"
+        NEUTRAL          → label = "CAUTION"
+        SELECTIVE_SHORT  → label = "CAUTION"
+        SHORT_HEDGE      → label = "NO"
+
+      score: 100 - swing_regime.risk_score  (inverse risk → tradeability)
+      mode: always "swing" for this endpoint
+      position_size_hint: from swing_regime
+      one_line: from swing_regime
+      avoid: deterministic from dominant driver and risk level
+      vix_zone / risk_regime / signal_summary: passthrough from vix_payload (preserved for compat)
+    """
+    trade_bias = swing_regime.get("trade_bias", "NEUTRAL")
+
+    bias_label_map = {
+        "LONG":             "YES",
+        "SELECTIVE_LONG":   "CAUTION",
+        "NEUTRAL":          "CAUTION",
+        "SELECTIVE_SHORT":  "CAUTION",
+        "SHORT_HEDGE":      "NO",
+    }
+    label = bias_label_map.get(trade_bias, "CAUTION")
+    score = max(0, min(100, 100 - (swing_regime.get("risk_score", 50))))
+    mode  = "swing"
+    pos_hint = swing_regime.get("position_size_hint", "selective")
+    one_line = swing_regime.get("one_line", "")
+
+    risk_level = swing_regime.get("risk_level", "MODERATE")
+    driver = swing_regime.get("dominant_driver", "")
+    avoid: list[str] = []
+
+    if risk_level in ("EXTREME",):
+        avoid = ["high-beta", "small-cap speculative", "leveraged positions", "all new entries"]
+    elif risk_level == "HIGH":
+        avoid = ["high-beta", "small-cap speculative", "leveraged positions"]
+    elif risk_level == "ELEVATED":
+        avoid = ["low-liquidity names"]
+    elif driver == "rate_and_dollar_pressure":
+        avoid = ["rate-sensitive growth names"]
+
+    sig = (vix_payload.get("vix_regime_signal") or {})
     zone    = vix_payload.get("vix_zone")   or sig.get("current_zone")   or "unknown"
     warning = vix_payload.get("risk_regime") or sig.get("warning_level") or "unknown"
-
-    label_map = {
-        "low":           "YES",
-        "moderate":      "CAUTION",
-        "moderate-high": "CAUTION",
-        "high":          "NO",
-        "extreme":       "NO",
-    }
-    size_map = {
-        "low":           "normal",
-        "moderate":      "selective",
-        "moderate-high": "half-size",
-        "high":          "half-size",
-        "extreme":       "preserve capital",
-    }
-    mode_map = {
-        "low":           "day",
-        "moderate":      "swing",
-        "moderate-high": "swing",
-        "high":          "swing",
-        "extreme":       "swing",
-    }
-    score_map = {
-        "calm":          85,
-        "elevated":      55,
-        "elevated_high": 38,
-        "stress":        18,
-        "panic":          5,
-    }
-
-    label = label_map.get(warning, "CAUTION")
-    score = score_map.get(zone, 50)
-
-    avoid: list[str] = []
-    if warning in ("high", "extreme"):
-        avoid = ["high-beta", "small-cap speculative", "leveraged positions"]
-    elif warning in ("moderate-high", "moderate"):
-        avoid = ["low-liquidity names"]
 
     return {
         "label":              label,
         "score":              score,
-        "mode":               mode_map.get(warning, "swing"),
-        "position_size_hint": size_map.get(warning, "selective"),
-        "one_line":           sig.get("signal_title") or f"VIX zone: {zone}",
+        "mode":               mode,
+        "position_size_hint": pos_hint,
+        "one_line":           one_line,
         "avoid":              avoid,
-        # Pass-through context so frontend can render the full signal
-        # without a second call to /api/strategy/vix-risk-regime.
-        "vix_zone":       zone,
-        "risk_regime":    warning,
-        "signal_summary": sig.get("signal_summary") or "",
+        "vix_zone":           zone,
+        "risk_regime":        warning,
+        "signal_summary":     sig.get("signal_summary") or "",
     }
 
 
@@ -547,19 +579,20 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
     macro_task   = macro_provider.get_dashboard() if macro_provider else asyncio.sleep(0)
     regime_task  = build_vix_regime_payload(macro_provider) if macro_provider else asyncio.sleep(0)
     cal_task     = asyncio.to_thread(get_snapshot, "economic_releases")
-    breadth_task = _get_breadth_score()
+    sector_task  = _get_sector_data()
 
-    macro_raw, vix_payload, econ_snap, breadth_raw = await asyncio.gather(
-        macro_task, regime_task, cal_task, breadth_task,
+    macro_raw, vix_payload, econ_snap, sector_data = await asyncio.gather(
+        macro_task, regime_task, cal_task, sector_task,
         return_exceptions=True,
     )
 
     macro_raw   = _safe(macro_raw, {})
     vix_payload = _safe(vix_payload, {})
     econ_snap   = _safe(econ_snap, {})
-    breadth_score = _safe(breadth_raw, None)
-    if isinstance(breadth_score, Exception):
-        breadth_score = None
+    sector_data = _safe(sector_data, {})
+    if isinstance(sector_data, Exception):
+        sector_data = {}
+    breadth_score = sector_data.get("sector_breadth_1d")
 
     print(
         "[RISK_INTEL] sources: macro:dashboard:v3 | strategy:vix_regime:v1 | "
@@ -605,6 +638,10 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
     btc_chg   = (btc_data or {}).get("change_pct")
 
     # ── 4. Market snapshot (spec-aligned shape) ───────────────────────────────
+    # NOTE: us_10y_chg_1d is not populated by MacroProvider.get_dashboard().
+    # change_bps remains null until the upstream source provides a 1D change.
+    us10y_chg_bps = _r((us10y_chg_pp or 0) * 100, 1) if us10y_chg_pp is not None else None
+
     market_snapshot = {
         "sp500":     {"symbol": "SPY",   "price": spy_price, "change_pct": spy_chg},
         "dow":       {"symbol": "DIA",   "price": dia_price, "change_pct": dia_chg},
@@ -613,15 +650,18 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
         "us10y": {
             "symbol":     "US10Y",
             "price":      us10y,
-            # change_bps: convert from %-points to bps (1 pp = 100 bps)
-            "change_bps": _r((us10y_chg_pp or 0) * 100, 1) if us10y_chg_pp is not None else None,
+            "change_bps": us10y_chg_bps,
         },
         "vix":  {"symbol": "VIX", "price": vix,  "change_pct": vix_chg},
         "dxy":  {"symbol": "DXY", "price": dxy,  "change_pct": dxy_chg_pct},
     }
 
-    # ── 5. Trade decision (mirrors Macro → "Should I Be Trading?" tab) ────────
-    trade_decision = _build_trade_decision(vix_payload)
+    # ── 5. Extract multi-TF data from existing cached service outputs ──────────
+    # SPX returns from vix_payload historical_windows
+    hist_windows = (vix_payload.get("historical_windows") or {})
+    spx_7d  = (hist_windows.get("7d") or {}).get("spx_return_pct")
+    spx_63d = (hist_windows.get("quarter") or {}).get("spx_return_pct")
+    vix_7d  = (hist_windows.get("7d") or {}).get("vix_min")  # not return, just snapshot
 
     # ── 6. Economic events ────────────────────────────────────────────────────
     upcoming_events = _filter_upcoming_events(econ_snap, days_ahead=7)
@@ -633,8 +673,49 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
         and (ev.get("date") or "9999") <= three_td_cutoff
         for ev in upcoming_events
     )
+    next_hi_event = None
+    next_hi_days = None
+    if has_hi_impact:
+        for ev in sorted(upcoming_events, key=lambda e: e.get("date", "9999")):
+            if ev.get("importance") in ("high", "critical", "HIGH", "CRITICAL"):
+                next_hi_event = ev.get("title") or ""
+                try:
+                    ed = datetime.strptime((ev.get("date") or "")[:10], "%Y-%m-%d").date()
+                    next_hi_days = (ed - now_utc.date()).days
+                except Exception:
+                    pass
+                break
 
-    # ── 7. Risk cluster — deterministic rules ─────────────────────────────────
+    # ── 7. Build normalized inputs for canonical swing-regime engine ───────────
+    swing_inputs = {
+        "spy_change_1d":                  spy_chg,
+        "qqq_change_1d":                  qqq_chg,
+        "sector_breadth_1d":              sector_data.get("sector_breadth_1d"),
+        "sector_breadth_7d":              sector_data.get("sector_breadth_7d"),
+        "spx_return_7d":                  spx_7d,
+        "spx_return_63d":                 spx_63d,
+        "vix_current":                    vix,
+        "vix_change_1d":                  vix_chg,
+        "vix_return_7d":                  vix_7d,
+        "hyg_change_1d":                  hyg_chg,
+        "us10y_yield":                    us10y,
+        "dxy_price":                      dxy,
+        "dxy_change_1d":                  dxy_chg_pct,
+        "btc_change_24h":                 btc_chg,
+        "cyclical_vs_defensive_spread":   sector_data.get("cyclical_vs_defensive_spread"),
+        "market_posture":                 sector_data.get("market_posture"),
+        "has_upcoming_high_impact_event": has_hi_impact,
+        "days_until_next_event":          next_hi_days,
+        "next_event_title":               next_hi_event,
+    }
+
+    from services.swing_regime_service import assess_swing_regime
+    swing_regime = assess_swing_regime(swing_inputs)
+
+    # ── 8. Project trade_decision from swing_regime ────────────────────────────
+    trade_decision = _project_trade_decision_from_swing_regime(swing_regime, vix_payload)
+
+    # ── 9. Risk cluster — preserved triggers + swing-regime-aligned severity ───
     breadth_float = float(breadth_score) if isinstance(breadth_score, (int, float)) else None
 
     risk_cluster = _assess_risk_cluster(
@@ -651,7 +732,14 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
         has_upcoming_high_impact_event=has_hi_impact,
     )
 
-    # ── 8. Why bullets ────────────────────────────────────────────────────────
+    # Override severity / score / active from canonical swing_regime
+    risk_cluster["severity"] = swing_regime["risk_level"]
+    risk_cluster["score"]    = swing_regime["risk_score"]
+    risk_cluster["active"]   = swing_regime["risk_level"] in ("ELEVATED", "HIGH", "EXTREME")
+    # Preserve trigger_count, triggers, headline, summary from the legacy assessment
+    # so the detailed trigger table remains available for inspection.
+
+    # ── 10. Why bullets ───────────────────────────────────────────────────────
     vix_sig_title = (vix_payload.get("vix_regime_signal") or {}).get("signal_title")
     why_bullets = _build_why_bullets(
         vix=vix,
@@ -664,7 +752,7 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
         vix_signal_title=vix_sig_title,
     )
 
-    # ── 9. Freshness metadata (no new fetches) ────────────────────────────────
+    # ── 11. Freshness metadata (no new fetches) ────────────────────────────────
     macro_gen_at = vix_payload.get("generated_at")          # ISO string from vix_regime payload
     cal_updated  = econ_snap.get("last_updated")             # ISO string from calendar snapshot
 
@@ -684,17 +772,18 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
             "strategy:vix_regime:v1 (build_vix_regime_payload, 15-min TTL) — SAME engine as Macro 'Should I Be Trading?'",
             "Neon calendar_snapshots/economic_releases (weekly refresh) — SAME source as Calendar page",
             "Hyperliquid in-memory state (get_state_optional, no TTL) — BTC price and 24h change",
-            "sector_rotation.get_dashboard (SR dashboard cache, 5-min TTL) — sector breadth computation",
+            "sector_rotation.get_dashboard (SR dashboard cache, 5-min TTL) — sector breadth + multi-TF regime",
             "NO new FMP/upstream API calls made for Home Risk Intelligence",
         ],
     }
 
-    # ── 10. Assemble result ───────────────────────────────────────────────────
+    # ── 12. Assemble result ────────────────────────────────────────────────────
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     print(
         f"[RISK_INTEL] built in {elapsed_ms}ms — "
-        f"severity={risk_cluster['severity']} hot_triggers={risk_cluster['trigger_count']} "
-        f"events={len(upcoming_events)} breadth={breadth_float}"
+        f"swing_level={swing_regime['risk_level']} swing_score={swing_regime['risk_score']} "
+        f"bias={swing_regime['trade_bias']} events={len(upcoming_events)} "
+        f"breadth={breadth_float} sr_sectors={sector_data.get('sector_count')}"
     )
 
     result = {
@@ -704,6 +793,7 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
         "market_snapshot":          market_snapshot,
         "trade_decision":           trade_decision,
         "risk_cluster":             risk_cluster,
+        "swing_regime":             swing_regime,
         "upcoming_economic_events": upcoming_events,
         "why_market_is_moving":     why_bullets,
     }
@@ -724,6 +814,6 @@ async def build_home_risk_intelligence_safe(macro_provider) -> dict:
         print(f"[RISK_INTEL] build error (trying LKG): {exc}")
         lkg = cache.get(_RISK_INTEL_LKG_KEY)
         if lkg is not None:
-            lkg["_lkg_fallback"] = True
-            return lkg
+            # Return a shallow copy with the fallback flag — never mutate the cached LKG.
+            return {**lkg, "_lkg_fallback": True}
         raise
