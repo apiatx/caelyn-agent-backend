@@ -6,8 +6,10 @@ Mocked-data-only — no FMP, no network, no DB.
 from __future__ import annotations
 
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 _BACKEND = Path(__file__).resolve().parent.parent
 if str(_BACKEND) not in sys.path:
@@ -2454,6 +2456,47 @@ class TestMacroSchedulerIntegration:
         assert month["view"] == "month"
         assert month["window_start"] == "2026-08-01"
 
+    def test_range_backed_empty_events_never_falls_back_to_current_week(self, monkeypatch):
+        from services import calendar_snapshot_service as _svc
+
+        env = {
+            "events": [],
+            "current_week": [
+                {"date": "2026-07-29", "eventName": "CPI MoM", "eventType": "economic_release"},
+            ],
+            "previous_week": [],
+            "last_updated": "2026-08-02T10:00:00Z",
+            "status": "ready",
+            "horizon": {
+                "horizon_start": "2026-07-18",
+                "horizon_end": "2026-10-29",
+                "coverage_ranges": [{"from": "2026-07-18", "to": "2026-10-29", "status": "complete"}],
+            },
+        }
+        monkeypatch.setattr(_svc, "get_snapshot", lambda tab: env)
+
+        out = _svc.get_snapshot_window("economic_releases", view="week", date="2026-08-03")
+        assert out["events"] == []
+        assert out["coverage_complete"] is True
+        assert out["empty_reason"] == "no_events_in_window"
+
+    def test_true_legacy_snapshot_may_use_current_week(self, monkeypatch):
+        from services import calendar_snapshot_service as _svc
+
+        env = {
+            "events": [],
+            "current_week": [
+                {"date": "2026-08-05", "eventName": "CPI MoM", "eventType": "economic_release"},
+            ],
+            "previous_week": [],
+            "last_updated": "2026-08-02T10:00:00Z",
+            "status": "ready",
+        }
+        monkeypatch.setattr(_svc, "get_snapshot", lambda tab: env)
+
+        out = _svc.get_snapshot_window("economic_releases", view="week", date="2026-08-03")
+        assert len(out["events"]) == 1
+
     def test_all_outputs_json_serialize(self, monkeypatch):
         import json
         import asyncio
@@ -2467,3 +2510,441 @@ class TestMacroSchedulerIntegration:
         result = asyncio.run(_svc.refresh_macro_sources("key"))
         # Must not raise.
         json.dumps(result)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Refresh result success classification
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestRefreshResultSucceeded:
+    """_refresh_result_succeeded must detect non-throwing error envelopes."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_refresh_registries(self, monkeypatch):
+        from services import calendar_snapshot_service as _svc
+        _svc._refresh_tasks.clear()
+        _svc._macro_cycle_tasks.clear()
+
+    def test_missing_envelope_is_failure(self):
+        from services.calendar_snapshot_service import _refresh_result_succeeded
+        assert _refresh_result_succeeded(None) is False
+        assert _refresh_result_succeeded("not a dict") is False
+
+    def test_fetch_error_envelope_is_failure(self):
+        from services.calendar_snapshot_service import _refresh_result_succeeded
+        assert _refresh_result_succeeded({"status": "ready", "fetch_error": "boom"}) is False
+
+    def test_meta_fetch_error_envelope_is_failure(self):
+        from services.calendar_snapshot_service import _refresh_result_succeeded
+        assert _refresh_result_succeeded({"status": "ready", "meta": {"fetch_error": "boom"}}) is False
+
+    def test_explicit_error_status_is_failure(self):
+        from services.calendar_snapshot_service import _refresh_result_succeeded
+        assert _refresh_result_succeeded({"status": "error"}) is False
+        assert _refresh_result_succeeded({"status": "failed"}) is False
+        assert _refresh_result_succeeded({"status": "unavailable"}) is False
+
+    def test_valid_empty_envelope_is_success(self):
+        from services.calendar_snapshot_service import _refresh_result_succeeded
+        assert _refresh_result_succeeded({"status": "empty"}) is True
+
+    def test_ready_envelope_is_success(self):
+        from services.calendar_snapshot_service import _refresh_result_succeeded
+        assert _refresh_result_succeeded({"status": "ready"}) is True
+
+    def test_marks_use_helper_sunday(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        sunday_0400 = datetime(2026, 8, 2, 4, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(_svc, "_et_now", lambda: sunday_0400)
+        monkeypatch.setattr(_svc, "_iso_year_week", lambda dt: "2026-W31")
+        monkeypatch.setattr(_svc, "_last_run_marker", lambda tab: None)
+
+        marked: set[str] = set()
+        monkeypatch.setattr(_svc, "_set_last_run_marker", lambda tab, marker: marked.add(tab))
+
+        async def _core(tab: str, fmp_key: str) -> dict:
+            if tab == "treasury_macro":
+                return {"tab": tab, "status": "empty", "fetch_error": "boom"}
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _core)
+
+        async def _run_once():
+            task = asyncio.create_task(weekly_scheduler_loop(lambda: "key"))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(_run_once())
+        assert "economic_releases" in marked
+        assert "treasury_macro" not in marked
+
+    def test_marks_use_helper_mon_sat(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        tuesday = datetime(2026, 8, 4, 10, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(_svc, "_et_now", lambda: tuesday)
+        monkeypatch.setattr(_svc, "_iso_year_week", lambda dt: "2026-W32")
+        monkeypatch.setattr(_svc, "_last_run_marker", lambda tab: None)
+
+        def _fake_neon_read(tab: str):
+            return {"events": [], "meta": {"window": {"from": "2026-07-27"}}, "status": "stale"}
+
+        monkeypatch.setattr(_svc, "_neon_read", _fake_neon_read)
+
+        marked: set[str] = set()
+        monkeypatch.setattr(_svc, "_set_last_run_marker", lambda tab, marker: marked.add(tab))
+
+        async def _core(tab: str, fmp_key: str) -> dict:
+            if tab == "treasury_macro":
+                return {"tab": tab, "status": "empty", "fetch_error": "boom"}
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _core)
+
+        asyncio.run(_svc.check_and_refresh_stale("key", delay_secs=0))
+        assert "economic_releases" in marked
+        assert "treasury_macro" not in marked
+
+    def test_manual_backfill_uses_helper(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        async def _core(tab: str, fmp_key: str) -> dict:
+            if tab == "treasury_macro":
+                return {"tab": tab, "status": "empty", "fetch_error": "boom"}
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _core)
+        monkeypatch.setattr(_svc, "_neon_write", lambda tab, slot: True)
+        monkeypatch.setattr(_svc, "_read_disk", lambda: {})
+        monkeypatch.setattr(_svc, "_write_disk", lambda store: None)
+
+        rc = asyncio.run(_svc._manual_backfill(["economic_releases", "treasury_macro"]))
+        assert rc == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Sunday macro scheduling
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestSundayMacroScheduling:
+    """Sunday must run the macro cycle once and retry only failed sources."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_refresh_registries(self, monkeypatch):
+        from services import calendar_snapshot_service as _svc
+        _svc._refresh_tasks.clear()
+        _svc._macro_cycle_tasks.clear()
+
+    def _run_scheduler_times(self, svc, times, fmp_key="key", duration=0.3):
+        """Run weekly_scheduler_loop with _et_now returning each time in sequence."""
+        import asyncio
+
+        it = iter(times)
+
+        def _fake_et_now():
+            try:
+                return next(it)
+            except StopIteration:
+                # Far-future Sunday that triggers no slots.
+                return datetime(2099, 1, 4, 12, 0, tzinfo=timezone.utc)
+
+        monkeypatch_local = lambda mp: mp.setattr(svc, "_et_now", _fake_et_now)
+        return monkeypatch_local
+
+    def _patch_sleep(self, monkeypatch):
+        """Make scheduler loop iterations instantaneous for multi-time tests."""
+        import asyncio
+        real_sleep = asyncio.sleep
+
+        async def _fast_sleep(delay, *args, **kwargs):
+            return await real_sleep(0)
+
+        monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+        return real_sleep
+
+    async def _wait_for_refresh_tasks(self, svc, real_sleep):
+        """Yield until in-flight refresh/macro tasks complete."""
+        for _ in range(100):
+            if not svc._macro_cycle_tasks and not svc._refresh_tasks:
+                return
+            await real_sleep(0)
+
+    def test_sunday_0400_full_success_refreshes_each_source_once(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        self._patch_sleep(monkeypatch)
+        sunday_0400 = datetime(2026, 8, 2, 4, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(_svc, "_et_now", lambda: sunday_0400)
+        monkeypatch.setattr(_svc, "_iso_year_week", lambda dt: "2026-W31")
+        monkeypatch.setattr(_svc, "_last_run_marker", lambda tab: None)
+        monkeypatch.setattr(_svc, "_set_last_run_marker", lambda tab, marker: None)
+
+        calls: list[str] = []
+
+        async def _core(tab: str, fmp_key: str) -> dict:
+            calls.append(tab)
+            await asyncio.sleep(0.01)
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _core)
+
+        async def _run_once():
+            task = asyncio.create_task(weekly_scheduler_loop(lambda: "key"))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(_run_once())
+        assert calls.count("economic_releases") == 1
+        assert calls.count("treasury_macro") == 1
+
+    def test_sunday_0500_after_full_success_performs_zero_work(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        self._patch_sleep(monkeypatch)
+        # 05:00 pass with both markers already set.
+        sunday_0500 = datetime(2026, 8, 2, 5, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(_svc, "_et_now", lambda: sunday_0500)
+        monkeypatch.setattr(_svc, "_iso_year_week", lambda dt: "2026-W31")
+        monkeypatch.setattr(_svc, "_last_run_marker", lambda tab: "2026-W31")
+        monkeypatch.setattr(_svc, "_set_last_run_marker", lambda tab, marker: None)
+
+        calls: list[str] = []
+
+        async def _core(tab: str, fmp_key: str) -> dict:
+            calls.append(tab)
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _core)
+
+        async def _run_once():
+            task = asyncio.create_task(weekly_scheduler_loop(lambda: "key"))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(_run_once())
+        assert calls == []
+
+    def test_complete_0400_to_0500_totals_one_each(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        real_sleep = self._patch_sleep(monkeypatch)
+        # _et_now is called twice per loop iteration (body + sleep calc).
+        times = [
+            datetime(2026, 8, 2, 4, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 2, 4, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 2, 5, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 2, 5, 0, tzinfo=timezone.utc),
+        ]
+        it = iter(times)
+        monkeypatch.setattr(_svc, "_et_now", lambda: next(it))
+        monkeypatch.setattr(_svc, "_iso_year_week", lambda dt: "2026-W31")
+
+        markers: set[str] = set()
+
+        def _get_marker(tab: str):
+            return "2026-W31" if tab in markers else None
+
+        def _set_marker(tab: str, marker: str):
+            if marker == "2026-W31":
+                markers.add(tab)
+
+        monkeypatch.setattr(_svc, "_last_run_marker", _get_marker)
+        monkeypatch.setattr(_svc, "_set_last_run_marker", _set_marker)
+
+        calls: list[str] = []
+
+        async def _core(tab: str, fmp_key: str) -> dict:
+            calls.append(tab)
+            await real_sleep(0.01)
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _core)
+
+        async def _run():
+            task = asyncio.create_task(weekly_scheduler_loop(lambda: "key"))
+            await real_sleep(0.02)
+            await self._wait_for_refresh_tasks(_svc, real_sleep)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(_run())
+        assert calls.count("economic_releases") == 1
+        assert calls.count("treasury_macro") == 1
+
+    def test_treasury_failure_at_0400_retries_treasury_only_at_0500(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        real_sleep = self._patch_sleep(monkeypatch)
+        times = [
+            datetime(2026, 8, 2, 4, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 2, 4, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 2, 5, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 2, 5, 0, tzinfo=timezone.utc),
+        ]
+        it = iter(times)
+        monkeypatch.setattr(_svc, "_et_now", lambda: next(it))
+        monkeypatch.setattr(_svc, "_iso_year_week", lambda dt: "2026-W31")
+
+        markers: set[str] = set()
+
+        def _get_marker(tab: str):
+            return "2026-W31" if tab in markers else None
+
+        def _set_marker(tab: str, marker: str):
+            if marker == "2026-W31":
+                markers.add(tab)
+
+        monkeypatch.setattr(_svc, "_last_run_marker", _get_marker)
+        monkeypatch.setattr(_svc, "_set_last_run_marker", _set_marker)
+
+        calls: list[str] = []
+
+        async def _core(tab: str, fmp_key: str) -> dict:
+            calls.append(tab)
+            await real_sleep(0.01)
+            if tab == "treasury_macro" and calls.count("treasury_macro") == 1:
+                return {"tab": tab, "status": "empty", "fetch_error": "treasury down"}
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _core)
+
+        async def _run():
+            task = asyncio.create_task(weekly_scheduler_loop(lambda: "key"))
+            await real_sleep(0.02)
+            await self._wait_for_refresh_tasks(_svc, real_sleep)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(_run())
+        assert calls.count("economic_releases") == 1
+        assert calls.count("treasury_macro") == 2
+
+    def test_economic_success_not_rerun_during_treasury_retry(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        real_sleep = self._patch_sleep(monkeypatch)
+        times = [
+            datetime(2026, 8, 2, 4, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 2, 4, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 2, 5, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 2, 5, 0, tzinfo=timezone.utc),
+        ]
+        it = iter(times)
+        monkeypatch.setattr(_svc, "_et_now", lambda: next(it))
+        monkeypatch.setattr(_svc, "_iso_year_week", lambda dt: "2026-W31")
+
+        markers: set[str] = set()
+
+        def _get_marker(tab: str):
+            return "2026-W31" if tab in markers else None
+
+        def _set_marker(tab: str, marker: str):
+            if marker == "2026-W31":
+                markers.add(tab)
+
+        monkeypatch.setattr(_svc, "_last_run_marker", _get_marker)
+        monkeypatch.setattr(_svc, "_set_last_run_marker", _set_marker)
+
+        calls: list[str] = []
+
+        async def _core(tab: str, fmp_key: str) -> dict:
+            calls.append(tab)
+            await real_sleep(0.01)
+            if tab == "treasury_macro" and calls.count("treasury_macro") == 1:
+                return {"tab": tab, "status": "empty", "fetch_error": "treasury down"}
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _core)
+
+        async def _run():
+            task = asyncio.create_task(weekly_scheduler_loop(lambda: "key"))
+            await real_sleep(0.02)
+            await self._wait_for_refresh_tasks(_svc, real_sleep)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(_run())
+        # Economic is called only during the 04:00 cycle, never during 05:00 retry.
+        assert calls.count("economic_releases") == 1
+
+    def test_economic_failure_does_not_rerun_successful_treasury(self, monkeypatch):
+        import asyncio
+        from services import calendar_snapshot_service as _svc
+
+        real_sleep = self._patch_sleep(monkeypatch)
+        times = [
+            datetime(2026, 8, 2, 4, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 2, 4, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 2, 5, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 2, 5, 0, tzinfo=timezone.utc),
+        ]
+        it = iter(times)
+        monkeypatch.setattr(_svc, "_et_now", lambda: next(it))
+        monkeypatch.setattr(_svc, "_iso_year_week", lambda dt: "2026-W31")
+
+        markers: set[str] = set()
+
+        def _get_marker(tab: str):
+            return "2026-W31" if tab in markers else None
+
+        def _set_marker(tab: str, marker: str):
+            if marker == "2026-W31":
+                markers.add(tab)
+
+        monkeypatch.setattr(_svc, "_last_run_marker", _get_marker)
+        monkeypatch.setattr(_svc, "_set_last_run_marker", _set_marker)
+
+        calls: list[str] = []
+
+        async def _core(tab: str, fmp_key: str) -> dict:
+            calls.append(tab)
+            await real_sleep(0.01)
+            if tab == "economic_releases" and calls.count("economic_releases") == 1:
+                return {"tab": tab, "status": "empty", "fetch_error": "economic down"}
+            return {"tab": tab, "status": "ready"}
+
+        monkeypatch.setattr(_svc, "_refresh_tab_core", _core)
+
+        async def _run():
+            task = asyncio.create_task(weekly_scheduler_loop(lambda: "key"))
+            await real_sleep(0.02)
+            await self._wait_for_refresh_tasks(_svc, real_sleep)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(_run())
+        # Treasury succeeds at 04:00 and is never retried.
+        assert calls.count("treasury_macro") == 1

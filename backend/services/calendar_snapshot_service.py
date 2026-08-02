@@ -1152,9 +1152,14 @@ def get_snapshot_window(
         has_ranges = bool(ranges)
         # A horizon snapshot is identified by either a broad events collection
         # OR explicit coverage ranges.  Ranges with an empty events array mean
-        # a successfully fetched empty window, not a missing snapshot.
+        # a successfully fetched empty window, not a missing snapshot.  When
+        # coverage ranges are present, the broad events collection is
+        # authoritative even if empty — never fall back to legacy current_week.
         source = "horizon" if (broad or has_ranges) else ("legacy" if legacy else "none")
-        pool = broad if broad else legacy
+        if broad or has_ranges:
+            pool = broad
+        else:
+            pool = legacy
         selected = _select_events_for_window(pool, win_from, win_to)
         if ranges:
             ranges = _normalize_coverage_ranges(ranges)
@@ -1242,6 +1247,30 @@ def _is_macro_tab(tab: str) -> bool:
     return tab in _MACRO_TABS
 
 
+_ERROR_REFRESH_STATUSES: frozenset[str] = frozenset({"error", "failed", "unavailable"})
+
+
+def _refresh_result_succeeded(envelope: Optional[dict]) -> bool:
+    """
+    Return True when a refresh envelope represents a successfully completed
+    refresh.  A non-throwing return is not enough: the envelope may carry
+    fetch_error or an explicit error status.
+
+    A valid successfully-fetched empty response (status="empty" with no error
+    metadata) is treated as success.
+    """
+    if not isinstance(envelope, dict):
+        return False
+    if envelope.get("fetch_error"):
+        return False
+    if (envelope.get("meta") or {}).get("fetch_error"):
+        return False
+    status = envelope.get("status")
+    if status in _ERROR_REFRESH_STATUSES:
+        return False
+    return True
+
+
 def _cleanup_macro_cycle_task(task: asyncio.Task) -> None:
     """Remove a completed macro-cycle task from the registry by identity."""
     if _macro_cycle_tasks.get("macro_cycle") is task:
@@ -1298,7 +1327,10 @@ async def _refresh_macro_sources_core(fmp_key: str) -> dict:
     async def _refresh_one(tab: str) -> None:
         try:
             results[tab] = await refresh_tab(tab, fmp_key)
-            statuses.append("ready")
+            if _refresh_result_succeeded(results[tab]):
+                statuses.append("ready")
+            else:
+                statuses.append("failed")
         except Exception as e:
             print(f"[calendar_snapshot] refresh_macro_sources error tab={tab}: {e}")
             results[tab] = get_snapshot(tab)
@@ -1708,7 +1740,12 @@ async def check_and_refresh_stale(fmp_key: str, delay_secs: int = 45) -> None:
     if macro_stale:
         print(f"[calendar_snapshot] startup stale-check: running coordinated macro cycle for {macro_stale}")
         try:
-            await refresh_macro_sources(fmp_key)
+            result = await refresh_macro_sources(fmp_key)
+            stale_marker = f"stale:{_iso_year_week(_et_now())}"
+            for tab in macro_stale:
+                env = result.get(tab) or {}
+                if _refresh_result_succeeded(env):
+                    _set_last_run_marker(tab, stale_marker)
         except Exception as e:
             print(f"[calendar_snapshot] startup stale-check macro cycle error: {e}")
 
@@ -1760,26 +1797,55 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
                     else:
                         other_slots.append((tab, hour, minute))
 
-                # One macro cycle refreshes both macro sources together.
-                if macro_slots and fmp_key:
-                    try:
-                        print(
-                            f"[calendar_snapshot] scheduler firing macro cycle "
-                            f"tabs={[s[0] for s in macro_slots]} et={now_et.isoformat()}"
-                        )
-                        result = await refresh_macro_sources(fmp_key)
-                        for tab, _, _ in macro_slots:
-                            env = result.get(tab) or {}
-                            # Set marker only for sources that actually succeeded.
-                            if env.get("status") != "empty" and not env.get("fetch_error"):
-                                _set_last_run_marker(tab, week_marker)
-                            else:
+                # Macro sources share one coordinated refresh cycle.  At the first
+                # macro slot of the week, run the full cycle for ALL macro sources
+                # and mark each according to its own result.  At a later macro
+                # slot, any source that still lacks a marker is retried individually
+                # so successful sources are never rerun.
+                all_macro_tabs = sorted(_MACRO_TABS)
+                macro_unmarked = [
+                    tab for tab in all_macro_tabs
+                    if _last_run_marker(tab) != week_marker
+                ]
+                macro_slot_tabs = [tab for tab, _, _ in macro_slots]
+
+                if macro_slots and fmp_key and macro_unmarked:
+                    if len(macro_unmarked) == len(all_macro_tabs):
+                        # First macro slot of the week: refresh all macro sources
+                        # together, regardless of which source owns this hour.
+                        try:
+                            print(
+                                f"[calendar_snapshot] scheduler firing macro cycle "
+                                f"tabs={all_macro_tabs} et={now_et.isoformat()}"
+                            )
+                            result = await refresh_macro_sources(fmp_key)
+                            for tab in all_macro_tabs:
+                                env = result.get(tab) or {}
+                                if _refresh_result_succeeded(env):
+                                    _set_last_run_marker(tab, week_marker)
+                                else:
+                                    print(
+                                        f"[calendar_snapshot] scheduler macro source={tab} "
+                                        f"did not succeed, marker not set"
+                                    )
+                        except Exception as e:
+                            print(f"[calendar_snapshot] scheduler macro cycle error: {e}")
+                    else:
+                        # Partial failure retry: refresh only unmarked sources whose
+                        # scheduled hour has arrived.
+                        for tab in macro_unmarked:
+                            if tab not in macro_slot_tabs:
+                                continue
+                            try:
                                 print(
-                                    f"[calendar_snapshot] scheduler macro source={tab} "
-                                    f"did not succeed, marker not set"
+                                    f"[calendar_snapshot] scheduler retrying macro source={tab} "
+                                    f"et={now_et.isoformat()}"
                                 )
-                    except Exception as e:
-                        print(f"[calendar_snapshot] scheduler macro cycle error: {e}")
+                                envelope = await refresh_tab(tab, fmp_key)
+                                if _refresh_result_succeeded(envelope):
+                                    _set_last_run_marker(tab, week_marker)
+                            except Exception as e:
+                                print(f"[calendar_snapshot] scheduler retry error tab={tab}: {e}")
 
                 for tab, _, _ in other_slots:
                     if not fmp_key:
@@ -1824,7 +1890,7 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
                         result = await refresh_macro_sources(fmp_key)
                         for tab in macro_stale:
                             env = result.get(tab) or {}
-                            if env.get("status") != "empty" and not env.get("fetch_error"):
+                            if _refresh_result_succeeded(env):
                                 _set_last_run_marker(tab, stale_marker)
                     except Exception as e:
                         print(f"[calendar_snapshot] stale-check macro cycle error: {e}")
@@ -1902,7 +1968,7 @@ async def _manual_backfill(tabs: list[str]) -> int:
                     f"[backfill] ✓ tab={tab} status={status} "
                     f"current_week={cw} previous_week={pw} last_updated={last}"
                 )
-                if status == "empty":
+                if not _refresh_result_succeeded(envelope):
                     failures.append(tab)
         except Exception as e:
             print(f"[backfill] ✗ macro cycle ERROR: {e}")
@@ -1927,7 +1993,7 @@ async def _manual_backfill(tabs: list[str]) -> int:
                 f"[backfill] ✓ tab={tab} status={status} "
                 f"current_week={cw} previous_week={pw} last_updated={last}"
             )
-            if status == "empty":
+            if not _refresh_result_succeeded(envelope):
                 failures.append(tab)
         except Exception as e:
             print(f"[backfill] ✗ tab={tab} ERROR: {e}")

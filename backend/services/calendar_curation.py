@@ -1142,14 +1142,39 @@ def get_canonical_macro_window(
 
     # Preserve authoritative coverage metadata from the source envelope when
     # available, enriching the canonical output without re-deriving it.
-    coverage_ranges = econ_env.get("coverage_ranges") or (
-        (econ_env.get("meta") or {}).get("coverage_ranges") if isinstance(econ_env.get("meta"), dict) else None
-    ) or []
-    actual_dates = sorted(
-        (e.get("date") or "")[:10] for e in econ_source if (e.get("date") or "")[:10]
+    # Coverage ranges live in multiple existing locations; prefer the envelope
+    # top-level, then horizon, then meta.
+    coverage_ranges = (
+        econ_env.get("coverage_ranges")
+        or (econ_env.get("horizon") or {}).get("coverage_ranges")
+        or ((econ_env.get("meta") or {}).get("coverage_ranges") if isinstance(econ_env.get("meta"), dict) else None)
+        or []
     )
-    actual_start = actual_dates[0] if actual_dates else None
-    actual_end = actual_dates[-1] if actual_dates else None
+
+    # actual_start / actual_end describe the broader persisted dataset, not the
+    # selected Day/Week/Month window.  Preserve authoritative values first.
+    def _pick_bound(key: str) -> Optional[str]:
+        for src in (
+            econ_env.get(key),
+            (econ_env.get("horizon") or {}).get(key),
+            (econ_env.get("meta") or {}).get(key),
+            (econ_env.get("coverage") or {}).get(key),
+        ):
+            if isinstance(src, str) and src:
+                return src
+        return None
+
+    actual_start = _pick_bound("actual_start")
+    actual_end = _pick_bound("actual_end")
+    if actual_start is None or actual_end is None:
+        # Conservative fallback to bounds of the selected economic events only
+        # when no authoritative metadata is present.
+        actual_dates = sorted(
+            (e.get("date") or "")[:10] for e in econ_source if (e.get("date") or "")[:10]
+        )
+        if actual_dates:
+            actual_start = actual_start or actual_dates[0]
+            actual_end = actual_end or actual_dates[-1]
 
     return {
         "window_start": start_date,

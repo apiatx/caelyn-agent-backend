@@ -1767,6 +1767,92 @@ def test_legacy_envelope_without_events_uses_current_week(monkeypatch):
     assert out["macro_logical_events"][0]["event_family"] == "cpi"
 
 
+def test_horizon_coverage_ranges_survive_canonical_output(monkeypatch):
+    """coverage_ranges from envelope.horizon are preserved."""
+    from services import calendar_snapshot_service as _snap_svc
+    from services.calendar_curation import get_canonical_macro_window
+
+    monkeypatch.setattr(_snap_svc, "get_snapshot", lambda tab: {"events": []})
+
+    envelope = {
+        "events": [],
+        "horizon": {
+            "coverage_ranges": [
+                {"from": "2026-08-01", "to": "2026-08-31", "status": "complete"},
+            ],
+        },
+        "coverage_complete": True,
+        "empty_reason": "no_events_in_window",
+        "last_updated": "2026-08-02T10:00:00Z",
+        "status": "ready",
+    }
+
+    out = get_canonical_macro_window(
+        "2026-08-01", "2026-08-31",
+        include_treasury_context=False,
+        economic_envelope=envelope,
+    )
+    assert len(out["coverage_ranges"]) == 1
+    assert out["coverage_ranges"][0]["from"] == "2026-08-01"
+
+
+def test_authoritative_actual_bounds_survive_canonical_output(monkeypatch):
+    """actual_start/actual_end from the envelope are preserved, not derived."""
+    from services import calendar_snapshot_service as _snap_svc
+    from services.calendar_curation import get_canonical_macro_window
+
+    monkeypatch.setattr(_snap_svc, "get_snapshot", lambda tab: {"events": []})
+
+    envelope = {
+        "events": [],
+        "actual_start": "2026-07-18",
+        "actual_end": "2026-10-29",
+        "horizon": {
+            "actual_start": "2026-07-20",
+            "actual_end": "2026-10-25",
+        },
+        "coverage_complete": True,
+        "empty_reason": "no_events_in_window",
+        "last_updated": "2026-08-02T10:00:00Z",
+        "status": "ready",
+    }
+
+    out = get_canonical_macro_window(
+        "2026-08-01", "2026-08-31",
+        include_treasury_context=False,
+        economic_envelope=envelope,
+    )
+    assert out["actual_start"] == "2026-07-18"
+    assert out["actual_end"] == "2026-10-29"
+
+
+def test_empty_selected_window_keeps_actual_bounds(monkeypatch):
+    """A covered empty window does not replace actual bounds with None."""
+    from services import calendar_snapshot_service as _snap_svc
+    from services.calendar_curation import get_canonical_macro_window
+
+    monkeypatch.setattr(_snap_svc, "get_snapshot", lambda tab: {"events": []})
+
+    envelope = {
+        "events": [],
+        "actual_start": "2026-07-18",
+        "actual_end": "2026-10-29",
+        "coverage_complete": True,
+        "empty_reason": "no_events_in_window",
+        "last_updated": "2026-08-02T10:00:00Z",
+        "status": "ready",
+    }
+
+    out = get_canonical_macro_window(
+        "2026-08-01", "2026-08-31",
+        include_treasury_context=False,
+        economic_envelope=envelope,
+    )
+    assert out["macro_logical_events"] == []
+    assert out["actual_start"] == "2026-07-18"
+    assert out["actual_end"] == "2026-10-29"
+
+
 if __name__ == "__main__":
     # Tiny self-running mode without pytest.
     fns = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
