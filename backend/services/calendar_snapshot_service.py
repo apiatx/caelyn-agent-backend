@@ -1248,6 +1248,7 @@ def _is_macro_tab(tab: str) -> bool:
 
 
 _ERROR_REFRESH_STATUSES: frozenset[str] = frozenset({"error", "failed", "unavailable"})
+_SUCCESS_REFRESH_STATUSES: frozenset[str] = frozenset({"ready", "empty"})
 
 
 def _refresh_result_succeeded(envelope: Optional[dict]) -> bool:
@@ -1261,14 +1262,165 @@ def _refresh_result_succeeded(envelope: Optional[dict]) -> bool:
     """
     if not isinstance(envelope, dict):
         return False
+    if not envelope:
+        return False
     if envelope.get("fetch_error"):
         return False
     if (envelope.get("meta") or {}).get("fetch_error"):
         return False
     status = envelope.get("status")
-    if status in _ERROR_REFRESH_STATUSES:
+    if not isinstance(status, str) or not status.strip():
         return False
-    return True
+    status_norm = status.strip().lower()
+    if status_norm in _ERROR_REFRESH_STATUSES:
+        return False
+    return status_norm in _SUCCESS_REFRESH_STATUSES
+
+
+# ── Sunday macro retry state ─────────────────────────────────────────────────
+# Persisted per-source retry metadata so a failed macro source retries every
+# 10 minutes for up to 3 hours, but never more than once per 10-minute slot.
+
+_MACRO_RETRY_INTERVAL_MINS = 10
+_MACRO_RETRY_WINDOW_HOURS = 3
+_RETRY_META_KEY = "retry_meta"
+
+
+def _format_iso_ts(dt: datetime) -> str:
+    return dt.isoformat()
+
+
+def _parse_iso_ts(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
+
+
+def _load_retry_meta(tab: str) -> Optional[dict]:
+    """Load persisted retry metadata for a macro source."""
+    raw: Any = None
+    try:
+        from data.pg_storage import calendar_snapshot_get_meta_field
+        raw = calendar_snapshot_get_meta_field(tab, _RETRY_META_KEY)
+    except Exception as e:
+        print(f"[calendar_snapshot] load_retry_meta neon failed tab={tab}: {e}")
+    if raw is None:
+        store = _read_disk()
+        slot = store.get(tab) or {}
+        raw = (slot.get("meta") or {}).get(_RETRY_META_KEY)
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    try:
+        return json.loads(raw)
+    except Exception as e:
+        print(f"[calendar_snapshot] load_retry_meta parse failed tab={tab}: {e}")
+        return None
+
+
+def _save_retry_meta(tab: str, retry_meta: dict) -> bool:
+    """Persist retry metadata for a macro source to Neon and disk fallback."""
+    ok = False
+    payload = json.dumps(retry_meta)
+    try:
+        from data.pg_storage import calendar_snapshot_set_meta_field
+        ok = calendar_snapshot_set_meta_field(tab, _RETRY_META_KEY, payload)
+    except Exception as e:
+        print(f"[calendar_snapshot] save_retry_meta neon failed tab={tab}: {e}")
+    try:
+        store = _read_disk()
+        slot = _normalize_slot(store.get(tab))
+        meta = slot.setdefault("meta", {})
+        meta[_RETRY_META_KEY] = payload
+        store[tab] = slot
+        _write_disk(store)
+    except Exception as e:
+        print(f"[calendar_snapshot] save_retry_meta disk failed tab={tab}: {e}")
+    return ok
+
+
+def _clear_retry_meta(tab: str) -> None:
+    """Remove persisted retry metadata for a macro source."""
+    try:
+        from data.pg_storage import calendar_snapshot_set_meta_field
+        calendar_snapshot_set_meta_field(tab, _RETRY_META_KEY, "")
+    except Exception as e:
+        print(f"[calendar_snapshot] clear_retry_meta neon failed tab={tab}: {e}")
+    try:
+        store = _read_disk()
+        slot = _normalize_slot(store.get(tab))
+        meta = slot.setdefault("meta", {})
+        meta.pop(_RETRY_META_KEY, None)
+        store[tab] = slot
+        _write_disk(store)
+    except Exception as e:
+        print(f"[calendar_snapshot] clear_retry_meta disk failed tab={tab}: {e}")
+
+
+def _init_retry_meta(tab: str, now_et: datetime, week_marker: str) -> dict:
+    """Initialize retry metadata after an initial failed attempt."""
+    retry_meta = {
+        "week": week_marker,
+        "source": tab,
+        "initial_failure_at": _format_iso_ts(now_et),
+        "last_retry_slot": _format_iso_ts(now_et),
+        "retry_deadline": _format_iso_ts(now_et + timedelta(hours=_MACRO_RETRY_WINDOW_HOURS)),
+        "exhausted": False,
+    }
+    _save_retry_meta(tab, retry_meta)
+    return retry_meta
+
+
+def _record_retry_attempt(tab: str, retry_meta: dict, now_et: datetime) -> None:
+    """Update retry metadata after a retry attempt."""
+    retry_meta["last_retry_slot"] = _format_iso_ts(now_et)
+    _save_retry_meta(tab, retry_meta)
+
+
+def _mark_retry_exhausted(tab: str, retry_meta: dict) -> None:
+    """Mark a retry cycle as terminal so later loops do not restart retries."""
+    retry_meta["exhausted"] = True
+    _save_retry_meta(tab, retry_meta)
+
+
+def _is_retry_eligible(tab: str, now_et: datetime, week_marker: str) -> tuple[bool, Optional[dict]]:
+    """
+    Return (eligible, retry_meta) for a failed macro source.
+
+    A source is eligible when:
+      • retry metadata exists for the current ISO week
+      • the retry cycle is not exhausted
+      • the 3-hour deadline has not passed
+      • at least 10 minutes have elapsed since the last retry slot
+        (which is initialized to the initial failure timestamp)
+    """
+    retry_meta = _load_retry_meta(tab)
+    if not retry_meta:
+        return False, None
+    if retry_meta.get("week") != week_marker:
+        return False, retry_meta
+    if retry_meta.get("exhausted"):
+        return False, retry_meta
+
+    deadline = _parse_iso_ts(retry_meta.get("retry_deadline"))
+    if deadline and now_et >= deadline:
+        _mark_retry_exhausted(tab, retry_meta)
+        return False, retry_meta
+
+    initial_failure = _parse_iso_ts(retry_meta.get("initial_failure_at"))
+    last_slot = _parse_iso_ts(retry_meta.get("last_retry_slot"))
+    if initial_failure is None:
+        return False, retry_meta
+
+    earliest = initial_failure + timedelta(minutes=_MACRO_RETRY_INTERVAL_MINS)
+    if last_slot is not None:
+        earliest = max(earliest, last_slot + timedelta(minutes=_MACRO_RETRY_INTERVAL_MINS))
+
+    return now_et >= earliest, retry_meta
 
 
 def _cleanup_macro_cycle_task(task: asyncio.Task) -> None:
@@ -1799,18 +1951,26 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
 
                 # Macro sources share one coordinated refresh cycle.  At the first
                 # macro slot of the week, run the full cycle for ALL macro sources
-                # and mark each according to its own result.  At a later macro
-                # slot, any source that still lacks a marker is retried individually
-                # so successful sources are never rerun.
+                # and mark each according to its own result.  After a failure,
+                # retry only failed sources every 10 minutes for up to 3 hours.
                 all_macro_tabs = sorted(_MACRO_TABS)
                 macro_unmarked = [
                     tab for tab in all_macro_tabs
                     if _last_run_marker(tab) != week_marker
                 ]
-                macro_slot_tabs = [tab for tab, _, _ in macro_slots]
+                any_active_retry = False
+                for tab in all_macro_tabs:
+                    meta = _load_retry_meta(tab)
+                    if meta is not None and meta.get("week") == week_marker:
+                        any_active_retry = True
+                        break
 
-                if macro_slots and fmp_key and macro_unmarked:
-                    if len(macro_unmarked) == len(all_macro_tabs):
+                if fmp_key and macro_unmarked:
+                    if (
+                        len(macro_unmarked) == len(all_macro_tabs)
+                        and macro_slots
+                        and not any_active_retry
+                    ):
                         # First macro slot of the week: refresh all macro sources
                         # together, regardless of which source owns this hour.
                         try:
@@ -1823,18 +1983,24 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
                                 env = result.get(tab) or {}
                                 if _refresh_result_succeeded(env):
                                     _set_last_run_marker(tab, week_marker)
+                                    _clear_retry_meta(tab)
                                 else:
                                     print(
                                         f"[calendar_snapshot] scheduler macro source={tab} "
                                         f"did not succeed, marker not set"
                                     )
+                                    _init_retry_meta(tab, now_et, week_marker)
                         except Exception as e:
                             print(f"[calendar_snapshot] scheduler macro cycle error: {e}")
+                            for tab in all_macro_tabs:
+                                _init_retry_meta(tab, now_et, week_marker)
                     else:
                         # Partial failure retry: refresh only unmarked sources whose
-                        # scheduled hour has arrived.
+                        # 10-minute retry slot has arrived and whose 3-hour window
+                        # has not expired.
                         for tab in macro_unmarked:
-                            if tab not in macro_slot_tabs:
+                            eligible, retry_meta = _is_retry_eligible(tab, now_et, week_marker)
+                            if not eligible or retry_meta is None:
                                 continue
                             try:
                                 print(
@@ -1842,10 +2008,13 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
                                     f"et={now_et.isoformat()}"
                                 )
                                 envelope = await refresh_tab(tab, fmp_key)
+                                _record_retry_attempt(tab, retry_meta, now_et)
                                 if _refresh_result_succeeded(envelope):
                                     _set_last_run_marker(tab, week_marker)
+                                    _clear_retry_meta(tab)
                             except Exception as e:
                                 print(f"[calendar_snapshot] scheduler retry error tab={tab}: {e}")
+                                _record_retry_attempt(tab, retry_meta, now_et)
 
                 for tab, _, _ in other_slots:
                     if not fmp_key:
