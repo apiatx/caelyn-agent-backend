@@ -1534,6 +1534,76 @@ def test_home_no_provider_fetch_when_horizon_incomplete():
     assert result["empty_reason"] == "snapshot_horizon_incomplete"
 
 
+def test_home_computes_canonical_macro_window_once():
+    """Home runs the canonical macro pipeline exactly once and reuses it."""
+    from services import home_top_catalysts as _home_svc
+    from services import top_catalysts_service as _top_svc
+
+    preloaded = _home_snapshot([
+        _make_econ(id="cpi", title="CPI MoM", eventName="CPI MoM",
+                   event_family="cpi", signal_tier="major", country="US",
+                   date="2026-08-05"),
+    ])
+    treasury_env = _home_legacy_snapshot([], [])
+
+    calls: list[dict] = []
+    captured_macro_window: dict | None = None
+
+    def _fake_get_canonical_macro_window(*args, **kwargs):
+        calls.append(kwargs)
+        return {
+            "window_start": "2026-08-03",
+            "window_end": "2026-08-07",
+            "macro_logical_events": [
+                {"date": "2026-08-05", "eventName": "CPI MoM", "country": "US",
+                 "event_family": "cpi", "signal_tier": "major"},
+            ],
+            "economic_logical_events": [
+                {"date": "2026-08-05", "eventName": "CPI MoM", "country": "US",
+                 "event_family": "cpi", "signal_tier": "major"},
+            ],
+            "treasury_logical_events": [],
+            "source_counts": {"economic_source": 1, "treasury_source": 0,
+                              "economic_logical": 1, "treasury_logical": 0},
+            "last_updated": "2026-08-02T10:00:00Z",
+            "coverage_complete": True,
+            "horizon_start": "2026-08-01",
+            "horizon_end": "2026-08-31",
+            "source_windows": {"economic_releases": "2026-08-01→2026-08-31"},
+        }
+
+    def _fake_get_top_catalysts(*args, **kwargs):
+        nonlocal captured_macro_window
+        captured_macro_window = kwargs.get("macro_window")
+        return {
+            "tab": "top_catalysts", "mode": "weekly",
+            "week": "2026-08-03/2026-08-07",
+            "days": [], "current_week": [], "previous_week": [],
+            "last_updated": None, "status": "empty",
+        }
+
+    def _fake_get_snapshot(tab: str):
+        if tab == "economic_releases":
+            return preloaded
+        if tab == "treasury_macro":
+            return treasury_env
+        return _home_legacy_snapshot([], [])
+
+    with mock.patch.object(
+        _home_svc, "get_canonical_macro_window", side_effect=_fake_get_canonical_macro_window,
+    ), mock.patch.object(
+        _top_svc, "get_top_catalysts", side_effect=_fake_get_top_catalysts,
+    ), mock.patch(
+        "services.calendar_snapshot_service.get_snapshot", side_effect=_fake_get_snapshot,
+    ):
+        result = asyncio.run(build_home_top_catalysts(today_override=date(2026, 8, 1)))
+
+    assert len(calls) == 1
+    assert captured_macro_window is not None
+    assert captured_macro_window["macro_logical_events"][0]["eventName"] == "CPI MoM"
+    assert result["coverage_complete"] is True
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Unified window + canonical tier regression tests (Aug 3–7, 2026)
 # ═══════════════════════════════════════════════════════════════════════════════

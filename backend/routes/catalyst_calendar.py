@@ -257,6 +257,7 @@ async def catalyst_events(
                     include_treasury_context=False,
                     watchlist=wl,
                     portfolio=pf,
+                    economic_envelope=snap,
                 )
                 snap["events"] = macro_window.get("macro_logical_events") or []
                 snap["event_count"] = len(snap["events"])

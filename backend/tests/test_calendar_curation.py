@@ -1622,6 +1622,64 @@ def test_get_canonical_macro_window_legacy_snapshot_incomplete(monkeypatch):
     assert len(out["macro_logical_events"]) == 1
 
 
+def test_get_canonical_macro_window_uses_preloaded_envelope(monkeypatch):
+    """A preloaded economic envelope is used without calling get_snapshot again."""
+    from services import calendar_snapshot_service as _snap_svc
+    from services.calendar_curation import get_canonical_macro_window
+
+    calls: list[str] = []
+
+    def _fake_get_snapshot(tab: str):
+        calls.append(tab)
+        return {"events": [], "last_updated": None, "status": "empty"}
+
+    monkeypatch.setattr(_snap_svc, "get_snapshot", _fake_get_snapshot)
+
+    envelope = {
+        "events": [
+            _make_test_econ(eventName="CPI MoM", title="CPI MoM",
+                            event_family="cpi", date="2026-08-05"),
+        ],
+        "last_updated": "2026-08-02T10:00:00Z",
+        "status": "ready",
+        "horizon": {"horizon_start": "2026-08-01", "horizon_end": "2026-08-31"},
+        "coverage_complete": True,
+    }
+
+    out = get_canonical_macro_window(
+        "2026-08-01", "2026-08-31",
+        include_treasury_context=False,
+        economic_envelope=envelope,
+    )
+    assert calls == []  # no second snapshot read
+    assert len(out["macro_logical_events"]) == 1
+    assert out["macro_logical_events"][0]["event_family"] == "cpi"
+    assert out["coverage_complete"] is True  # trusts envelope verdict
+
+
+def test_get_canonical_macro_window_preloaded_coverage_false(monkeypatch):
+    """A preloaded envelope with coverage_complete=False is trusted."""
+    from services import calendar_snapshot_service as _snap_svc
+    from services.calendar_curation import get_canonical_macro_window
+
+    envelope = {
+        "events": [],
+        "last_updated": "2026-08-02T10:00:00Z",
+        "status": "ready",
+        "horizon": {"horizon_start": "2026-08-01", "horizon_end": "2026-08-31"},
+        "coverage_complete": False,
+    }
+
+    monkeypatch.setattr(_snap_svc, "get_snapshot", lambda tab: {"events": []})
+
+    out = get_canonical_macro_window(
+        "2026-08-01", "2026-08-31",
+        include_treasury_context=False,
+        economic_envelope=envelope,
+    )
+    assert out["coverage_complete"] is False
+
+
 if __name__ == "__main__":
     # Tiny self-running mode without pytest.
     fns = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]

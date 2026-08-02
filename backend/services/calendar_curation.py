@@ -985,6 +985,8 @@ def get_canonical_macro_window(
     include_treasury_context: bool = True,
     watchlist: Optional[set[str]] = None,
     portfolio: Optional[set[str]] = None,
+    economic_envelope: Optional[dict] = None,
+    treasury_envelope: Optional[dict] = None,
 ) -> dict:
     """
     One shared macro-catalyst window for all consumers.
@@ -993,6 +995,10 @@ def get_canonical_macro_window(
     selects events that fall inside [start_date, end_date], runs the shared
     canonical logical-event transformation, and performs deterministic cross-
     source deduplication.
+
+    Callers that already hold a snapshot envelope (e.g. the Economic Releases
+    requested-window route) may pass `economic_envelope` / `treasury_envelope`
+    to avoid a second snapshot read.
 
     Returns a dict with:
       • window_start / window_end
@@ -1018,7 +1024,9 @@ def get_canonical_macro_window(
     coverage_complete = True
 
     # Economic releases: prefer the rolling-horizon `events` collection.
-    econ_env = get_snapshot("economic_releases") or {}
+    # If the caller already loaded the envelope, reuse it to avoid a second
+    # snapshot read and to preserve the caller's coverage-range verdict.
+    econ_env = economic_envelope if economic_envelope is not None else get_snapshot("economic_releases") or {}
     if econ_env.get("last_updated"):
         last_updated_candidates.append(str(econ_env["last_updated"]))
     econ_horizon = econ_env.get("horizon") or {}
@@ -1043,19 +1051,25 @@ def get_canonical_macro_window(
         f" horizon_end={stored_horizon_end or 'N/A'}"
         f" coverage={'ok' if cov.get('complete') else 'incomplete'}"
     )
-    h_start = (econ_horizon.get("horizon_start") or "")
-    if not has_broad_horizon:
-        # Legacy snapshot without a rolling horizon cannot cover a future week.
-        coverage_complete = False
-    elif (
-        (stored_horizon_end and stored_horizon_end < end_date)
-        or (h_start and h_start > start_date)
-    ):
-        coverage_complete = False
+
+    # If the caller supplied a preloaded envelope with a coverage-range-based
+    # verdict, trust it over the coarse horizon-end check.
+    if economic_envelope is not None and "coverage_complete" in economic_envelope:
+        coverage_complete = bool(economic_envelope["coverage_complete"])
+    else:
+        h_start = (econ_horizon.get("horizon_start") or "")
+        if not has_broad_horizon:
+            # Legacy snapshot without a rolling horizon cannot cover a future week.
+            coverage_complete = False
+        elif (
+            (stored_horizon_end and stored_horizon_end < end_date)
+            or (h_start and h_start > start_date)
+        ):
+            coverage_complete = False
 
     # Treasury: optional point-in-time context.
     if include_treasury_context:
-        tres_env = get_snapshot("treasury_macro") or {}
+        tres_env = treasury_envelope if treasury_envelope is not None else get_snapshot("treasury_macro") or {}
         if tres_env.get("last_updated"):
             last_updated_candidates.append(str(tres_env["last_updated"]))
         tres_pool = tres_env.get("events") or tres_env.get("current_week") or []

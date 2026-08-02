@@ -1303,3 +1303,73 @@ def test_response_includes_window_and_macro_counts(monkeypatch):
     assert env["window_mode"] == "next_week_planning"
     assert env["macro_source_event_count"] == 2
     assert env["macro_logical_event_count"] == 1
+
+
+def test_get_top_catalysts_uses_precomputed_macro_window(monkeypatch):
+    """Passing macro_window avoids recomputing the canonical pipeline."""
+    _seed_snapshots(monkeypatch, {
+        "ipos": {"current_week": [], "previous_week": [], "last_updated": None,
+                 "status": "empty"},
+        "dividends": {"current_week": [], "previous_week": [], "last_updated": None,
+                      "status": "empty"},
+        "splits": {"current_week": [], "previous_week": [], "last_updated": None,
+                   "status": "empty"},
+    })
+    _seed_watchlist(monkeypatch, set(), set())
+    cache_key = "earnings:curated:week:2026-08-03:2026-08-07"
+    cache.set(cache_key, {"topEvents": [], "asOf": "2026-08-02T10:00:00Z"}, 60)
+
+    calls: list[tuple[str, str]] = []
+
+    def _fake_get_canonical_macro_window(*args, **kwargs):
+        calls.append((args[0], args[1]))
+        return {
+            "window_start": "2026-08-03",
+            "window_end": "2026-08-07",
+            "macro_logical_events": [
+                {"date": "2026-08-05", "eventName": "CPI MoM", "country": "US",
+                 "event_family": "cpi", "signal_tier": "major"},
+            ],
+            "economic_logical_events": [
+                {"date": "2026-08-05", "eventName": "CPI MoM", "country": "US",
+                 "event_family": "cpi", "signal_tier": "major"},
+            ],
+            "treasury_logical_events": [],
+            "source_counts": {"economic_source": 1, "treasury_source": 0,
+                              "economic_logical": 1, "treasury_logical": 0},
+            "last_updated": "2026-08-02T10:00:00Z",
+            "coverage_complete": True,
+            "horizon_start": "2026-08-01",
+            "horizon_end": "2026-08-31",
+        }
+
+    monkeypatch.setattr(
+        top_svc, "get_canonical_macro_window", _fake_get_canonical_macro_window,
+    )
+
+    precomputed = {
+        "window_start": "2026-08-03",
+        "window_end": "2026-08-07",
+        "macro_logical_events": [
+            {"date": "2026-08-04", "eventName": "PPI MoM", "country": "US",
+             "event_family": "ppi", "signal_tier": "major"},
+        ],
+        "economic_logical_events": [
+            {"date": "2026-08-04", "eventName": "PPI MoM", "country": "US",
+             "event_family": "ppi", "signal_tier": "major"},
+        ],
+        "treasury_logical_events": [],
+        "source_counts": {"economic_source": 1, "treasury_source": 0,
+                          "economic_logical": 1, "treasury_logical": 0},
+        "last_updated": "2026-08-02T09:00:00Z",
+        "coverage_complete": True,
+        "horizon_start": "2026-08-01",
+        "horizon_end": "2026-08-31",
+    }
+
+    env = get_top_catalysts(today=date(2026, 8, 2), macro_window=precomputed)
+    assert calls == []  # canonical pipeline was not rerun
+    assert env["macro_source_event_count"] == 1
+    assert env["macro_logical_event_count"] == 1
+    # 2026-08-04 is Tuesday -> days[1]
+    assert env["days"][1]["macro"][0]["title"] == "PPI MoM"

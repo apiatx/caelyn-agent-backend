@@ -647,11 +647,17 @@ def get_top_catalysts(
     *,
     cap: int = DEFAULT_CAP,
     today: Optional[date] = None,
+    macro_window: Optional[dict] = None,
 ) -> dict:
     """
     Build the high-signal Top Catalysts response, grouped by day.
 
     Pure read across already-cached services. No request-time external calls.
+
+    `macro_window` is optional. When a caller (e.g. Home Top Catalysts) has
+    already computed the canonical macro window, passing it here avoids running
+    the macro pipeline a second time. The dict shape must match the output of
+    `services.calendar_curation.get_canonical_macro_window()`.
     """
     cap = max(MIN_CAP, min(int(cap or DEFAULT_CAP), MAX_CAP))
     monday, friday = _week_bounds(today)
@@ -711,14 +717,16 @@ def get_top_catalysts(
     # ── 2. Macro (shared canonical macro-window pipeline) ──────────────────
     # One canonical reader/transformation handles both sources and the cross-
     # source dedupe so Calendar Top Catalysts never diverges from Economic
-    # Releases or Home Top Catalysts.
-    macro_window = get_canonical_macro_window(
-        week_start_str,
-        week_end_str,
-        include_treasury_context=True,
-        watchlist=watchlist,
-        portfolio=portfolio,
-    )
+    # Releases or Home Top Catalysts.  Callers that already computed the window
+    # (e.g. Home) pass it in so the pipeline runs exactly once per request.
+    if macro_window is None:
+        macro_window = get_canonical_macro_window(
+            week_start_str,
+            week_end_str,
+            include_treasury_context=True,
+            watchlist=watchlist,
+            portfolio=portfolio,
+        )
     if macro_window.get("last_updated"):
         last_updated_candidates.append(str(macro_window["last_updated"]))
 

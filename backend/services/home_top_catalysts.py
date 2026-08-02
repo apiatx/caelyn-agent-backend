@@ -553,25 +553,7 @@ async def build_home_top_catalysts(
     cache_statuses: dict = {}
     empty_reason: Optional[str] = None
 
-    # ── 1. Base aggregation (earnings + other) from existing service ─────────
-    # get_top_catalysts() now uses the same shared ET planning window, so on
-    # Sat/Sun it already returns the upcoming week's earnings/other.  Pass the
-    # resolved Monday so both services agree on the exact window.
-    base = get_top_catalysts(today=monday)
-    days = base.get("days") or []
-
-    earnings_flat: list[dict] = []
-    other_flat: list[dict]    = []
-    for day in days:
-        day_date = _parse_date(day.get("date"))
-        if day_date is None or not (monday <= day_date <= friday):
-            continue
-        earnings_flat.extend(day.get("earnings") or [])
-        other_flat.extend(day.get("other") or [])
-
-    earnings_flat.sort(key=lambda e: -float(e.get("rankScore") or 0))
-
-    # ── 2. Macro pool ────────────────────────────────────────────────────────
+    # ── 1. Macro pool (compute once, reuse everywhere) ───────────────────────
     # One canonical reader/transformation handles both sources and the cross-
     # source dedupe so Home Top Catalysts never diverges from Calendar Top or
     # Economic Releases.  Pure snapshot read — no provider calls, no request-
@@ -588,6 +570,25 @@ async def build_home_top_catalysts(
     coverage_complete = bool(macro_window.get("coverage_complete"))
     horizon_start = macro_window.get("horizon_start")
     horizon_end = macro_window.get("horizon_end")
+
+    # ── 2. Base aggregation (earnings + other) from existing service ─────────
+    # get_top_catalysts() uses the same shared ET planning window, so on Sat/Sun
+    # it already returns the upcoming week's earnings/other.  Pass the resolved
+    # Monday so both services agree on the exact window, and pass the already-
+    # computed macro window so the canonical pipeline is not executed twice.
+    base = get_top_catalysts(today=monday, macro_window=macro_window)
+    days = base.get("days") or []
+
+    earnings_flat: list[dict] = []
+    other_flat: list[dict]    = []
+    for day in days:
+        day_date = _parse_date(day.get("date"))
+        if day_date is None or not (monday <= day_date <= friday):
+            continue
+        earnings_flat.extend(day.get("earnings") or [])
+        other_flat.extend(day.get("other") or [])
+
+    earnings_flat.sort(key=lambda e: -float(e.get("rankScore") or 0))
 
     if not macro_logical:
         if window_mode == "next_week_planning":
