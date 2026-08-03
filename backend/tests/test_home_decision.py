@@ -773,8 +773,11 @@ def test_sizing_provenance_accurate():
     print("test_sizing_provenance_accurate PASSED")
 
 
-def test_screenshot_equivalent_case_half_size():
-    """Screenshot-equivalent: MODERATE + STABLE + SELECTIVE_LONG + CPI event → half-size."""
+def test_representative_fixture_case_half_size():
+    """Representative fixture: MODERATE + STABLE + SELECTIVE_LONG + CPI event → half-size.
+
+    This is a synthetic fixture for invariant validation, not a captured live response.
+    """
     sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG", pos_size="half-size", event_active=True)
     sr["base_position_size_hint"] = "selective"
     sr["event_overlay"]["position_size_adjustment_applied"] = True
@@ -783,8 +786,8 @@ def test_screenshot_equivalent_case_half_size():
     es = _make_exec_snapshot(mqs=62.0, ews=50.0, decision="CAUTION")
     d = _hd(sr, es)
     assert d["position_size_hint"] == "half-size", \
-        f"Screenshot-equivalent should be half-size, got {d['position_size_hint']}"
-    print("test_screenshot_equivalent_case_half_size PASSED")
+        f"Representative fixture should be half-size, got {d['position_size_hint']}"
+    print("test_representative_fixture_case_half_size PASSED")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -943,7 +946,7 @@ if __name__ == "__main__":
     test_sizing_preserve_capital_guardrail_only()
     test_sizing_event_inactive_equal()
     test_sizing_provenance_accurate()
-    test_screenshot_equivalent_case_half_size()
+    test_representative_fixture_case_half_size()
 
     # Phase C — Execution warmup contract
     test_warmup_recommended_refetch()

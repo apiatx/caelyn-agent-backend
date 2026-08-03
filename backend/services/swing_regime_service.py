@@ -647,29 +647,55 @@ def _enrich_pillar_diagnostics(pillars: dict) -> None:
     if breadth_7d is None: tb_missing.append("sector_breadth_7d")
 
     # Improve/worsen from actual thresholds used in scoring
-    if breadth_1d is not None and breadth_1d < 55:
-        tb_improve.append(f"Breadth rises above 55%.")
-    if spx_63d is not None and spx_63d < 0:
-        tb_improve.append("SPX 3-month return turns positive.")
+    if breadth_1d is not None and breadth_1d < 50:
+        tb_improve.append(f"Breadth rises above 50%.")
+    elif breadth_1d is not None and breadth_1d < 40:
+        tb_improve.append(f"Breadth rises above 40%.")
+    if spx_63d is not None and spx_63d <= -0.5:
+        if spx_63d <= -8.0:
+            tb_improve.append("SPX 3-month return rises above -8.0%.")
+        elif spx_63d <= -3.0:
+            tb_improve.append("SPX 3-month return rises above -3.0%.")
+        else:
+            tb_improve.append("SPX 3-month return rises above -0.5%.")
     if breadth_1d is not None:
-        tb_worsen.append(f"Breadth falls below 45% — the canonical weak-participation threshold.")
-    if spx_63d is not None and spx_63d > -3.0:
-        tb_worsen.append("SPX 3-month return falls below -3%.")
+        if breadth_1d >= 70:
+            pass  # already strong, no immediate worsen boundary
+        elif breadth_1d >= 50:
+            tb_worsen.append(f"Breadth falls below 50%.")
+        elif breadth_1d >= 40:
+            tb_worsen.append(f"Breadth falls below 40% — the canonical weak-participation threshold.")
+        else:
+            tb_worsen.append(f"Breadth falls below 30% — severe participation weakness.")
 
-    # Interpretation
-    tb_pos_count = len(tb_support)
-    tb_neg_count = len(tb_risk)
+    # Interpretation — must agree with the pillar's machine direction
+    tb_pillar_dir = pillars["trend_and_breadth"].get("direction", "STABLE")
     interpretation_parts: list[str] = []
 
     if tb_support and tb_risk:
-        pos_label = tb_support[0].get("label", "") if tb_support else ""
-        neg_label = tb_risk[0].get("label", "") if tb_risk else ""
-        interpretation_parts.append(f"Latest-session participation is constructive, but the longer-term trend remains weak, leaving Trend & Breadth in a worsening state." if breadth_1d is not None and breadth_1d >= 50 and spx_63d is not None and spx_63d < 0 else f"Positive {pos_label} signals are offset by {neg_label} risk, leaving Trend & Breadth mixed.")
+        if tb_pillar_dir == "IMPROVING":
+            interpretation_parts.append("Trend and breadth signals are mixed but improving overall.")
+        elif tb_pillar_dir == "WORSENING":
+            neg_msg = tb_risk[0].get("message", "").rstrip(".")
+            pos_msg = tb_support[0].get("message", "").rstrip(".")
+            interpretation_parts.append(f"Latest-session participation is constructive, but {neg_msg.lower()}, leaving Trend & Breadth in a worsening state.")
+        elif tb_pillar_dir == "STABLE":
+            pos_msg = tb_support[0].get("message", "").rstrip(".")
+            neg_msg = tb_risk[0].get("message", "").rstrip(".")
+            interpretation_parts.append(f"{pos_msg} However, {neg_msg.lower()}; the competing signals leave Trend & Breadth stable overall.")
+        else:
+            interpretation_parts.append("Trend & Breadth signals are conflicting and direction is uncertain.")
     elif tb_support:
-        interpretation_parts.append("Trend and breadth signals are supportive across timeframes.")
+        if tb_pillar_dir == "IMPROVING":
+            interpretation_parts.append("Trend and breadth signals are supportive and improving across timeframes.")
+        else:
+            interpretation_parts.append("Trend and breadth signals are supportive across timeframes.")
     elif tb_risk:
         dominant_risk = tb_risk[0].get("message", "").rstrip(".")
-        interpretation_parts.append(f"Risk dominates: {dominant_risk}.")
+        if tb_pillar_dir == "WORSENING":
+            interpretation_parts.append(f"Risk dominates and is worsening: {dominant_risk}.")
+        else:
+            interpretation_parts.append(f"Risk dominates: {dominant_risk}.")
     else:
         interpretation_parts.append("Trend & Breadth data is insufficient for interpretation.")
 
@@ -722,8 +748,6 @@ def _enrich_pillar_diagnostics(pillars: dict) -> None:
         elif hyg_val <= -0.3:
             vc_risk.append({"key": "hyg_mild_weak", "label": "HYG 1D", "value": round(hyg_val, 2), "unit": "%", "message": f"HYG mildly negative at {hyg_val:+.2f}%.", "strength": "MODERATE"})
 
-    if vix_val is not None and vix_val < 20:
-        vc_imp.append(f"VIX remains below 20 — current conditions are already benign.")
     if vix_val is not None and vix_val >= 20:
         vc_imp.append(f"VIX falls below 20.")
     if hyg_val is not None and hyg_val <= 0:
@@ -768,12 +792,13 @@ def _enrich_pillar_diagnostics(pillars: dict) -> None:
         if chg_5d_val >= 15:
             rd_risk.append({"key": "10y_spike_5d", "label": "10Y 5D", "value": round(chg_5d_val, 1), "unit": "bps", "message": f"10Y has surged {chg_5d_val:+.0f} bps over five sessions — increasing pressure on long-duration assets.", "strength": "STRONG"})
             rd_wrs.append("10Y 5-session increase exceeds +15 bps — the canonical pressure threshold.")
+            rd_imp.append("10Y 5-session increase falls below +5 bps.")
         elif chg_5d_val >= 5:
             rd_risk.append({"key": "10y_rising_5d", "label": "10Y 5D", "value": round(chg_5d_val, 1), "unit": "bps", "message": f"10Y has risen {chg_5d_val:+.0f} bps over five sessions.", "strength": "MODERATE"})
             rd_wrs.append("10Y 5-session increase exceeds +5 bps.")
+            rd_imp.append("10Y 5-session change falls below 0 bps.")
         elif chg_5d_val <= -10:
             rd_sup.append({"key": "10y_falling_5d", "label": "10Y 5D", "value": round(chg_5d_val, 1), "unit": "bps", "message": f"10Y has fallen {abs(chg_5d_val):.0f} bps over five sessions — rate pressure easing.", "strength": "STRONG"})
-            rd_imp.append("10Y 5-session pressure remains below +5 bps.")
         elif chg_5d_val <= -5:
             rd_sup.append({"key": "10y_easing_5d", "label": "10Y 5D", "value": round(chg_5d_val, 1), "unit": "bps", "message": f"10Y has eased {abs(chg_5d_val):.0f} bps over five sessions.", "strength": "MODERATE"})
 
@@ -877,15 +902,21 @@ def _enrich_pillar_diagnostics(pillars: dict) -> None:
 
     pillars["leadership_and_cross_asset"]["data_status"] = data_status
 
-    # Confirmation status
-    if lc_risk and not lc_sup:
+    # Confirmation status — must respect data_status
+    if data_status == "UNAVAILABLE":
         confirmation = "UNCONFIRMED"
-    elif lc_sup and not lc_risk:
-        confirmation = "CONFIRMED"
-    elif lc_sup and lc_risk:
-        confirmation = "MIXED"
-    else:
-        confirmation = "UNCONFIRMED"
+    elif data_status == "PARTIAL":
+        if lc_sup and lc_risk:
+            confirmation = "MIXED"
+        else:
+            confirmation = "UNCONFIRMED"
+    else:  # COMPLETE
+        if lc_sup and not lc_risk:
+            confirmation = "CONFIRMED"
+        elif lc_sup and lc_risk:
+            confirmation = "MIXED"
+        else:
+            confirmation = "UNCONFIRMED"
     pillars["leadership_and_cross_asset"]["confirmation_status"] = confirmation
 
     # Interpretation

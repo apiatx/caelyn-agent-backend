@@ -1008,21 +1008,22 @@ def _build_improve_worsen(
     for cond in (conditions_flip or [])[:4]:
         _improve(cond)
 
-    # ── Pillar conditions to improve (derived from same thresholds) ─────
-    for name, pillar in pillars.items():
+    # ── Pillar conditions to improve — dominant risk pillars first ──────
+    pillar_by_risk = sorted(pillars.items(), key=lambda kv: kv[1].get("risk_score", 0), reverse=True)
+    for name, pillar in pillar_by_risk:
         for cond in pillar.get("conditions_to_improve", []):
             if len(improve) >= 4:
                 break
             _improve(cond)
 
-    # ── Pillar conditions to worsen ────────────────────────────────────
-    for name, pillar in pillars.items():
+    # ── Pillar conditions to worsen — material risk thresholds first ────
+    for name, pillar in pillar_by_risk:
         for cond in pillar.get("conditions_to_worsen", []):
             if len(worsen) >= 4:
                 break
             _worsen(cond)
 
-    # ── Execution conditions that failed ───────────────────────────────
+    # ── Execution thresholds ──────────────────────────────────────────
     if exec_status not in ("unavailable", "warming") and execution_snapshot:
         dashboard = execution_snapshot.get("dashboard")
         if dashboard:
@@ -1031,19 +1032,20 @@ def _build_improve_worsen(
                     label = ec.get("label", "").rstrip("?")
                     _improve(f"{label} resumes confirming")
 
-    # ── Execution thresholds ──────────────────────────────────────────
     if exec_mqs is not None and exec_mqs < 70 and exec_status == "available" and len(improve) < 4:
         _improve(f"Market Quality reaches 70.")
     if exec_ews is not None and exec_ews < 75 and exec_status == "available" and len(improve) < 4:
         _improve(f"Execution Window reaches 75.")
+
+    # ── Event clearing ─────────────────────────────────────────────────
+    if event_active and len(improve) < 4:
+        _improve("CPI event risk clears and current market signals remain intact.")
 
     # ── Worsening conditions — measurable triggers ────────────────────
     if exec_mqs is not None and exec_mqs >= 40 and exec_status == "available" and len(worsen) < 4:
         _worsen(f"Market Quality falls below 40.")
     if exec_ews is not None and exec_ews >= 50 and exec_status == "available" and len(worsen) < 4:
         _worsen(f"Execution Window falls below 50.")
-    if event_active and len(worsen) < 4:
-        _worsen("Event risk materializes unfavorably — increased volatility or adverse rate move.")
 
     return improve, worsen
 

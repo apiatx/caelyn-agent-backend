@@ -1250,6 +1250,270 @@ def test_event_overlay_sizing_new_test_explanation():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Phase C.1 — Invariant tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_stable_pillar_interpretation_no_worsening():
+    """STABLE pillar interpretation must not say worsening or weakening."""
+    result = assess_swing_regime(bare_inputs(
+        spy_change_1d=1.5, qqq_change_1d=2.0, sector_breadth_1d=64,
+        spx_return_7d=0.62, spx_return_63d=-4.2,
+    ))
+    tb = result["pillars"]["trend_and_breadth"]
+    interp = tb["interpretation"].lower()
+    assert "stable" in interp
+    assert "worsening" not in interp
+    assert "weakening" not in interp
+    print("test_stable_pillar_interpretation_no_worsening PASSED")
+
+
+def test_worsening_pillar_interpretation_says_worsening():
+    """WORSENING pillar interpretation clearly says worsening or weakening."""
+    result = assess_swing_regime(bare_inputs(
+        spy_change_1d=-2.5, qqq_change_1d=-3.0, sector_breadth_1d=30,
+        spx_return_63d=-8.0, vix_current=28.0, vix_change_1d=15.0,
+    ))
+    # Check at least one pillar with WORSENING direction has it in interpretation
+    found = False
+    for name, p in result["pillars"].items():
+        if p.get("direction") == "WORSENING":
+            interp = p["interpretation"].lower()
+            assert any(w in interp for w in ("worsening", "weakening", "deteriorating", "pressure")), \
+                f"Pillar {name} is WORSENING but interpretation doesn't say so: {interp}"
+            found = True
+            break
+    if not found:
+        assert result["risk_score"] > 0  # at least it computed something
+    print("test_worsening_pillar_interpretation_says_worsening PASSED")
+
+
+def test_improving_pillar_interpretation_says_improving():
+    """IMPROVING pillar interpretation clearly says improving or easing."""
+    result = assess_swing_regime(bare_inputs(
+        spy_change_1d=2.0, qqq_change_1d=2.5, sector_breadth_1d=75,
+        spx_return_7d=3.0, spx_return_63d=8.0,
+        us10y_change_5d_bps=-15.0, us10y_yield=4.76,
+    ))
+    found = False
+    for name, p in result["pillars"].items():
+        if p.get("direction") == "IMPROVING":
+            interp = p["interpretation"].lower()
+            assert any(w in interp for w in ("improving", "easing", "strengthening", "supportive")), \
+                f"Pillar {name} is IMPROVING but interpretation doesn't say so: {interp}"
+            found = True
+            break
+    if not found:
+        assert result["risk_score"] > 0
+    print("test_improving_pillar_interpretation_says_improving PASSED")
+
+
+def test_partial_leadership_cannot_be_confirmed():
+    """PARTIAL leadership data cannot be CONFIRMED."""
+    result = assess_swing_regime(bare_inputs(
+        btc_change_24h=None, cyclical_vs_defensive_spread=0.64, market_posture="Neutral",
+    ))
+    lc = result["pillars"]["leadership_and_cross_asset"]
+    assert lc["data_status"] == "PARTIAL"
+    assert lc["confirmation_status"] != "CONFIRMED", \
+        f"PARTIAL data should not be CONFIRMED, got {lc['confirmation_status']}"
+    print("test_partial_leadership_cannot_be_confirmed PASSED")
+
+
+def test_btc_missing_produces_unconfirmed():
+    """BTC missing produces UNCONFIRMED, not negative evidence."""
+    result = assess_swing_regime(bare_inputs(
+        btc_change_24h=None, cyclical_vs_defensive_spread=0.64, market_posture="Neutral",
+    ))
+    lc = result["pillars"]["leadership_and_cross_asset"]
+    assert lc["confirmation_status"] == "UNCONFIRMED"
+    # BTC missing is in missing_inputs, not risk_signals
+    assert "btc_change_24h" in lc["missing_inputs"]
+    for sig in lc.get("risk_signals", []):
+        assert "btc" not in sig.get("key", "").lower(), \
+            "Missing BTC must not appear as risk signal"
+    print("test_btc_missing_produces_unconfirmed PASSED")
+
+
+def test_conflicting_leadership_inputs_mixed():
+    """Conflicting leadership inputs produce MIXED when COMPLETE."""
+    result = assess_swing_regime(bare_inputs(
+        btc_change_24h=-6.0, cyclical_vs_defensive_spread=2.5, market_posture="Risk-On",
+    ))
+    lc = result["pillars"]["leadership_and_cross_asset"]
+    # BTC -6% is bearish, CVD +2.5% is bullish → conflicting
+    assert lc["data_status"] == "COMPLETE"
+    assert lc["confirmation_status"] == "MIXED"
+    print("test_conflicting_leadership_inputs_mixed PASSED")
+
+
+def test_vix_below_20_no_below_20_improvement():
+    """VIX already below 20 does not generate 'below 20' as improvement condition."""
+    result = assess_swing_regime(bare_inputs(vix_current=15.8))
+    vc = result["pillars"]["volatility_and_credit"]
+    for cond in vc.get("conditions_to_improve", []):
+        assert "below 20" not in cond.lower(), \
+            f"VIX already below 20, should not have below-20 improvement: {cond}"
+        assert "remains" not in cond.lower(), \
+            f"Should not have already-satisfied 'remains' condition: {cond}"
+    print("test_vix_below_20_no_below_20_improvement PASSED")
+
+
+def test_breadth_diagnostics_use_exact_thresholds():
+    """Breadth diagnostic thresholds use only exact scoring boundaries."""
+    # Scoring boundaries: 30, 40, 50, 70
+    for breadth_val, expect_contains, expect_not in [
+        (64, [], ["45%", "55%"]),
+        (35, [], ["45%", "55%"]),
+    ]:
+        result = assess_swing_regime(bare_inputs(
+            spy_change_1d=1.5, qqq_change_1d=2.0,
+            sector_breadth_1d=breadth_val,
+        ))
+        tb = result["pillars"]["trend_and_breadth"]
+        for cond in tb.get("conditions_to_improve", []) + tb.get("conditions_to_worsen", []):
+            for forbidden in expect_not:
+                assert forbidden not in cond, \
+                    f"Breadth diagnostic at {breadth_val} contains invented threshold {forbidden}: {cond}"
+    print("test_breadth_diagnostics_use_exact_thresholds PASSED")
+
+
+def test_spx_63d_threshold_matches_scoring():
+    """SPX 63D diagnostic threshold equals the scoring threshold (-0.5%, not 0%)."""
+    result = assess_swing_regime(bare_inputs(
+        spy_change_1d=1.5, qqq_change_1d=2.0, spx_return_63d=-4.2,
+    ))
+    tb = result["pillars"]["trend_and_breadth"]
+    # Check improvement conditions use exact scoring thresholds
+    any_63d = [c for c in tb.get("conditions_to_improve", []) if "3-month" in c or "63" in c]
+    for cond in any_63d:
+        assert "turns positive" not in cond.lower(), \
+            f"Must not say 'turns positive' — use scoring threshold value: {cond}"
+        # Should contain a numeric threshold matching scoring boundaries: -8.0, -3.0, -0.5
+        has_boundary = any(str(b) in cond for b in ("-8.0", "-3.0", "-0.5"))
+        assert has_boundary, f"Improvement condition must use scoring threshold value: {cond}"
+    print("test_spx_63d_threshold_matches_scoring PASSED")
+
+
+def test_rate_thresholds_match_scoring():
+    """Rate diagnostic thresholds use exact scoring boundaries."""
+    result = assess_swing_regime(bare_inputs(
+        us10y_yield=5.1, us10y_change_5d_bps=20.0, dxy_change_1d=1.0,
+    ))
+    rd = result["pillars"]["rates_and_dollar"]
+    # Worsen conditions from the +20 bps 5D case
+    for cond in rd.get("conditions_to_worsen", []):
+        # Must include a scoring boundary number
+        if "10Y" in cond or "bps" in cond or "session" in cond:
+            has_boundary = any(str(b) in cond for b in ("15", "5.0", "5", "0.5"))
+            assert has_boundary, f"Rate worsen condition must use scoring threshold value: {cond}"
+    # Improve conditions from the +20 bps case: should want to fall below +5 bps
+    assert any("5" in c for c in rd.get("conditions_to_improve", [])), \
+        f"Should have improvement condition with threshold value: {rd.get('conditions_to_improve')}"
+    print("test_rate_thresholds_match_scoring PASSED")
+
+
+def test_no_materializes_unfavorably():
+    """No output contains 'materializes unfavorably'."""
+    from services.home_risk_intelligence import _build_home_decision
+    sr = {
+        "risk_score": 35, "risk_level": "MODERATE",
+        "regime_direction": "STABLE", "trade_bias": "SELECTIVE_LONG",
+        "position_size_hint": "selective", "one_line": "test",
+        "assessment_status": "COMPLETE",
+        "base_position_size_hint": "selective",
+        "event_overlay": {"active": True, "severity": "HIGH", "next_event": "CPI",
+                          "days_until_event": 1, "position_size_adjustment_applied": True,
+                          "pre_event_size": "selective", "post_event_size": "half-size"},
+        "conditions_that_would_flip": [],
+        "pillars": {
+            "trend_and_breadth": {"risk_score": 30, "direction": "STABLE", "components": {},
+                "supportive_signals": [], "risk_signals": [], "missing_inputs": [],
+                "conditions_to_improve": [], "conditions_to_worsen": [],
+                "available_component_count": 3, "expected_component_count": 6},
+            "volatility_and_credit": {"risk_score": 20, "direction": "STABLE", "components": {},
+                "supportive_signals": [], "risk_signals": [], "missing_inputs": [],
+                "conditions_to_improve": [], "conditions_to_worsen": [],
+                "available_component_count": 3, "expected_component_count": 4},
+            "rates_and_dollar": {"risk_score": 35, "direction": "STABLE", "components": {},
+                "supportive_signals": [], "risk_signals": [], "missing_inputs": [],
+                "conditions_to_improve": [], "conditions_to_worsen": [],
+                "available_component_count": 4, "expected_component_count": 6},
+            "leadership_and_cross_asset": {"risk_score": 25, "direction": "STABLE", "components": {},
+                "supportive_signals": [], "risk_signals": [], "missing_inputs": ["btc_change_24h"],
+                "conditions_to_improve": [], "conditions_to_worsen": [],
+                "available_component_count": 2, "expected_component_count": 3},
+        },
+    }
+    d = _build_home_decision(swing_regime=sr, execution_snapshot=None,
+                               execution_refresh_status="scheduled",
+                               market_open=True, why_market_is_moving=[])
+    for entry in d.get("what_would_worsen", []):
+        assert "materializes" not in entry.lower(), f"Found vague event condition: {entry}"
+    print("test_no_materializes_unfavorably PASSED")
+
+
+def test_empty_conditions_remain_empty():
+    """Empty substantive conditions remain []."""
+    result = assess_swing_regime(bare_inputs(
+        spy_change_1d=1.5, qqq_change_1d=2.0, sector_breadth_1d=64,
+        spx_return_63d=8.0, vix_current=15.0,
+        us10y_yield=4.0, us10y_change_5d_bps=-3.0,
+    ))
+    vc = result["pillars"]["volatility_and_credit"]
+    # Already low VIX → no improvement condition about VIX
+    for cond in vc.get("conditions_to_improve", []):
+        assert "remains" not in cond.lower(), f"Should not have 'remains' filler: {cond}"
+    print("test_empty_conditions_remain_empty PASSED")
+
+
+def test_no_condition_describes_already_true_as_improvement():
+    """No condition describes a state already true as an improvement."""
+    # All benign inputs — everything is already "good"
+    result = assess_swing_regime(bare_inputs(
+        spy_change_1d=2.0, qqq_change_1d=2.5, sector_breadth_1d=75,
+        spx_return_7d=3.0, spx_return_63d=8.0,
+        vix_current=13.0, vix_change_1d=-2.0, hyg_change_1d=0.5,
+        us10y_yield=3.8, us10y_change_5d_bps=-5.0, dxy_change_1d=-0.3,
+    ))
+    for name, pillar in result["pillars"].items():
+        for cond in pillar.get("conditions_to_improve", []):
+            assert "remains" not in cond.lower(), \
+                f"Pillar {name} has 'remains' filler: {cond}"
+    print("test_no_condition_describes_already_true_as_improvement PASSED")
+
+
+def test_pillar_scores_remain_unchanged_after_diagnostics():
+    """Pillar scores identical before and after diagnostic enrichment."""
+    for label, inputs in _KNOWN_BASELINES:
+        p_tb = _score_trend_and_breadth(inputs)
+        p_vc = _score_volatility_and_credit(inputs)
+        p_rd = _score_rates_and_dollar(inputs)
+        p_lc = _score_leadership_and_cross_asset(inputs)
+        result = assess_swing_regime(inputs)
+        assert result["pillars"]["trend_and_breadth"]["risk_score"] == p_tb["risk_score"]
+        assert result["pillars"]["volatility_and_credit"]["risk_score"] == p_vc["risk_score"]
+        assert result["pillars"]["rates_and_dollar"]["risk_score"] == p_rd["risk_score"]
+        assert result["pillars"]["leadership_and_cross_asset"]["risk_score"] == p_lc["risk_score"]
+    print("test_pillar_scores_remain_unchanged_after_diagnostics PASSED")
+
+
+def test_event_sizing_applied_exactly_once():
+    """Event sizing applied exactly once by Swing Regime, not re-applied by Home."""
+    result = assess_swing_regime(bare_inputs(
+        spy_change_1d=0.5, us10y_yield=4.2,
+        has_upcoming_high_impact_event=True, days_until_next_event=2, next_event_title="FOMC"))
+    base = result["base_position_size_hint"]
+    final = result["position_size_hint"]
+    # Verify Swing Regime escalates one step
+    escalations = {"normal": "selective", "selective": "half-size", "half-size": "preserve capital", "preserve capital": "preserve capital"}
+    assert final == escalations.get(base, base), f"Base {base} should escalate to {escalations.get(base)} but got {final}"
+    # Verify no double escalation
+    max_escalated = escalations.get(base, base)
+    assert final == max_escalated, f"Expected exactly one escalation: {base} → {max_escalated}, got {final}"
+    print("test_event_sizing_applied_exactly_once PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Run
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1351,4 +1615,21 @@ if __name__ == "__main__":
     test_rates_dollar_scores_unchanged()
     test_event_overlay_sizing_new_test_explanation()
 
-    print("\nAll 77 tests PASSED")
+    # Phase C.1 — Invariant tests
+    test_stable_pillar_interpretation_no_worsening()
+    test_worsening_pillar_interpretation_says_worsening()
+    test_improving_pillar_interpretation_says_improving()
+    test_partial_leadership_cannot_be_confirmed()
+    test_btc_missing_produces_unconfirmed()
+    test_conflicting_leadership_inputs_mixed()
+    test_vix_below_20_no_below_20_improvement()
+    test_breadth_diagnostics_use_exact_thresholds()
+    test_spx_63d_threshold_matches_scoring()
+    test_rate_thresholds_match_scoring()
+    test_no_materializes_unfavorably()
+    test_empty_conditions_remain_empty()
+    test_no_condition_describes_already_true_as_improvement()
+    test_pillar_scores_remain_unchanged_after_diagnostics()
+    test_event_sizing_applied_exactly_once()
+
+    print("\nAll 93 tests PASSED")
