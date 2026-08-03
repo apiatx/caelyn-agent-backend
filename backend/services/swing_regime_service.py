@@ -49,10 +49,13 @@ def assess_swing_regime(inputs: dict) -> dict:
     regime_direction = _compute_regime_direction(pillars, risk_level, pillar_avail)
     trade_bias = _compute_trade_bias(risk_level, regime_direction, pillar_avail)
     base_pos_size = _compute_position_size_hint(risk_level, inputs)
+    final_pos_size = _apply_event_sizing(base_pos_size, inputs)
     dominant_driver = _compute_dominant_driver(pillars, inputs)
     one_line = _build_one_line(risk_level, regime_direction, trade_bias, dominant_driver, pillars, pillar_avail)
     flip_conditions = _compute_flip_conditions(pillars, inputs)
-    event_overlay = _compute_event_overlay(inputs, risk_level, base_pos_size, _apply_event_sizing(base_pos_size, inputs))
+    event_overlay = _compute_event_overlay(inputs, risk_level, base_pos_size, final_pos_size)
+
+    _enrich_pillar_diagnostics(pillars)
 
     # Pillar counts for sufficiency
     n_avail_pillars = sum(1 for v in pillar_avail.values() if v)
@@ -84,7 +87,8 @@ def assess_swing_regime(inputs: dict) -> dict:
         "risk_score":                overall_risk_score,
         "regime_direction":          regime_direction,
         "trade_bias":                trade_bias,
-        "position_size_hint":        _apply_event_sizing(base_pos_size, inputs),
+        "base_position_size_hint":   base_pos_size,
+        "position_size_hint":        final_pos_size,
         "dominant_driver":           dominant_driver,
         "one_line":                  one_line,
         "conditions_that_would_flip": flip_conditions,
@@ -551,6 +555,366 @@ def _score_leadership_and_cross_asset(inputs: dict) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Pillar diagnostics — derived from existing scoring logic
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SIGNAL_STRENGTH = {
+    (0, 15):   "STRONG_BULLISH",
+    (15, 30):  "MODERATE",
+    (30, 45):  "MILD",
+    (45, 60):  "MILD_NEGATIVE",
+    (60, 80):  "MODERATE_NEGATIVE",
+    (80, 101): "STRONG_BEARISH",
+}
+
+def _signal_strength(risk_contribution: float) -> str:
+    for (lo, hi), label in _SIGNAL_STRENGTH.items():
+        if lo <= risk_contribution < hi:
+            return label
+    return "MODERATE"
+
+def _message_strength(risk_contribution: float) -> str:
+    if risk_contribution <= 20:           return "STRONG"
+    elif risk_contribution <= 35:         return "MODERATE"
+    elif risk_contribution <= 50:         return "MILD"
+    elif risk_contribution <= 70:         return "MODERATE"
+    else:                                  return "STRONG"
+
+def _enrich_pillar_diagnostics(pillars: dict) -> None:
+
+    # ── Trend & Breadth diagnostics ─────────────────────────────────────
+    tb_comp = pillars["trend_and_breadth"].get("components", {})
+    tb_support: list[dict] = []
+    tb_risk: list[dict] = []
+    tb_missing: list[str] = []
+    tb_improve: list[str] = []
+    tb_worsen: list[str] = []
+
+    spy_1d = tb_comp.get("spy_change_1d")
+    qqq_1d = tb_comp.get("qqq_change_1d")
+    eq_avg = tb_comp.get("equity_1d_avg")
+    spx_7d = tb_comp.get("spx_return_7d")
+    spx_63d = tb_comp.get("spx_return_63d")
+    breadth_1d = tb_comp.get("breadth_1d")
+    breadth_7d = tb_comp.get("breadth_7d")
+
+    if eq_avg is not None:
+        if eq_avg >= 1.5:
+            tb_support.append({"key": "equity_1d_strong", "label": "SPY/QQQ 1D", "value": round(eq_avg, 2), "unit": "%", "message": f"SPY and QQQ averaged {eq_avg:+.1f}% in the latest session.", "strength": "MODERATE"})
+        elif eq_avg >= 0.5:
+            tb_support.append({"key": "equity_1d_positive", "label": "SPY/QQQ 1D", "value": round(eq_avg, 2), "unit": "%", "message": f"SPY and QQQ averaged {eq_avg:+.1f}% — constructive session.", "strength": "MILD"})
+        elif eq_avg <= -2.0:
+            tb_risk.append({"key": "equity_1d_major_selloff", "label": "SPY/QQQ 1D", "value": round(eq_avg, 2), "unit": "%", "message": f"Major equity selloff: SPY/QQQ averaged {eq_avg:+.1f}%.", "strength": "STRONG"})
+        elif eq_avg <= -1.0:
+            tb_risk.append({"key": "equity_1d_selloff", "label": "SPY/QQQ 1D", "value": round(eq_avg, 2), "unit": "%", "message": f"Equities under pressure: SPY/QQQ averaged {eq_avg:+.1f}%.", "strength": "MODERATE"})
+        elif eq_avg <= -0.3:
+            tb_risk.append({"key": "equity_1d_weak", "label": "SPY/QQQ 1D", "value": round(eq_avg, 2), "unit": "%", "message": f"Mild weakness: SPY/QQQ averaged {eq_avg:+.1f}%.", "strength": "MILD"})
+
+    if breadth_1d is not None:
+        if breadth_1d >= 70:
+            tb_support.append({"key": "breadth_strong_1d", "label": "Breadth 1D", "value": round(breadth_1d, 0), "unit": "%", "message": f"{breadth_1d:.0f}% of sectors advanced — broad participation.", "strength": "STRONG"})
+        elif breadth_1d < 40:
+            tb_risk.append({"key": "breadth_weak_1d", "label": "Breadth 1D", "value": round(breadth_1d, 0), "unit": "%", "message": f"Only {breadth_1d:.0f}% of sectors advanced — narrow participation.", "strength": "STRONG" if breadth_1d < 30 else "MODERATE"})
+        elif breadth_1d < 50:
+            tb_risk.append({"key": "breadth_mixed_1d", "label": "Breadth 1D", "value": round(breadth_1d, 0), "unit": "%", "message": f"Sector breadth is mixed at {breadth_1d:.0f}%.", "strength": "MILD"})
+
+    if breadth_7d is not None:
+        if breadth_7d < 40:
+            tb_risk.append({"key": "breadth_weak_7d", "label": "Breadth 7D", "value": round(breadth_7d, 0), "unit": "%", "message": f"7-day breadth is narrow at {breadth_7d:.0f}%.", "strength": "MODERATE"})
+
+    if spx_7d is not None:
+        if spx_7d >= 2.0:
+            tb_support.append({"key": "spx_7d_strong", "label": "SPX 7D", "value": round(spx_7d, 2), "unit": "%", "message": f"SPX gained {spx_7d:+.1f}% over seven sessions.", "strength": "STRONG"})
+        elif spx_7d <= -3.0:
+            tb_risk.append({"key": "spx_7d_weak", "label": "SPX 7D", "value": round(spx_7d, 2), "unit": "%", "message": f"SPX fell {abs(spx_7d):.1f}% over seven sessions.", "strength": "STRONG"})
+        elif spx_7d <= -1.0:
+            tb_risk.append({"key": "spx_7d_mild_weak", "label": "SPX 7D", "value": round(spx_7d, 2), "unit": "%", "message": f"SPX 7-day return is negative at {spx_7d:+.1f}%.", "strength": "MODERATE"})
+
+    if spx_63d is not None:
+        if spx_63d >= 5.0:
+            tb_support.append({"key": "spx_63d_strong", "label": "SPX 3M", "value": round(spx_63d, 2), "unit": "%", "message": f"SPX 3-month return is strong at {spx_63d:+.1f}%.", "strength": "STRONG"})
+        elif spx_63d <= -3.0:
+            tb_risk.append({"key": "spx_63d_weak", "label": "SPX 3M", "value": round(spx_63d, 2), "unit": "%", "message": f"The three-month trend remains negative at {spx_63d:+.1f}%.", "strength": "STRONG"})
+        elif spx_63d <= -0.5:
+            tb_risk.append({"key": "spx_63d_flat", "label": "SPX 3M", "value": round(spx_63d, 2), "unit": "%", "message": f"The three-month return is mildly negative at {spx_63d:+.1f}%.", "strength": "MODERATE"})
+
+    # Expected components
+    if spy_1d is None:    tb_missing.append("spy_change_1d")
+    if qqq_1d is None:    tb_missing.append("qqq_change_1d")
+    if spx_7d is None:    tb_missing.append("spx_return_7d")
+    if spx_63d is None:   tb_missing.append("spx_return_63d")
+    if breadth_1d is None: tb_missing.append("sector_breadth_1d")
+    if breadth_7d is None: tb_missing.append("sector_breadth_7d")
+
+    # Improve/worsen from actual thresholds used in scoring
+    if breadth_1d is not None and breadth_1d < 55:
+        tb_improve.append(f"Breadth rises above 55%.")
+    if spx_63d is not None and spx_63d < 0:
+        tb_improve.append("SPX 3-month return turns positive.")
+    if breadth_1d is not None:
+        tb_worsen.append(f"Breadth falls below 45% — the canonical weak-participation threshold.")
+    if spx_63d is not None and spx_63d > -3.0:
+        tb_worsen.append("SPX 3-month return falls below -3%.")
+
+    # Interpretation
+    tb_pos_count = len(tb_support)
+    tb_neg_count = len(tb_risk)
+    interpretation_parts: list[str] = []
+
+    if tb_support and tb_risk:
+        pos_label = tb_support[0].get("label", "") if tb_support else ""
+        neg_label = tb_risk[0].get("label", "") if tb_risk else ""
+        interpretation_parts.append(f"Latest-session participation is constructive, but the longer-term trend remains weak, leaving Trend & Breadth in a worsening state." if breadth_1d is not None and breadth_1d >= 50 and spx_63d is not None and spx_63d < 0 else f"Positive {pos_label} signals are offset by {neg_label} risk, leaving Trend & Breadth mixed.")
+    elif tb_support:
+        interpretation_parts.append("Trend and breadth signals are supportive across timeframes.")
+    elif tb_risk:
+        dominant_risk = tb_risk[0].get("message", "").rstrip(".")
+        interpretation_parts.append(f"Risk dominates: {dominant_risk}.")
+    else:
+        interpretation_parts.append("Trend & Breadth data is insufficient for interpretation.")
+
+    pillars["trend_and_breadth"]["interpretation"] = " ".join(interpretation_parts)
+    pillars["trend_and_breadth"]["supportive_signals"] = tb_support
+    pillars["trend_and_breadth"]["risk_signals"] = tb_risk
+    pillars["trend_and_breadth"]["missing_inputs"] = tb_missing
+    pillars["trend_and_breadth"]["conditions_to_improve"] = tb_improve
+    pillars["trend_and_breadth"]["conditions_to_worsen"] = tb_worsen
+
+    # ── Volatility & Credit diagnostics ───────────────────────────────────
+    vc_comp = pillars["volatility_and_credit"].get("components", {})
+    vc_sup: list[dict] = []
+    vc_risk: list[dict] = []
+    vc_miss: list[str] = []
+    vc_imp: list[str] = []
+    vc_wrs: list[str] = []
+
+    vix_val = vc_comp.get("vix")
+    vix_chg_val = vc_comp.get("vix_change_1d")
+    hyg_val = vc_comp.get("hyg_change_1d")
+    vix_7d = vc_comp.get("vix_return_7d")
+
+    if vix_val is not None:
+        if vix_val >= 30:
+            vc_risk.append({"key": "vix_stress", "label": "VIX", "value": vix_val, "unit": "", "message": f"VIX at {vix_val:.1f} — stress zone.", "strength": "STRONG"})
+            vc_wrs.append("VIX rises above 30 — the canonical stress threshold.")
+        elif vix_val >= 25:
+            vc_risk.append({"key": "vix_high", "label": "VIX", "value": vix_val, "unit": "", "message": f"VIX elevated at {vix_val:.1f}.", "strength": "MODERATE"})
+        elif vix_val >= 20:
+            vc_risk.append({"key": "vix_elevated", "label": "VIX", "value": vix_val, "unit": "", "message": f"VIX is above the 20 threshold at {vix_val:.1f}.", "strength": "MILD"})
+        else:
+            vc_sup.append({"key": "vix_low", "label": "VIX", "value": vix_val, "unit": "", "message": f"VIX is contained at {vix_val:.1f}.", "strength": "STRONG" if vix_val < 15 else "MODERATE"})
+
+    if vix_chg_val is not None:
+        if vix_chg_val >= 5:
+            vc_risk.append({"key": "vix_spiking", "label": "VIX 1D", "value": round(vix_chg_val, 2), "unit": "%", "message": f"VIX jumped {vix_chg_val:+.1f}% in the latest session.", "strength": "STRONG"})
+            vc_wrs.append("VIX 1D change exceeds +20% — the canonical spike threshold.")
+        elif vix_chg_val < -3:
+            vc_sup.append({"key": "vix_falling", "label": "VIX 1D", "value": round(vix_chg_val, 2), "unit": "%", "message": f"VIX fell {abs(vix_chg_val):.1f}% in the latest session.", "strength": "MODERATE"})
+        elif vix_chg_val > 0:
+            vc_risk.append({"key": "vix_rising", "label": "VIX 1D", "value": round(vix_chg_val, 2), "unit": "%", "message": f"VIX rose {vix_chg_val:+.1f}%, indicating slight stress increase.", "strength": "MILD"})
+
+    if hyg_val is not None:
+        if hyg_val >= 0.5:
+            vc_sup.append({"key": "hyg_strong", "label": "HYG 1D", "value": round(hyg_val, 2), "unit": "%", "message": f"HYG gained {hyg_val:+.2f}%, showing no current credit stress.", "strength": "STRONG"})
+        elif hyg_val <= -1.0:
+            vc_risk.append({"key": "hyg_weak", "label": "HYG 1D", "value": round(hyg_val, 2), "unit": "%", "message": f"HYG fell {abs(hyg_val):.1f}% — credit stress signal.", "strength": "STRONG"})
+            vc_wrs.append("HYG falls below -1.0% — the canonical credit-stress threshold.")
+        elif hyg_val <= -0.3:
+            vc_risk.append({"key": "hyg_mild_weak", "label": "HYG 1D", "value": round(hyg_val, 2), "unit": "%", "message": f"HYG mildly negative at {hyg_val:+.2f}%.", "strength": "MODERATE"})
+
+    if vix_val is not None and vix_val < 20:
+        vc_imp.append(f"VIX remains below 20 — current conditions are already benign.")
+    if vix_val is not None and vix_val >= 20:
+        vc_imp.append(f"VIX falls below 20.")
+    if hyg_val is not None and hyg_val <= 0:
+        vc_imp.append("HYG returns above the credit-warning threshold.")
+
+    if vix_val is None:  vc_miss.append("vix_current")
+    if vix_chg_val is None: vc_miss.append("vix_change_1d")
+    if hyg_val is None:  vc_miss.append("hyg_change_1d")
+    if vix_7d is None:   vc_miss.append("vix_return_7d")
+
+    vc_pos = len(vc_sup)
+    vc_neg = len(vc_risk)
+    if vc_pos > vc_neg:
+        pillars["volatility_and_credit"]["interpretation"] = "Volatility is contained and credit is stable, indicating limited stress."
+    elif vc_neg > vc_pos:
+        pillars["volatility_and_credit"]["interpretation"] = "Volatility and credit signals are indicating elevated stress."
+    else:
+        pillars["volatility_and_credit"]["interpretation"] = "Volatility and credit signals are mixed."
+
+    pillars["volatility_and_credit"]["supportive_signals"] = vc_sup
+    pillars["volatility_and_credit"]["risk_signals"] = vc_risk
+    pillars["volatility_and_credit"]["missing_inputs"] = vc_miss
+    pillars["volatility_and_credit"]["conditions_to_improve"] = vc_imp
+    pillars["volatility_and_credit"]["conditions_to_worsen"] = vc_wrs
+
+    # ── Rates & Dollar diagnostics ────────────────────────────────────────
+    rd_comp = pillars["rates_and_dollar"].get("components", {})
+    rd_sup: list[dict] = []
+    rd_risk: list[dict] = []
+    rd_miss: list[str] = []
+    rd_imp: list[str] = []
+    rd_wrs: list[str] = []
+
+    us10y_val_rd = rd_comp.get("us10y")
+    chg_1d = rd_comp.get("us10y_change_1d_bps")
+    chg_5d_val = rd_comp.get("us10y_change_5d_bps")
+    chg_20d = rd_comp.get("us10y_change_20d_bps")
+    dxy_val_rd = rd_comp.get("dxy")
+    dxy_chg_val = rd_comp.get("dxy_change_1d")
+
+    if chg_5d_val is not None:
+        if chg_5d_val >= 15:
+            rd_risk.append({"key": "10y_spike_5d", "label": "10Y 5D", "value": round(chg_5d_val, 1), "unit": "bps", "message": f"10Y has surged {chg_5d_val:+.0f} bps over five sessions — increasing pressure on long-duration assets.", "strength": "STRONG"})
+            rd_wrs.append("10Y 5-session increase exceeds +15 bps — the canonical pressure threshold.")
+        elif chg_5d_val >= 5:
+            rd_risk.append({"key": "10y_rising_5d", "label": "10Y 5D", "value": round(chg_5d_val, 1), "unit": "bps", "message": f"10Y has risen {chg_5d_val:+.0f} bps over five sessions.", "strength": "MODERATE"})
+            rd_wrs.append("10Y 5-session increase exceeds +5 bps.")
+        elif chg_5d_val <= -10:
+            rd_sup.append({"key": "10y_falling_5d", "label": "10Y 5D", "value": round(chg_5d_val, 1), "unit": "bps", "message": f"10Y has fallen {abs(chg_5d_val):.0f} bps over five sessions — rate pressure easing.", "strength": "STRONG"})
+            rd_imp.append("10Y 5-session pressure remains below +5 bps.")
+        elif chg_5d_val <= -5:
+            rd_sup.append({"key": "10y_easing_5d", "label": "10Y 5D", "value": round(chg_5d_val, 1), "unit": "bps", "message": f"10Y has eased {abs(chg_5d_val):.0f} bps over five sessions.", "strength": "MODERATE"})
+
+    if us10y_val_rd is not None:
+        if us10y_val_rd >= 4.75:
+            rd_risk.append({"key": "10y_elevated", "label": "10Y Level", "value": us10y_val_rd, "unit": "%", "message": f"10Y remains restrictive at {us10y_val_rd:.2f}%.", "strength": "STRONG" if us10y_val_rd >= 5.0 else "MODERATE"})
+            if chg_5d_val is not None and chg_5d_val <= 0:
+                rd_imp.append("10Y yield falls below 4.75%.")
+        elif us10y_val_rd >= 4.5:
+            rd_risk.append({"key": "10y_watch", "label": "10Y Level", "value": us10y_val_rd, "unit": "%", "message": f"10Y is in the watch zone at {us10y_val_rd:.2f}%.", "strength": "MILD"})
+        else:
+            rd_sup.append({"key": "10y_moderate", "label": "10Y Level", "value": us10y_val_rd, "unit": "%", "message": f"10Y is manageable at {us10y_val_rd:.2f}%.", "strength": "STRONG"})
+
+    if dxy_chg_val is not None:
+        if dxy_chg_val >= 0.5:
+            rd_risk.append({"key": "dxy_strong", "label": "DXY 1D", "value": round(dxy_chg_val, 2), "unit": "%", "message": f"DXY gained {dxy_chg_val:+.2f}% — dollar strength headwind.", "strength": "STRONG"})
+            rd_wrs.append("DXY 1D increase exceeds +0.5% — the canonical pressure threshold.")
+        elif dxy_chg_val <= -0.3:
+            rd_sup.append({"key": "dxy_weak", "label": "DXY 1D", "value": round(dxy_chg_val, 2), "unit": "%", "message": f"DXY fell {abs(dxy_chg_val):.2f}% — dollar weakness is supportive.", "strength": "MODERATE"})
+
+    if dxy_val_rd is not None:
+        pass  # level alone is not a strong signal; present in components
+
+    if us10y_val_rd is None:  rd_miss.append("us10y_yield")
+    if chg_1d is None:        rd_miss.append("us10y_change_1d_bps")
+    if chg_5d_val is None:    rd_miss.append("us10y_change_5d_bps")
+    if chg_20d is None:       rd_miss.append("us10y_change_20d_bps")
+    if dxy_chg_val is None:   rd_miss.append("dxy_change_1d")
+    if dxy_val_rd is None:    rd_miss.append("dxy_price")
+
+    # Interpretation with level + direction
+    rd_parts: list[str] = []
+    if us10y_val_rd is not None:
+        if chg_5d_val is not None and chg_5d_val < -5:
+            rd_parts.append(f"10Y remains restrictive at {us10y_val_rd:.2f}%, but five-session pressure is easing.")
+        elif chg_5d_val is not None and chg_5d_val > 5:
+            rd_parts.append(f"10Y is {us10y_val_rd:.2f}% and has risen {chg_5d_val:+.0f} bps over five sessions, increasing pressure on long-duration assets.")
+        elif us10y_val_rd >= 4.75:
+            rd_parts.append(f"10Y is elevated at {us10y_val_rd:.2f}% with flat short-term direction.")
+        else:
+            rd_parts.append(f"10Y is at {us10y_val_rd:.2f}%.")
+    if dxy_chg_val is not None and dxy_chg_val >= 0.3:
+        rd_parts.append(f"DXY rose {dxy_chg_val:+.2f}%, adding pressure.")
+
+    if not rd_parts:
+        rd_parts.append("Rates & Dollar data is insufficient for interpretation.")
+
+    pillars["rates_and_dollar"]["interpretation"] = " ".join(rd_parts)
+    pillars["rates_and_dollar"]["supportive_signals"] = rd_sup
+    pillars["rates_and_dollar"]["risk_signals"] = rd_risk
+    pillars["rates_and_dollar"]["missing_inputs"] = rd_miss
+    pillars["rates_and_dollar"]["conditions_to_improve"] = rd_imp
+    pillars["rates_and_dollar"]["conditions_to_worsen"] = rd_wrs
+
+    # ── Leadership & Cross-Asset diagnostics ──────────────────────────────
+    lc_comp = pillars["leadership_and_cross_asset"].get("components", {})
+    lc_sup: list[dict] = []
+    lc_risk: list[dict] = []
+    lc_miss: list[str] = []
+    lc_imp: list[str] = []
+    lc_wrs: list[str] = []
+
+    btc_chg_val = lc_comp.get("btc_change_24h")
+    cvd_val = lc_comp.get("cyclical_vs_defensive_spread")
+    posture_val = lc_comp.get("market_posture")
+
+    if btc_chg_val is not None:
+        if btc_chg_val <= -5.0:
+            lc_risk.append({"key": "btc_risk_off", "label": "BTC 24H", "value": round(btc_chg_val, 2), "unit": "%", "message": f"BTC fell {abs(btc_chg_val):.1f}% — risk-off signal.", "strength": "STRONG"})
+        elif btc_chg_val >= 3.0:
+            lc_sup.append({"key": "btc_risk_on", "label": "BTC 24H", "value": round(btc_chg_val, 2), "unit": "%", "message": f"BTC gained {btc_chg_val:+.1f}% — risk-on appetite.", "strength": "STRONG"})
+    else:
+        lc_miss.append("btc_change_24h")
+
+    if cvd_val is not None:
+        if cvd_val <= -3.0:
+            lc_risk.append({"key": "defensive_rotation", "label": "Cyclical vs Defensive", "value": round(cvd_val, 2), "unit": "%", "message": f"Heavy defensive rotation: cyclicals-vs-defensive spread is {cvd_val:+.1f}%.", "strength": "STRONG"})
+            lc_wrs.append("Cyclicals begin materially underperforming defensives (spread below -3%).")
+        elif cvd_val <= -1.0:
+            lc_risk.append({"key": "mild_defensive", "label": "Cyclical vs Defensive", "value": round(cvd_val, 2), "unit": "%", "message": f"Defensives are leading: spread is {cvd_val:+.1f}%.", "strength": "MODERATE"})
+        elif cvd_val >= 2.0:
+            lc_sup.append({"key": "risk_on_rotation", "label": "Cyclical vs Defensive", "value": round(cvd_val, 2), "unit": "%", "message": f"Cyclicals leading: spread is {cvd_val:+.1f}% — risk-on rotation.", "strength": "STRONG"})
+        elif cvd_val >= 0.5:
+            lc_sup.append({"key": "cyclical_mild", "label": "Cyclical vs Defensive", "value": round(cvd_val, 2), "unit": "%", "message": f"Cyclicals are modestly outperforming defensives at {cvd_val:+.1f}%.", "strength": "MILD"})
+    else:
+        lc_miss.append("cyclical_vs_defensive_spread")
+
+    if not posture_val:
+        lc_miss.append("market_posture")
+
+    # Data status and confirmation
+    lc_n_avail = pillars["leadership_and_cross_asset"].get("available_component_count", 0)
+    lc_n_exp = pillars["leadership_and_cross_asset"].get("expected_component_count", 3)
+
+    if lc_n_avail == lc_n_exp:
+        data_status = "COMPLETE"
+    elif lc_n_avail > 0:
+        data_status = "PARTIAL"
+    else:
+        data_status = "UNAVAILABLE"
+
+    pillars["leadership_and_cross_asset"]["data_status"] = data_status
+
+    # Confirmation status
+    if lc_risk and not lc_sup:
+        confirmation = "UNCONFIRMED"
+    elif lc_sup and not lc_risk:
+        confirmation = "CONFIRMED"
+    elif lc_sup and lc_risk:
+        confirmation = "MIXED"
+    else:
+        confirmation = "UNCONFIRMED"
+    pillars["leadership_and_cross_asset"]["confirmation_status"] = confirmation
+
+    # Interpretation
+    lc_parts: list[str] = []
+    if data_status == "PARTIAL":
+        lc_parts.append(f"Only {lc_n_avail} of {lc_n_exp} inputs available")
+        if lc_miss:
+            lc_parts.append(f"(missing: {', '.join(lc_miss)}).")
+    if cvd_val is not None and cvd_val > 0:
+        lc_parts.append("Cyclicals are outperforming defensives — mildly supportive.")
+    elif cvd_val is not None:
+        lc_parts.append("Defensives are leading — cautious posture.")
+    if posture_val:
+        lc_parts.append(f"Market posture is {posture_val}.")
+    if btc_chg_val is None:
+        lc_parts.append("BTC confirmation is unavailable.")
+
+    if not lc_parts:
+        lc_parts.append("Leadership & Cross-Asset data is insufficient.")
+
+    pillars["leadership_and_cross_asset"]["interpretation"] = " ".join(lc_parts)
+    pillars["leadership_and_cross_asset"]["supportive_signals"] = lc_sup
+    pillars["leadership_and_cross_asset"]["risk_signals"] = lc_risk
+    pillars["leadership_and_cross_asset"]["missing_inputs"] = lc_miss
+    pillars["leadership_and_cross_asset"]["conditions_to_improve"] = lc_imp
+    pillars["leadership_and_cross_asset"]["conditions_to_worsen"] = lc_wrs
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Overall regime logic
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -743,17 +1107,25 @@ def _compute_flip_conditions(pillars: dict, inputs: dict) -> list[str]:
     tb = pillars.get("trend_and_breadth", {})
     tb_comp = tb.get("components", {})
     if tb_comp.get("breadth_1d", 100) < 50:
-        conditions.append("Breadth rises above 50")
+        conditions.append("Breadth rises above 50%")
     spx_7d = tb_comp.get("spx_return_7d")
     if spx_7d is not None and spx_7d < -1.0:
         conditions.append("SPX 7-day return turns positive")
+    spx_63d = tb_comp.get("spx_return_63d")
+    if spx_63d is not None and spx_63d < -0.5:
+        conditions.append("SPX 3-month return turns positive")
 
     vc = pillars.get("volatility_and_credit", {})
     vc_comp = vc.get("components", {})
     if vc_comp.get("vix", 100) >= 25:
         conditions.append("VIX falls below 25")
+    elif vc_comp.get("vix", 100) >= 20:
+        conditions.append("VIX falls below 20")
+    vix_chg = vc_comp.get("vix_change_1d")
+    if vix_chg is not None and vix_chg >= 5:
+        conditions.append("VIX 1D change falls below 5%")
     if vc_comp.get("hyg_change_1d", 0) is not None and vc_comp.get("hyg_change_1d", 0) <= -0.5:
-        conditions.append("HYG stabilizes (1D positive)")
+        conditions.append("HYG returns above the credit-warning threshold")
 
     rd = pillars.get("rates_and_dollar", {})
     rd_comp = rd.get("components", {})
@@ -773,9 +1145,6 @@ def _compute_flip_conditions(pillars: dict, inputs: dict) -> list[str]:
     if cvd is not None and cvd <= -1.0:
         conditions.append("Cyclicals resume leadership over defensives")
 
-    if not conditions:
-        conditions.append("No immediate flip conditions — monitor daily")
-
     return conditions[:5]
 
 
@@ -786,28 +1155,36 @@ def _compute_event_overlay(inputs: dict, risk_level: str, base_size: str, final_
 
     if not has_event:
         return {
-            "active":                        False,
-            "severity":                      "NONE",
-            "next_event":                    None,
-            "days_until_event":              None,
-            "position_size_impact":          None,
-            "contributes_to_directional_score": False,
+            "active":                             False,
+            "severity":                           "NONE",
+            "next_event":                         None,
+            "days_until_event":                   None,
+            "position_size_impact":               None,
+            "contributes_to_directional_score":   False,
+            "position_size_adjustment_applied":   False,
+            "pre_event_size":                     base_size,
+            "post_event_size":                    base_size,
         }
 
     severity = "HIGH" if (days is not None and days <= 2) else "MODERATE"
 
-    if final_size != base_size:
+    adjustment_applied = final_size != base_size
+
+    if adjustment_applied:
         impact = f"{base_size} reduced to {final_size} ahead of {next_title or 'event'}"
     else:
         impact = "No additional sizing reduction"
 
     return {
-        "active":                        True,
-        "severity":                      severity,
-        "next_event":                    next_title,
-        "days_until_event":              days,
-        "position_size_impact":          impact,
-        "contributes_to_directional_score": False,
+        "active":                             True,
+        "severity":                           severity,
+        "next_event":                         next_title,
+        "days_until_event":                   days,
+        "position_size_impact":               impact,
+        "contributes_to_directional_score":   False,
+        "position_size_adjustment_applied":   adjustment_applied,
+        "pre_event_size":                     base_size,
+        "post_event_size":                    final_size,
     }
 
 

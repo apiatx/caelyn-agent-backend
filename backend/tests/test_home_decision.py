@@ -365,12 +365,12 @@ def test_insufficient_data():
 
 def test_event_overlay_does_not_change_verdict():
     """Event overlay changes position size but NOT verdict or action."""
-    sr = _make_regime("LOW", "IMPROVING", "LONG", pos_size="normal", event_active=True)
+    sr = _make_regime("LOW", "IMPROVING", "LONG", pos_size="selective", event_active=True)
     es = _make_exec_snapshot(mqs=75.0, ews=80.0, decision="YES")
     d = _hd(sr, es)
     assert d["verdict"] == "YES"  # same verdict
     assert d["action"] == "PRESS"  # same action
-    assert d["position_size_hint"] == "selective"  # downsized from normal
+    assert d["position_size_hint"] == "selective"  # Swing Regime already applied event sizing; Home does not re-apply
     print("test_event_overlay_does_not_change_verdict PASSED")
 
 
@@ -458,7 +458,8 @@ def test_home_decision_has_required_sections():
     """All required sections present."""
     d = _hd()
     top = {"version", "calibration_status", "verdict", "action", "one_line",
-           "position_size_hint", "confidence", "assessment_status", "market_context",
+           "position_size_hint", "sizing", "signal_summary", "confidence",
+           "assessment_status", "market_context",
            "regime", "execution", "why_now", "buy_reasons", "wait_reasons",
            "reduce_reasons", "what_would_improve", "what_would_worsen"}
     assert top <= set(d.keys()), f"Missing: {top - set(d.keys())}"
@@ -469,7 +470,8 @@ def test_home_decision_has_required_sections():
 
     exe = {"status", "refresh_status", "quality", "market_quality_score",
            "execution_window_score", "decision", "mode", "as_of",
-           "age_seconds", "from_cache", "expired"}
+           "age_seconds", "from_cache", "expired",
+           "recommended_refetch_seconds", "refresh_in_progress"}
     assert exe <= set(d["execution"].keys()), f"Missing exec: {exe - set(d['execution'].keys())}"
 
     print("test_home_decision_has_required_sections PASSED")
@@ -668,6 +670,200 @@ def test_machine_enum_fields_unchanged():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Phase C — Sizing provenance tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_sizing_object_present():
+    d = _hd()
+    assert "sizing" in d
+    s = d["sizing"]
+    for field in ("matrix_size", "regime_base_size", "regime_final_size",
+                  "event_overlay_active", "event_adjustment_applied",
+                  "event_pre_size", "event_post_size", "final_size", "explanation"):
+        assert field in s, f"Missing sizing.{field}"
+    print("test_sizing_object_present PASSED")
+
+
+def test_sizing_no_event_no_change():
+    """No event — sizing unchanged."""
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG", pos_size="selective")
+    es = _make_exec_snapshot()
+    d = _hd(sr, es)
+    assert d["sizing"]["event_overlay_active"] is False
+    assert d["sizing"]["event_adjustment_applied"] is False
+    assert d["sizing"]["final_size"] == "selective"
+    assert d["sizing"]["event_pre_size"] == d["sizing"]["event_post_size"]
+    print("test_sizing_no_event_no_change PASSED")
+
+
+def test_sizing_event_applies_once():
+    """One event adjustment: base selective → final half-size. Home does NOT re-apply."""
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG", pos_size="half-size", event_active=True)
+    sr["base_position_size_hint"] = "selective"
+    sr["event_overlay"]["position_size_adjustment_applied"] = True
+    sr["event_overlay"]["pre_event_size"] = "selective"
+    sr["event_overlay"]["post_event_size"] = "half-size"
+    es = _make_exec_snapshot()
+    d = _hd(sr, es)
+    assert d["position_size_hint"] == "half-size", f"Expected half-size, got {d['position_size_hint']}"
+    assert d["sizing"]["event_adjustment_applied"] is True
+    assert d["sizing"]["event_pre_size"] == "selective"
+    assert d["sizing"]["event_post_size"] == "half-size"
+    assert d["sizing"]["final_size"] == "half-size"
+    print("test_sizing_event_applies_once PASSED")
+
+
+def test_sizing_no_double_event_adjustment():
+    """Swing Regime final half-size → Home final half-size, never preserve capital solely from same event."""
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG", pos_size="half-size", event_active=True)
+    sr["base_position_size_hint"] = "selective"
+    sr["event_overlay"]["position_size_adjustment_applied"] = True
+    sr["event_overlay"]["pre_event_size"] = "selective"
+    sr["event_overlay"]["post_event_size"] = "half-size"
+    es = _make_exec_snapshot()
+    d = _hd(sr, es)
+    assert d["position_size_hint"] == "half-size", \
+        f"Should be half-size, not preserve capital. Got {d['position_size_hint']}"
+    print("test_sizing_no_double_event_adjustment PASSED")
+
+
+def test_sizing_preserve_capital_guardrail_only():
+    """Preserve capital only when justified by matrix or regime risk, never just from event."""
+    sr = _make_regime("HIGH", "STABLE", "SELECTIVE_SHORT", pos_size="preserve capital", event_active=True)
+    sr["base_position_size_hint"] = "half-size"
+    sr["event_overlay"]["position_size_adjustment_applied"] = True
+    sr["event_overlay"]["pre_event_size"] = "half-size"
+    sr["event_overlay"]["post_event_size"] = "preserve capital"
+    es = _make_exec_snapshot()
+    d = _hd(sr, es)
+    assert d["position_size_hint"] == "preserve capital"
+    assert d["sizing"]["regime_final_size"] == "preserve capital"
+    print("test_sizing_preserve_capital_guardrail_only PASSED")
+
+
+def test_sizing_event_inactive_equal():
+    """Event inactive → adjust_applied false, pre and post sizes equal."""
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG", pos_size="selective")
+    es = _make_exec_snapshot()
+    d = _hd(sr, es)
+    assert d["sizing"]["event_adjustment_applied"] is False
+    assert d["sizing"]["event_pre_size"] == d["sizing"]["event_post_size"]
+    print("test_sizing_event_inactive_equal PASSED")
+
+
+def test_sizing_provenance_accurate():
+    """All provenance fields match expected values."""
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG", pos_size="half-size", event_active=True)
+    sr["base_position_size_hint"] = "selective"
+    sr["event_overlay"]["position_size_adjustment_applied"] = True
+    sr["event_overlay"]["pre_event_size"] = "selective"
+    sr["event_overlay"]["post_event_size"] = "half-size"
+    es = _make_exec_snapshot()
+    d = _hd(sr, es)
+    s = d["sizing"]
+    assert s["matrix_size"] == "selective"
+    assert s["regime_base_size"] == "selective"
+    assert s["regime_final_size"] == "half-size"
+    assert s["event_overlay_active"] is True
+    assert s["event_adjustment_applied"] is True
+    assert s["event_pre_size"] == "selective"
+    assert s["event_post_size"] == "half-size"
+    assert s["final_size"] == "half-size"
+    assert "cpi" in s["explanation"].lower() or "imminent" in s["explanation"].lower()
+    print("test_sizing_provenance_accurate PASSED")
+
+
+def test_screenshot_equivalent_case_half_size():
+    """Screenshot-equivalent: MODERATE + STABLE + SELECTIVE_LONG + CPI event → half-size."""
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG", pos_size="half-size", event_active=True)
+    sr["base_position_size_hint"] = "selective"
+    sr["event_overlay"]["position_size_adjustment_applied"] = True
+    sr["event_overlay"]["pre_event_size"] = "selective"
+    sr["event_overlay"]["post_event_size"] = "half-size"
+    es = _make_exec_snapshot(mqs=62.0, ews=50.0, decision="CAUTION")
+    d = _hd(sr, es)
+    assert d["position_size_hint"] == "half-size", \
+        f"Screenshot-equivalent should be half-size, got {d['position_size_hint']}"
+    print("test_screenshot_equivalent_case_half_size PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase C — Execution warmup contract tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_warmup_recommended_refetch():
+    """Warming execution → recommended_refetch_seconds=5, refresh_in_progress=true."""
+    sr = _make_regime()
+    es = _make_exec_snapshot(status="unavailable")
+    d = _hd(sr, es, refresh="scheduled")
+    assert d["execution"]["status"] in ("warming", "unavailable")
+    if d["execution"]["status"] == "warming" or d["execution"]["refresh_status"] == "scheduled":
+        assert d["execution"]["recommended_refetch_seconds"] == 5
+        assert d["execution"]["refresh_in_progress"] is True
+    print("test_warmup_recommended_refetch PASSED")
+
+
+def test_available_no_refetch():
+    """Available execution → recommended_refetch_seconds=None, refresh_in_progress=false."""
+    sr = _make_regime()
+    es = _make_exec_snapshot(mqs=62.0, ews=50.0, decision="CAUTION", status="available")
+    d = _hd(sr, es, refresh="not_needed")
+    assert d["execution"]["status"] == "available"
+    assert d["execution"]["recommended_refetch_seconds"] is None
+    assert d["execution"]["refresh_in_progress"] is False
+    print("test_available_no_refetch PASSED")
+
+
+def test_expired_refetch():
+    """Expired with refresh scheduled → recommended_refetch_seconds=5."""
+    sr = _make_regime("LOW", "IMPROVING", "LONG", pos_size="normal")
+    es = _make_exec_snapshot(status="expired", mqs=85.0, ews=100.0, decision="YES", age=700.0)
+    d = _hd(sr, es, refresh="scheduled")
+    assert d["execution"]["recommended_refetch_seconds"] == 5
+    assert d["execution"]["refresh_in_progress"] is True
+    print("test_expired_refetch PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase C — Signal summary tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_signal_summary_present():
+    d = _hd()
+    assert "signal_summary" in d
+    ss = d["signal_summary"]
+    for key in ("strongest_supports", "largest_risks", "missing_confirmations"):
+        assert key in ss, f"Missing signal_summary.{key}"
+        assert isinstance(ss[key], list)
+    print("test_signal_summary_present PASSED")
+
+
+def test_generic_reasons_not_present():
+    """No production response should contain generic phrases."""
+    d = _hd()
+    for reason in d["buy_reasons"] + d["wait_reasons"] + d["reduce_reasons"]:
+        assert "regime permits selective long exposure" not in reason.lower()
+        assert "broadly supportive" not in reason.lower()
+        assert "monitor daily" not in reason.lower()
+    for entry in d["what_would_improve"]:
+        assert "monitor daily" not in entry.lower()
+        assert "no immediate flip" not in entry.lower()
+    print("test_generic_reasons_not_present PASSED")
+
+
+def test_improvise_worsen_empty_not_monitor_daily():
+    """Empty improve/worsen arrays must be empty, not contain generic fallback."""
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG", flip_conditions=[])
+    es = _make_exec_snapshot()
+    d = _hd(sr, es)
+    for entry in d["what_would_improve"]:
+        assert "monitor" not in entry.lower(), f"Found 'monitor': {entry}"
+    for entry in d["what_would_worsen"]:
+        assert "monitor" not in entry.lower(), f"Found 'monitor': {entry}"
+    print("test_improvise_worsen_empty_not_monitor_daily PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Run
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -739,4 +935,24 @@ if __name__ == "__main__":
     test_improve_worsen_deduplication()
     test_machine_enum_fields_unchanged()
 
-    print("\nAll 50 tests PASSED")
+    # Phase C — Sizing provenance
+    test_sizing_object_present()
+    test_sizing_no_event_no_change()
+    test_sizing_event_applies_once()
+    test_sizing_no_double_event_adjustment()
+    test_sizing_preserve_capital_guardrail_only()
+    test_sizing_event_inactive_equal()
+    test_sizing_provenance_accurate()
+    test_screenshot_equivalent_case_half_size()
+
+    # Phase C — Execution warmup contract
+    test_warmup_recommended_refetch()
+    test_available_no_refetch()
+    test_expired_refetch()
+
+    # Phase C — Signal summary
+    test_signal_summary_present()
+    test_generic_reasons_not_present()
+    test_improvise_worsen_empty_not_monitor_daily()
+
+    print("\nAll 68 tests PASSED")

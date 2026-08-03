@@ -539,6 +539,82 @@ def _most_conservative(a: str, b: str) -> str:
     return _SIZE_CONSERVATISM[max(ia, ib)]
 
 
+def _build_sizing_explanation(
+    matrix_size: str,
+    regime_base: str,
+    regime_final: str,
+    event_active: bool,
+    event_adjustment: bool,
+    event_pre: str,
+    event_post: str,
+    event_overlay: dict,
+) -> str:
+    if event_active and event_adjustment:
+        ev_title = event_overlay.get("next_event") or "upcoming event"
+        return f"Position size reduced from {event_pre.title()} to {event_post.title()} because {ev_title} is imminent."
+    if matrix_size != regime_final:
+        return f"Final size {regime_final} is the most conservative of matrix ({matrix_size}) and regime ({regime_final})."
+    return f"Position size is {regime_final}."
+
+
+def _build_signal_summary(
+    pillars: dict,
+    event_active: bool,
+    event_overlay: dict,
+    exec_status: str,
+    exec_mqs: float | None,
+    exec_ews: float | None,
+) -> dict:
+    strongest: list[dict] = []
+    largest_risks: list[dict] = []
+    missing_conf: list[dict] = []
+
+    # Scan pillar risk signals for largest risks
+    risk_entries: list[tuple[str, dict]] = []
+    for name, pillar in pillars.items():
+        for sig in pillar.get("risk_signals", []):
+            risk_entries.append((name, sig))
+    risk_entries.sort(key=lambda x: {"STRONG": 3, "MODERATE": 2, "MILD": 1}.get(x[1].get("strength", ""), 0), reverse=True)
+    for source, sig in risk_entries[:3]:
+        if len(largest_risks) >= 3:
+            break
+        msg = sig.get("message", "")
+        if msg and not any(msg == r.get("message") for r in largest_risks):
+            largest_risks.append({"source": source, "message": msg})
+
+    # Scan pillar supportive signals
+    sup_entries: list[tuple[str, dict]] = []
+    for name, pillar in pillars.items():
+        for sig in pillar.get("supportive_signals", []):
+            sup_entries.append((name, sig))
+    sup_entries.sort(key=lambda x: {"STRONG": 3, "MODERATE": 2, "MILD": 1}.get(x[1].get("strength", ""), 0), reverse=True)
+    for source, sig in sup_entries[:3]:
+        if len(strongest) >= 3:
+            break
+        msg = sig.get("message", "")
+        if msg and not any(msg == r.get("message") for r in strongest):
+            strongest.append({"source": source, "message": msg})
+
+    # Missing confirmations
+    if exec_status in ("warming", "unavailable", "expired") and len(missing_conf) < 3:
+        missing_conf.append({"source": "execution", "message": "Execution-quality data is still warming or has not confirmed current entries."})
+
+    lc = pillars.get("leadership_and_cross_asset", {})
+    lc_miss = lc.get("missing_inputs", [])
+    if lc_miss and len(missing_conf) < 3:
+        missing_conf.append({"source": "leadership_and_cross_asset", "message": f"Leadership confirmation is incomplete — missing {', '.join(lc_miss)}."})
+
+    if event_active and len(largest_risks) < 3:
+        ev_title = event_overlay.get("next_event") or "upcoming event"
+        largest_risks.append({"source": "event_overlay", "message": f"{ev_title} event risk is an active sizing constraint, not a directional bearish signal."})
+
+    return {
+        "strongest_supports":     strongest,
+        "largest_risks":          largest_risks,
+        "missing_confirmations":  missing_conf,
+    }
+
+
 def _execution_quality(mqs: float | None, ews: float | None) -> str:
     if mqs is None or ews is None:
         return "UNAVAILABLE"
@@ -732,15 +808,8 @@ def _build_buy_reasons(
     trade_bias: str,
     regime_assessment: str,
     exec_status: str,
+    pillars: dict,
 ) -> list[str]:
-    """Buy reasons — only genuinely positive evidence.
-
-    Invariants:
-      - NO verdict → empty
-      - CAUTION / WAIT → empty unless direction IMPROVING (max 1)
-      - CAUTION / SELECTIVE → at most 2 real positive signals
-      - YES → up to 3 positive reasons when supported
-    """
     out: list[str] = []
 
     def _add(text: str) -> None:
@@ -751,32 +820,26 @@ def _build_buy_reasons(
     if verdict == "NO":
         return []
 
-    is_improving = direction == "IMPROVING"
-    is_low = risk_level == "LOW"
-    quality_strong = exec_quality == "STRONG"
+    # Scan pillar supportive signals for concrete metrics
+    for name, pillar in pillars.items():
+        for sig in pillar.get("supportive_signals", []):
+            if len(out) >= 3:
+                break
+            msg = sig.get("message", "")
+            if msg and not any(msg == r for r in out):
+                _add(msg)
 
-    # Low risk is a genuine positive
-    if is_low and regime_assessment != "INSUFFICIENT_DATA":
-        _add("Regime risk is low.")
+    # If no metric support found but verdict is YES, add minimal positive context
+    if not out:
+        if risk_level == "LOW" and regime_assessment != "INSUFFICIENT_DATA":
+            _add("Regime risk is low.")
+        if direction == "IMPROVING":
+            _add("Risk direction is improving.")
+        if exec_quality == "STRONG" and exec_status == "available":
+            _add("Execution quality is strong.")
 
-    # Improving direction
-    if is_improving:
-        _add("Risk direction is improving.")
-
-    # Strong execution
-    if quality_strong and exec_status == "available":
-        _add("Execution quality is strong.")
-
-    # Trading Dashboard confirms
-    if exec_decision == "YES" and exec_status == "available":
-        _add("Trading Dashboard conditions support new entries.")
-
-    # High-quality regime allows positional exposure
-    if trade_bias in ("LONG", "SELECTIVE_LONG") and risk_level in ("LOW", "MODERATE"):
-        _add("The regime permits selective long exposure.")
-
-    # For WAIT action, trim to at most 1 even if direction is improving
-    if verdict == "CAUTION" and exec_quality != "STRONG" and not is_low:
+    # For WAIT action, trim to at most 1
+    if verdict == "CAUTION" and not out:
         out = out[:1]
 
     return out
@@ -793,15 +856,11 @@ def _build_wait_reasons(
     exec_status: str,
     event_active: bool,
     regime_assessment: str,
+    pillars: dict,
+    exec_mqs_val: float | None,
+    exec_ews: float | None,
+    event_overlay: dict,
 ) -> list[str]:
-    """Wait reasons — explain why the action is not more aggressive.
-
-    Invariants:
-      - CAUTION / WAIT → wait_reasons non-empty
-      - YES / PRESS → at most 1 mild caution
-      - YES / SELECTIVE → may explain selectivity
-      - NO → may include cautionary context
-    """
     out: list[str] = []
 
     def _add(text: str) -> None:
@@ -809,32 +868,43 @@ def _build_wait_reasons(
             return
         out.append(text)
 
-    # Execution quality concerns
-    if exec_quality == "MIXED" and exec_status == "available":
-        _add("Execution quality is mixed; wait for broader confirmation.")
-    elif exec_quality == "WEAK" and exec_status == "available":
-        _add("Execution quality is weak; conditions are not confirming.")
-    elif exec_status in ("expired", "warming", "unavailable"):
+    # Scan pillar risk signals for concrete metrics as wait reasons
+    for name, pillar in pillars.items():
+        for sig in pillar.get("risk_signals", []):
+            if len(out) >= 2:
+                break
+            msg = sig.get("message", "")
+            if msg and msg not in out:
+                _add(msg)
+
+    # Execution concerns — warming/expired
+    if exec_status in ("expired", "warming", "unavailable") and len(out) < 3:
         _add("Execution data is not fully current; wait for updated dashboard.")
 
-    # Direction not improving
-    if direction == "STABLE":
-        _add("Risk direction is stable rather than improving.")
-    elif direction == "WORSENING":
-        _add("Risk direction is worsening.")
+    # Execution quality concerns
+    if exec_quality == "MIXED" and exec_status == "available" and len(out) < 3:
+        _add("Execution quality is mixed; wait for broader confirmation.")
+    elif exec_quality == "WEAK" and exec_status == "available" and len(out) < 3:
+        _add("Execution quality is weak; conditions are not confirming.")
 
-    # Elevated risk levels
-    if risk_level == "ELEVATED":
-        _add("Elevated risk warrants patience — better entries likely ahead.")
-    elif risk_level in ("HIGH", "EXTREME"):
-        _add(f"{_h_level(risk_level)} risk demands caution.")
-    elif risk_level == "MODERATE" and not (exec_quality == "STRONG" and direction == "IMPROVING"):
-        if action != "PRESS":
-            _add("Moderate risk with current conditions does not support aggressive buying.")
+    # Event overlay — sizing constraint
+    if event_active and len(out) < 3:
+        ev_title = event_overlay.get("next_event") or "Event"
+        ev_days = event_overlay.get("days_until_event")
+        if ev_days is not None:
+            _add(f"{ev_title} is due in {ev_days} day{'s' if ev_days != 1 else ''}, reducing permitted position size.")
+        else:
+            _add(f"{ev_title} event risk is reducing permitted position size.")
 
-    # Event overlay
-    if event_active:
-        _add("Event risk is reducing permitted position size.")
+    # Leadership missing inputs
+    lc = pillars.get("leadership_and_cross_asset", {})
+    lc_miss = lc.get("missing_inputs", [])
+    if lc_miss and len(out) < 3:
+        _add(f"Only {lc.get('available_component_count', 0)} of {lc.get('expected_component_count', 3)} Leadership & Cross-Asset inputs are available.")
+
+    # If no wait reasons but verdict is CAUTION with SELECTIVE action, add regime context
+    if not out and regime_assessment == "PARTIAL":
+        _add("Partial data availability — regime assessment may be incomplete.")
 
     # For YES verdicts, trim to at most 1
     if verdict == "YES":
@@ -853,15 +923,8 @@ def _build_reduce_reasons(
     exec_mqs: float | None,
     exec_status: str,
     regime_assessment: str,
+    pillars: dict,
 ) -> list[str]:
-    """Reduce reasons — only when defensive evidence exists.
-
-    Invariants:
-      - NO verdict → non-empty
-      - YES verdict → empty
-      - CAUTION / SELECTIVE → empty unless explicit defensive signals
-      - CAUTION / WAIT → only with explicit defensive signals
-    """
     out: list[str] = []
 
     def _add(text: str) -> None:
@@ -877,32 +940,32 @@ def _build_reduce_reasons(
     if verdict == "CAUTION" and not has_defensive:
         return []
 
+    # Concrete risk signals from pillars
+    for name, pillar in pillars.items():
+        for sig in pillar.get("risk_signals", []):
+            if len(out) >= 3:
+                break
+            msg = sig.get("message", "")
+            if msg and msg not in out:
+                _add(msg)
+
     # High/extreme risk
-    if risk_level == "EXTREME":
+    if risk_level == "EXTREME" and len(out) < 3:
         _add("Regime risk is Extreme — reduce exposure and tighten stops.")
-    elif risk_level == "HIGH":
+    elif risk_level == "HIGH" and len(out) < 3:
         _add("Regime risk is High and not improving.")
 
-    # Worsening direction
-    if direction == "WORSENING":
-        _add("Risk direction is worsening.")
-
     # Defensive trade bias
-    if trade_bias in ("SHORT_HEDGE", "SELECTIVE_SHORT"):
+    if trade_bias in ("SHORT_HEDGE", "SELECTIVE_SHORT") and len(out) < 3:
         _add(f"The regime suggests a {_h_bias(trade_bias).lower()} posture.")
 
     # Weak execution
-    if exec_quality == "WEAK" and exec_status == "available":
+    if exec_quality == "WEAK" and exec_status == "available" and len(out) < 3:
         _add("Execution quality is weak — breakouts failing, leaders fading.")
 
     # MQS below threshold
-    if exec_mqs is not None and exec_mqs < 40 and exec_status == "available":
+    if exec_mqs is not None and exec_mqs < 40 and exec_status == "available" and len(out) < 3:
         _add(f"Market Quality ({exec_mqs:.0f}/100) is below the safe threshold.")
-
-    # Trading Dashboard says no
-    if exec_status == "available" and exec_quality == "WEAK":
-        if len(out) < 3:
-            _add("The Trading Dashboard is not confirming new exposure.")
 
     return out
 
@@ -920,33 +983,46 @@ def _build_improve_worsen(
     regime_assessment: str,
     conditions_flip: list[str],
     execution_snapshot: dict | None,
+    pillars: dict,
 ) -> tuple[list[str], list[str]]:
-    """Build what-would-improve and what-would-worsen, deduplicating concepts."""
-
     improve: list[str] = []
     worsen: list[str] = []
 
     def _improve(text: str) -> None:
         if len(improve) >= 4:
             return
-        norm = text.lower().strip()
-        existing = {i.lower().strip() for i in improve}
+        norm = text.lower().rstrip(".").strip()
+        existing = {i.lower().rstrip(".").strip() for i in improve}
         if norm not in existing:
-            improve.append(text)
+            improve.append(text.rstrip("."))
 
     def _worsen(text: str) -> None:
         if len(worsen) >= 4:
             return
-        norm = text.lower().strip()
-        existing = {w.lower().strip() for w in worsen}
+        norm = text.lower().rstrip(".").strip()
+        existing = {w.lower().rstrip(".").strip() for w in worsen}
         if norm not in existing:
-            worsen.append(text)
+            worsen.append(text.rstrip("."))
 
     # ── Conditions that would flip from regime ──────────────────────────
-    for cond in (conditions_flip or [])[:2]:
+    for cond in (conditions_flip or [])[:4]:
         _improve(cond)
 
-    # ── Specific execution conditions that failed ───────────────────────
+    # ── Pillar conditions to improve (derived from same thresholds) ─────
+    for name, pillar in pillars.items():
+        for cond in pillar.get("conditions_to_improve", []):
+            if len(improve) >= 4:
+                break
+            _improve(cond)
+
+    # ── Pillar conditions to worsen ────────────────────────────────────
+    for name, pillar in pillars.items():
+        for cond in pillar.get("conditions_to_worsen", []):
+            if len(worsen) >= 4:
+                break
+            _worsen(cond)
+
+    # ── Execution conditions that failed ───────────────────────────────
     if exec_status not in ("unavailable", "warming") and execution_snapshot:
         dashboard = execution_snapshot.get("dashboard")
         if dashboard:
@@ -955,17 +1031,19 @@ def _build_improve_worsen(
                     label = ec.get("label", "").rstrip("?")
                     _improve(f"{label} resumes confirming")
 
-    # ── Worsening conditions ────────────────────────────────────────────
-    if direction != "WORSENING":
-        _worsen("Risk direction shifts to worsening.")
-    if risk_level not in ("HIGH", "EXTREME"):
-        _worsen("Risk level rises to High or Extreme.")
-    if exec_mqs is not None and exec_mqs >= 40 and exec_status == "available":
+    # ── Execution thresholds ──────────────────────────────────────────
+    if exec_mqs is not None and exec_mqs < 70 and exec_status == "available" and len(improve) < 4:
+        _improve(f"Market Quality reaches 70.")
+    if exec_ews is not None and exec_ews < 75 and exec_status == "available" and len(improve) < 4:
+        _improve(f"Execution Window reaches 75.")
+
+    # ── Worsening conditions — measurable triggers ────────────────────
+    if exec_mqs is not None and exec_mqs >= 40 and exec_status == "available" and len(worsen) < 4:
         _worsen(f"Market Quality falls below 40.")
-    if exec_ews is not None and exec_ews >= 50 and exec_status == "available":
+    if exec_ews is not None and exec_ews >= 50 and exec_status == "available" and len(worsen) < 4:
         _worsen(f"Execution Window falls below 50.")
-    if not event_active:
-        _worsen("Event overlay becomes active — position size reduced.")
+    if event_active and len(worsen) < 4:
+        _worsen("Event risk materializes unfavorably — increased volatility or adverse rate move.")
 
     return improve, worsen
 
@@ -987,6 +1065,7 @@ def _build_home_decision(
     trade_bias = swing_regime.get("trade_bias", "NEUTRAL")
     regime_assessment = swing_regime.get("assessment_status", "PARTIAL")
     regime_pos_size = swing_regime.get("position_size_hint", "selective")
+    regime_base_size = swing_regime.get("base_position_size_hint", "selective")
     one_line_regime = swing_regime.get("one_line", "")
     event_overlay = swing_regime.get("event_overlay", {})
     conditions_flip = swing_regime.get("conditions_that_would_flip", [])
@@ -1031,16 +1110,9 @@ def _build_home_decision(
 
     # ── Event overlay ─────────────────────────────────────────────────────
     event_active = event_overlay.get("active", False)
-
-    def _apply_event_sizing(size: str) -> str:
-        if not event_active:
-            return size
-        return {
-            "normal":          "selective",
-            "selective":       "half-size",
-            "half-size":       "preserve capital",
-            "preserve capital": "preserve capital",
-        }.get(size, size)
+    event_adjustment_applied = event_overlay.get("position_size_adjustment_applied", False)
+    event_pre_size = event_overlay.get("pre_event_size", regime_pos_size)
+    event_post_size = event_overlay.get("post_event_size", regime_pos_size)
 
     # ── Decision matrix ───────────────────────────────────────────────────
     verdict: str
@@ -1122,7 +1194,6 @@ def _build_home_decision(
 
     # ── Position-size ceiling ─────────────────────────────────────────────
     pos_size = _most_conservative(pos_size_raw, regime_pos_size)
-    pos_size = _apply_event_sizing(pos_size)
 
     # ── Confidence and assessment status ──────────────────────────────────
     confidence: str
@@ -1192,6 +1263,7 @@ def _build_home_decision(
         trade_bias=trade_bias,
         regime_assessment=regime_assessment,
         exec_status=exec_status,
+        pillars=pillars,
     )
 
     wait_reasons = _build_wait_reasons(
@@ -1204,6 +1276,10 @@ def _build_home_decision(
         exec_status=exec_status,
         event_active=event_active,
         regime_assessment=regime_assessment,
+        pillars=pillars,
+        exec_mqs_val=exec_mqs,
+        exec_ews=exec_ews,
+        event_overlay=event_overlay,
     )
 
     reduce_reasons = _build_reduce_reasons(
@@ -1215,6 +1291,7 @@ def _build_home_decision(
         exec_mqs=exec_mqs,
         exec_status=exec_status,
         regime_assessment=regime_assessment,
+        pillars=pillars,
     )
 
     what_improve, what_worsen = _build_improve_worsen(
@@ -1229,7 +1306,40 @@ def _build_home_decision(
         regime_assessment=regime_assessment,
         conditions_flip=conditions_flip,
         execution_snapshot=execution_snapshot,
+        pillars=pillars,
     )
+
+    # ── Sizing provenance ─────────────────────────────────────────────────
+    sizing_explanation = _build_sizing_explanation(
+        pos_size_raw, regime_base_size, regime_pos_size,
+        event_active, event_adjustment_applied, event_pre_size, event_post_size,
+        event_overlay,
+    )
+
+    sizing = {
+        "matrix_size":              pos_size_raw,
+        "regime_base_size":         regime_base_size,
+        "regime_final_size":        regime_pos_size,
+        "event_overlay_active":     event_active,
+        "event_adjustment_applied": event_adjustment_applied,
+        "event_pre_size":           event_pre_size,
+        "event_post_size":          event_post_size,
+        "final_size":               pos_size,
+        "explanation":              sizing_explanation,
+    }
+
+    # ── Signal summary ────────────────────────────────────────────────────
+    signal_summary: dict = _build_signal_summary(pillars, event_active, event_overlay, exec_status, exec_mqs, exec_ews)
+
+    # ── Execution warmup contract ─────────────────────────────────────────
+    exec_recommended_refetch: float | None = None
+    exec_refresh_in_progress = False
+    if exec_status in ("warming",):
+        exec_recommended_refetch = 5
+        exec_refresh_in_progress = True
+    elif execution_refresh_status in ("scheduled", "already_running"):
+        exec_recommended_refetch = 5
+        exec_refresh_in_progress = True
 
     return {
         "version":                    "home_decision_v1",
@@ -1238,6 +1348,8 @@ def _build_home_decision(
         "action":                     action,
         "one_line":                   one_line,
         "position_size_hint":         pos_size,
+        "sizing":                     sizing,
+        "signal_summary":             signal_summary,
         "confidence":                 confidence,
         "assessment_status":          assessment,
         "market_context":             market_context,
@@ -1250,17 +1362,19 @@ def _build_home_decision(
             "assessment_status":      regime_assessment,
         },
         "execution": {
-            "status":                  exec_status,
-            "refresh_status":          execution_refresh_status,
-            "quality":                 exec_quality,
-            "market_quality_score":    exec_mqs,
-            "execution_window_score":  exec_ews,
-            "decision":                exec_decision,
-            "mode":                    "swing",
-            "as_of":                   exec_as_of,
-            "age_seconds":             exec_age,
-            "from_cache":              exec_from_cache,
-            "expired":                 exec_expired,
+            "status":                      exec_status,
+            "refresh_status":              execution_refresh_status,
+            "quality":                     exec_quality,
+            "market_quality_score":        exec_mqs,
+            "execution_window_score":      exec_ews,
+            "decision":                    exec_decision,
+            "mode":                        "swing",
+            "as_of":                       exec_as_of,
+            "age_seconds":                 exec_age,
+            "from_cache":                  exec_from_cache,
+            "expired":                     exec_expired,
+            "recommended_refetch_seconds": exec_recommended_refetch,
+            "refresh_in_progress":         exec_refresh_in_progress,
         },
         "why_now":                   why_now,
         "buy_reasons":               buy_reasons,

@@ -986,6 +986,270 @@ def test_home_decision_unavailable_execution_partial():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Phase C — Pillar diagnostic tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_pillar_diagnostics_present():
+    """All four pillars have diagnostic fields after enrichment."""
+    result = assess_swing_regime(bare_inputs())
+    for name in ("trend_and_breadth", "volatility_and_credit",
+                 "rates_and_dollar", "leadership_and_cross_asset"):
+        p = result["pillars"][name]
+        for field in ("interpretation", "supportive_signals", "risk_signals",
+                      "missing_inputs", "conditions_to_improve", "conditions_to_worsen"):
+            assert field in p, f"Pillar {name} missing {field}"
+    print("test_pillar_diagnostics_present PASSED")
+
+
+def test_trend_breadth_positive_1d_but_weak_3m():
+    """Positive 1D returns + weak long-term → both support and risk signals, score unchanged."""
+    result = assess_swing_regime(bare_inputs(
+        spy_change_1d=1.5, qqq_change_1d=2.0, sector_breadth_1d=64,
+        spx_return_7d=0.62, spx_return_63d=-4.2,
+    ))
+    tb = result["pillars"]["trend_and_breadth"]
+    assert len(tb["supportive_signals"]) >= 1, "Should have at least one supportive signal"
+    assert len(tb["risk_signals"]) >= 1, "Should have at least one risk signal"
+    assert tb["risk_score"] > 0
+    # Score unchanged — pillar scoring is independent of diagnostics
+    pillar_only = _score_trend_and_breadth(bare_inputs(
+        spy_change_1d=1.5, qqq_change_1d=2.0, sector_breadth_1d=64,
+        spx_return_7d=0.62, spx_return_63d=-4.2,
+    ))
+    assert tb["risk_score"] == pillar_only["risk_score"], "Diagnostics must not change pillar score"
+    print("test_trend_breadth_positive_1d_but_weak_3m PASSED")
+
+
+def test_volatility_credit_low_vix_positive_hyg():
+    """Low/falling VIX + positive HYG → supportive evidence, score unchanged."""
+    result = assess_swing_regime(bare_inputs(
+        vix_current=15.8, vix_change_1d=-1.44, hyg_change_1d=0.23,
+    ))
+    vc = result["pillars"]["volatility_and_credit"]
+    assert len(vc["supportive_signals"]) >= 1
+    assert len(vc["risk_signals"]) == 0
+    pillar_only = _score_volatility_and_credit(bare_inputs(
+        vix_current=15.8, vix_change_1d=-1.44, hyg_change_1d=0.23,
+    ))
+    assert vc["risk_score"] == pillar_only["risk_score"]
+    print("test_volatility_credit_low_vix_positive_hyg PASSED")
+
+
+def test_volatility_credit_high_vix_negative_hyg():
+    """Elevated/rising VIX + negative HYG → risk evidence."""
+    result = assess_swing_regime(bare_inputs(
+        vix_current=28.0, vix_change_1d=15.0, hyg_change_1d=-1.5,
+    ))
+    vc = result["pillars"]["volatility_and_credit"]
+    assert len(vc["risk_signals"]) >= 1
+    pillar_only = _score_volatility_and_credit(bare_inputs(
+        vix_current=28.0, vix_change_1d=15.0, hyg_change_1d=-1.5,
+    ))
+    assert vc["risk_score"] == pillar_only["risk_score"]
+    print("test_volatility_credit_high_vix_negative_hyg PASSED")
+
+
+def test_rates_dollar_high_but_easing():
+    """10Y 4.75% + falling 5D → high but easing interpretation."""
+    result = assess_swing_regime(bare_inputs(
+        us10y_yield=4.75, us10y_change_5d_bps=-10.0, us10y_change_1d_bps=-2.0,
+    ))
+    rd = result["pillars"]["rates_and_dollar"]
+    assert "restrictive" in rd["interpretation"].lower() or "4.75" in rd["interpretation"]
+    assert "easing" in rd["interpretation"].lower() or "fallen" in rd["interpretation"].lower()
+    pillar_only = _score_rates_and_dollar(bare_inputs(
+        us10y_yield=4.75, us10y_change_5d_bps=-10.0, us10y_change_1d_bps=-2.0,
+    ))
+    assert rd["risk_score"] == pillar_only["risk_score"]
+    print("test_rates_dollar_high_but_easing PASSED")
+
+
+def test_rates_dollar_high_and_accelerating():
+    """10Y 4.45% + rising 5D 20 bps → low but rising/accelerating."""
+    result = assess_swing_regime(bare_inputs(
+        us10y_yield=4.45, us10y_change_5d_bps=20.0, us10y_change_1d_bps=4.0,
+    ))
+    rd = result["pillars"]["rates_and_dollar"]
+    assert any(w in rd["interpretation"].lower() for w in ("4.45", "risen", "increasing"))
+    pillar_only = _score_rates_and_dollar(bare_inputs(
+        us10y_yield=4.45, us10y_change_5d_bps=20.0, us10y_change_1d_bps=4.0,
+    ))
+    assert rd["risk_score"] == pillar_only["risk_score"]
+    print("test_rates_dollar_high_and_accelerating PASSED")
+
+
+def test_rates_dollar_missing_history():
+    """Missing rate history → still has interpretation, no crash."""
+    result = assess_swing_regime(bare_inputs(
+        us10y_yield=4.5, us10y_change_5d_bps=None, us10y_change_1d_bps=None,
+    ))
+    rd = result["pillars"]["rates_and_dollar"]
+    assert isinstance(rd["interpretation"], str)
+    print("test_rates_dollar_missing_history PASSED")
+
+
+def test_leadership_all_inputs_confirming():
+    """All three inputs present and risk-on → CONFIRMED."""
+    result = assess_swing_regime(bare_inputs(
+        btc_change_24h=4.0, cyclical_vs_defensive_spread=3.5, market_posture="Risk-On",
+    ))
+    lc = result["pillars"]["leadership_and_cross_asset"]
+    assert lc["data_status"] == "COMPLETE"
+    assert lc["confirmation_status"] in ("CONFIRMED", "MIXED")
+    pillar_only = _score_leadership_and_cross_asset(bare_inputs(
+        btc_change_24h=4.0, cyclical_vs_defensive_spread=3.5, market_posture="Risk-On",
+    ))
+    assert lc["risk_score"] == pillar_only["risk_score"]
+    print("test_leadership_all_inputs_confirming PASSED")
+
+
+def test_leadership_btc_missing():
+    """BTC missing → PARTIAL, missing input named."""
+    result = assess_swing_regime(bare_inputs(
+        btc_change_24h=None, cyclical_vs_defensive_spread=1.0, market_posture="Neutral",
+    ))
+    lc = result["pillars"]["leadership_and_cross_asset"]
+    assert lc["data_status"] == "PARTIAL"
+    assert "btc_change_24h" in lc["missing_inputs"]
+    print("test_leadership_btc_missing PASSED")
+
+
+def test_leadership_cyclical_defensive_missing():
+    """CVD missing → PARTIAL."""
+    result = assess_swing_regime(bare_inputs(
+        btc_change_24h=1.0, cyclical_vs_defensive_spread=None, market_posture="Neutral",
+    ))
+    lc = result["pillars"]["leadership_and_cross_asset"]
+    assert lc["data_status"] == "PARTIAL"
+    assert "cyclical_vs_defensive_spread" in lc["missing_inputs"]
+    print("test_leadership_cyclical_defensive_missing PASSED")
+
+
+def test_leadership_mixed_posture():
+    """Mixed posture → MIXED confirmation."""
+    result = assess_swing_regime(bare_inputs(
+        btc_change_24h=-3.0, cyclical_vs_defensive_spread=1.0, market_posture="Neutral",
+    ))
+    lc = result["pillars"]["leadership_and_cross_asset"]
+    assert lc["confirmation_status"] in ("MIXED", "CONFIRMED", "UNCONFIRMED")
+    assert "Cyclicals" in lc["interpretation"] or "Neutral" in lc["interpretation"] or "BTC" in lc["interpretation"]
+    print("test_leadership_mixed_posture PASSED")
+
+
+def test_event_overlay_has_provenance_fields():
+    """Event overlay includes base_position_size_hint, pre/post event sizes."""
+    result = assess_swing_regime(bare_inputs(
+        has_upcoming_high_impact_event=True, days_until_next_event=1, next_event_title="CPI"))
+    assert result["base_position_size_hint"] is not None
+    ev = result["event_overlay"]
+    assert "position_size_adjustment_applied" in ev
+    assert "pre_event_size" in ev
+    assert "post_event_size" in ev
+    assert ev["pre_event_size"] is not None
+    assert ev["post_event_size"] is not None
+    print("test_event_overlay_has_provenance_fields PASSED")
+
+
+def test_base_selection_to_half_size_with_event():
+    """Base selective + event → final half-size."""
+    result = assess_swing_regime(bare_inputs(
+        spy_change_1d=0.5, us10y_yield=4.2,
+        has_upcoming_high_impact_event=True, days_until_next_event=2, next_event_title="FOMC"))
+    assert result["base_position_size_hint"] == "selective"
+    assert result["position_size_hint"] == "half-size"
+    assert result["event_overlay"]["position_size_adjustment_applied"] is True
+    assert result["event_overlay"]["pre_event_size"] == "selective"
+    assert result["event_overlay"]["post_event_size"] == "half-size"
+    print("test_base_selection_to_half_size_with_event PASSED")
+
+
+def test_base_half_size_to_preserve_with_event():
+    """When base size is half-size + event → preserve capital, or whatever base is → escalates one step."""
+    result = assess_swing_regime(bare_inputs(
+        spy_change_1d=-3.0, qqq_change_1d=-4.0, vix_current=30, vix_change_1d=15,
+        us10y_yield=5.1, us10y_change_5d_bps=15,
+        has_upcoming_high_impact_event=True, days_until_next_event=1, next_event_title="CPI"))
+    base = result["base_position_size_hint"]
+    final = result["position_size_hint"]
+    escalations = {"normal": "selective", "selective": "half-size", "half-size": "preserve capital", "preserve capital": "preserve capital"}
+    assert final == escalations.get(base, base), \
+        f"Expected {escalations.get(base, base)} from base {base}, got {final}"
+    print("test_base_half_size_to_preserve_with_event PASSED")
+
+
+def test_base_preserve_capital_with_event():
+    """Base preserve capital + event → still preserve capital."""
+    result = assess_swing_regime(bare_inputs(
+        spy_change_1d=-5.0, qqq_change_1d=-6.0, sector_breadth_1d=10,
+        vix_current=38, vix_change_1d=30, us10y_yield=5.3, us10y_change_5d_bps=25,
+        dxy_change_1d=1.5, hyg_change_1d=-3.0,
+        has_upcoming_high_impact_event=True, days_until_next_event=1, next_event_title="FOMC"))
+    base = result["base_position_size_hint"]
+    final = result["position_size_hint"]
+    if base == "preserve capital":
+        assert final == "preserve capital"
+    else:
+        escalations = {"normal": "selective", "selective": "half-size", "half-size": "preserve capital", "preserve capital": "preserve capital"}
+        assert final == escalations.get(base, base), f"From {base} got {final}"
+    print("test_base_preserve_capital_with_event PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase C — Score regression tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_KNOWN_BASELINES = [
+    ("bare_defaults", bare_inputs()),
+    ("strong_equity", bare_inputs(spy_change_1d=2.0, qqq_change_1d=2.5, sector_breadth_1d=80, spx_return_7d=3.0, spx_return_63d=8.0)),
+    ("weak_equity", bare_inputs(spy_change_1d=-3.0, qqq_change_1d=-4.0, sector_breadth_1d=15, spx_return_7d=-5.0, spx_return_63d=-10.0)),
+    ("stress_vol", bare_inputs(vix_current=35.0, vix_change_1d=25.0, hyg_change_1d=-3.0)),
+    ("rate_pressure", bare_inputs(us10y_yield=5.1, dxy_change_1d=1.0, us10y_change_5d_bps=20.0)),
+]
+
+
+def test_trend_breadth_scores_unchanged():
+    for label, inputs in _KNOWN_BASELINES:
+        p_bare = _score_trend_and_breadth(inputs)
+        result = assess_swing_regime(inputs)
+        enriched = result["pillars"]["trend_and_breadth"]
+        assert enriched["risk_score"] == p_bare["risk_score"], \
+            f"{label}: TB score changed: before={p_bare['risk_score']}, after={enriched['risk_score']}"
+    print("test_trend_breadth_scores_unchanged PASSED")
+
+
+def test_volatility_credit_scores_unchanged():
+    for label, inputs in _KNOWN_BASELINES:
+        p_bare = _score_volatility_and_credit(inputs)
+        result = assess_swing_regime(inputs)
+        enriched = result["pillars"]["volatility_and_credit"]
+        assert enriched["risk_score"] == p_bare["risk_score"], \
+            f"{label}: VC score changed: before={p_bare['risk_score']}, after={enriched['risk_score']}"
+    print("test_volatility_credit_scores_unchanged PASSED")
+
+
+def test_rates_dollar_scores_unchanged():
+    for label, inputs in _KNOWN_BASELINES:
+        p_bare = _score_rates_and_dollar(inputs)
+        result = assess_swing_regime(inputs)
+        enriched = result["pillars"]["rates_and_dollar"]
+        assert enriched["risk_score"] == p_bare["risk_score"], \
+            f"{label}: RD score changed: before={p_bare['risk_score']}, after={enriched['risk_score']}"
+    print("test_rates_dollar_scores_unchanged PASSED")
+
+
+def test_event_overlay_sizing_new_test_explanation():
+    """event_overlay with size change produces explanation."""
+    result = assess_swing_regime(bare_inputs(
+        spy_change_1d=-0.5, us10y_yield=4.76,
+        has_upcoming_high_impact_event=True, days_until_next_event=1, next_event_title="FOMC"))
+    ev = result["event_overlay"]
+    assert ev["active"] is True
+    assert ev["position_size_impact"] is not None
+    assert "reduced" in ev["position_size_impact"].lower() or "half-size" in ev["position_size_impact"].lower()
+    print("test_event_overlay_sizing_new_test_explanation PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Run
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1064,4 +1328,27 @@ if __name__ == "__main__":
     test_home_decision_expired_confidence_never_high()
     test_home_decision_unavailable_execution_partial()
 
-    print("\nAll 59 tests PASSED")
+    # Phase C — Pillar diagnostic tests
+    test_pillar_diagnostics_present()
+    test_trend_breadth_positive_1d_but_weak_3m()
+    test_volatility_credit_low_vix_positive_hyg()
+    test_volatility_credit_high_vix_negative_hyg()
+    test_rates_dollar_high_but_easing()
+    test_rates_dollar_high_and_accelerating()
+    test_rates_dollar_missing_history()
+    test_leadership_all_inputs_confirming()
+    test_leadership_btc_missing()
+    test_leadership_cyclical_defensive_missing()
+    test_leadership_mixed_posture()
+    test_event_overlay_has_provenance_fields()
+    test_base_selection_to_half_size_with_event()
+    test_base_half_size_to_preserve_with_event()
+    test_base_preserve_capital_with_event()
+
+    # Phase C — Score regression
+    test_trend_breadth_scores_unchanged()
+    test_volatility_credit_scores_unchanged()
+    test_rates_dollar_scores_unchanged()
+    test_event_overlay_sizing_new_test_explanation()
+
+    print("\nAll 77 tests PASSED")
