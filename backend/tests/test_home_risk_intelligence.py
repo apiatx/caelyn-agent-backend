@@ -1632,4 +1632,4 @@ if __name__ == "__main__":
     test_pillar_scores_remain_unchanged_after_diagnostics()
     test_event_sizing_applied_exactly_once()
 
-    print("\nAll 93 tests PASSED")
+    print("\nAll 92 tests PASSED")

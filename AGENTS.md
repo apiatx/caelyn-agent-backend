@@ -28,6 +28,46 @@ Every completed task, including a read-only audit, must update the active
 agent's assigned `latest.md` report unless the user explicitly says not to
 create or update a report file.
 
+## Agent report files and final output
+
+Use the report file that matches the active coding agent:
+
+- DeepSeek/OpenCode:
+  `/home/runner/workspace/.opencode-reports/latest.md`
+
+- Codex CLI:
+  `/home/runner/workspace/.codex-reports/latest.md`
+
+After completing the task and creating the approved local commit:
+
+1. overwrite the matching `latest.md` report
+2. verify that the report file exists and contains the current task heading
+3. print the complete report into the agent conversation before stopping
+
+For DeepSeek/OpenCode, run:
+
+```bash
+printf '\n===== BEGIN OPENCODE REPORT =====\n'
+cat /home/runner/workspace/.opencode-reports/latest.md
+printf '\n===== END OPENCODE REPORT =====\n'
+
+For Codex CLI, run:
+
+printf '\n===== BEGIN CODEX REPORT =====\n'
+cat /home/runner/workspace/.codex-reports/latest.md
+printf '\n===== END CODEX REPORT =====\n'
+
+Do not merely state that the report exists.
+
+Do not stop after showing only:
+
+the report path
+the line count
+the file size
+the commit summary
+
+The complete report must be printed in the agent output.
+
 ## User authority and scope
 
 The user is the pilot and final decision-maker.
