@@ -488,6 +488,395 @@ def _build_canonical_trigger_list(swing_regime: dict, yc: dict, sector_data: dic
 
 
 # -----------------------------------------------------------------------------
+# Canonical unified home_decision builder
+# -----------------------------------------------------------------------------
+
+_EXPIRED_MAX_AGE = 3600  # 60 minutes — max age for usable expired snapshot
+
+_SIZE_CONSERVATISM = ["normal", "selective", "half-size", "preserve capital"]
+
+
+def _most_conservative(a: str, b: str) -> str:
+    ia = _SIZE_CONSERVATISM.index(a) if a in _SIZE_CONSERVATISM else 1
+    ib = _SIZE_CONSERVATISM.index(b) if b in _SIZE_CONSERVATISM else 1
+    return _SIZE_CONSERVATISM[max(ia, ib)]
+
+
+def _execution_quality(mqs: float | None, ews: float | None) -> str:
+    if mqs is None or ews is None:
+        return "UNAVAILABLE"
+    if mqs >= 70 and ews >= 75:
+        return "STRONG"
+    if mqs >= 40 and ews >= 50:
+        return "MIXED"
+    return "WEAK"
+
+
+def _build_home_decision(
+    *,
+    swing_regime: dict,
+    execution_snapshot: dict | None,
+    execution_refresh_status: str | None,
+    market_open: bool,
+    why_market_is_moving: list[str],
+) -> dict:
+    # ── Extract regime values ─────────────────────────────────────────────
+    risk_level = swing_regime.get("risk_level", "MODERATE")
+    risk_score = swing_regime.get("risk_score", 50)
+    direction = swing_regime.get("regime_direction", "UNKNOWN")
+    trade_bias = swing_regime.get("trade_bias", "NEUTRAL")
+    regime_assessment = swing_regime.get("assessment_status", "PARTIAL")
+    regime_pos_size = swing_regime.get("position_size_hint", "selective")
+    one_line_regime = swing_regime.get("one_line", "")
+    event_overlay = swing_regime.get("event_overlay", {})
+    conditions_flip = swing_regime.get("conditions_that_would_flip", [])
+    pillars = swing_regime.get("pillars", {})
+
+    # ── Resolve execution snapshot ────────────────────────────────────────
+    exec_status: str
+    exec_mqs: float | None = None
+    exec_ews: float | None = None
+    exec_decision: str | None = None
+    exec_as_of: str | None = None
+    exec_age: float | None = None
+    exec_from_cache: bool | None = None
+    exec_expired: bool | None = None
+    exec_quality: str = "UNAVAILABLE"
+
+    if execution_snapshot is None:
+        exec_status = "unavailable"
+    else:
+        snapshot_status = execution_snapshot.get("status", "unavailable")
+        snapshot_age = execution_snapshot.get("age_seconds") or 0
+        dashboard = execution_snapshot.get("dashboard")
+
+        if snapshot_status == "available":
+            exec_status = "available"
+        elif snapshot_status == "expired" and snapshot_age <= _EXPIRED_MAX_AGE:
+            exec_status = "expired"
+        else:
+            exec_status = "warming"
+            if dashboard and snapshot_age <= _EXPIRED_MAX_AGE:
+                exec_status = "warming"
+
+        if dashboard and exec_status != "warming":
+            exec_mqs = dashboard.get("market_quality_score")
+            exec_ews = dashboard.get("execution_window_score")
+            exec_decision = dashboard.get("decision")
+            exec_as_of = dashboard.get("as_of")
+            exec_age = snapshot_age
+            exec_from_cache = dashboard.get("from_cache", True)
+            exec_expired = snapshot_status == "expired"
+            exec_quality = _execution_quality(exec_mqs, exec_ews)
+
+    # ── Event overlay ─────────────────────────────────────────────────────
+    event_active = event_overlay.get("active", False)
+
+    def _apply_event_sizing(size: str) -> str:
+        if not event_active:
+            return size
+        return {
+            "normal":          "selective",
+            "selective":       "half-size",
+            "half-size":       "preserve capital",
+            "preserve capital": "preserve capital",
+        }.get(size, size)
+
+    # ── Decision matrix ───────────────────────────────────────────────────
+    verdict: str
+    action: str
+    pos_size_raw: str
+
+    if regime_assessment == "INSUFFICIENT_DATA":
+        verdict = "CAUTION"
+        action = "WAIT"
+        pos_size_raw = "selective"
+
+    elif risk_level == "EXTREME":
+        if direction == "WORSENING":
+            verdict = "NO";       action = "HEDGE";   pos_size_raw = "preserve capital"
+        elif direction == "IMPROVING":
+            verdict = "CAUTION";  action = "WAIT";    pos_size_raw = "half-size"
+        else:  # STABLE or UNKNOWN
+            verdict = "NO";       action = "REDUCE";  pos_size_raw = "preserve capital"
+
+    elif risk_level == "HIGH":
+        if direction in ("WORSENING",):
+            verdict = "NO";       action = "HEDGE";   pos_size_raw = "preserve capital"
+        elif direction in ("STABLE", "UNKNOWN"):
+            verdict = "NO";       action = "REDUCE";  pos_size_raw = "preserve capital"
+        else:  # IMPROVING
+            if exec_quality == "STRONG":
+                verdict = "CAUTION";  action = "SELECTIVE"; pos_size_raw = "half-size"
+            else:
+                verdict = "CAUTION";  action = "WAIT";      pos_size_raw = "half-size"
+
+    elif risk_level == "ELEVATED":
+        if direction == "WORSENING":
+            verdict = "NO";       action = "REDUCE";  pos_size_raw = "preserve capital"
+        elif direction in ("STABLE", "UNKNOWN"):
+            verdict = "CAUTION";  action = "WAIT";    pos_size_raw = "half-size"
+        else:  # IMPROVING
+            if exec_quality == "STRONG":
+                verdict = "CAUTION";  action = "SELECTIVE"; pos_size_raw = "selective"
+            else:
+                verdict = "CAUTION";  action = "WAIT";      pos_size_raw = "half-size"
+
+    elif risk_level == "MODERATE":
+        if direction == "WORSENING":
+            verdict = "CAUTION";  action = "WAIT";    pos_size_raw = "half-size"
+        elif exec_quality == "STRONG":
+            verdict = "YES" if direction in ("IMPROVING",) else "CAUTION"
+            action = "SELECTIVE"
+            pos_size_raw = "selective"
+        elif exec_quality == "MIXED":
+            verdict = "CAUTION";  action = "SELECTIVE"; pos_size_raw = "selective"
+        elif exec_quality == "WEAK":
+            verdict = "CAUTION";  action = "WAIT";      pos_size_raw = "half-size"
+        else:  # UNAVAILABLE
+            verdict = "CAUTION";  action = "SELECTIVE"; pos_size_raw = "selective"
+
+    elif risk_level == "LOW":
+        if direction == "WORSENING":
+            verdict = "CAUTION";  action = "WAIT";    pos_size_raw = "half-size"
+        elif exec_quality == "STRONG":
+            verdict = "YES"
+            action = "PRESS" if direction in ("IMPROVING",) else "SELECTIVE"
+            pos_size_raw = "normal"
+        elif exec_quality == "MIXED":
+            verdict = "CAUTION";  action = "SELECTIVE"; pos_size_raw = "selective"
+        elif exec_quality == "WEAK":
+            verdict = "CAUTION";  action = "WAIT";      pos_size_raw = "half-size"
+        else:  # UNAVAILABLE
+            verdict = "CAUTION";  action = "SELECTIVE"; pos_size_raw = "selective"
+
+    else:
+        verdict = "CAUTION";  action = "WAIT";  pos_size_raw = "half-size"
+
+    # ── Expired execution restrictions ─────────────────────────────────────
+    if exec_status == "expired":
+        if verdict == "YES":
+            verdict = "CAUTION"
+        if action == "PRESS":
+            action = "SELECTIVE"
+
+    # ── Position-size ceiling ─────────────────────────────────────────────
+    pos_size = _most_conservative(pos_size_raw, regime_pos_size)
+    pos_size = _apply_event_sizing(pos_size)
+
+    # ── Confidence and assessment status ──────────────────────────────────
+    confidence: str
+    assessment: str
+
+    if exec_status == "unavailable" or exec_status == "warming":
+        if regime_assessment == "INSUFFICIENT_DATA":
+            confidence = "LOW"
+            assessment = "INSUFFICIENT_DATA"
+        elif regime_assessment == "PARTIAL":
+            confidence = "LOW"
+            assessment = "PARTIAL"
+        else:
+            confidence = "MEDIUM"
+            assessment = "PARTIAL"
+    elif exec_status == "expired":
+        confidence = "MEDIUM"
+        assessment = "PARTIAL" if regime_assessment == "PARTIAL" else "PARTIAL"
+    else:  # available
+        if regime_assessment == "COMPLETE":
+            confidence = "HIGH"
+            assessment = "COMPLETE"
+        elif regime_assessment == "PARTIAL":
+            confidence = "MEDIUM"
+            assessment = "PARTIAL"
+        else:
+            confidence = "LOW"
+            assessment = "PARTIAL"
+
+    if regime_assessment == "INSUFFICIENT_DATA":
+        assessment = "INSUFFICIENT_DATA"
+        confidence = "LOW"
+
+    # ── Market context ────────────────────────────────────────────────────
+    market_context = "live_session" if market_open else "closed_last_session"
+
+    # ── Reasons ───────────────────────────────────────────────────────────
+    buy_reasons: list[str] = []
+    wait_reasons: list[str] = []
+    reduce_reasons: list[str] = []
+
+    def _reason_add(target: list, text: str) -> None:
+        if len(target) >= 3:
+            return
+        if text not in target:
+            target.append(text)
+
+    # Buy reasons
+    if direction == "IMPROVING":
+        _reason_add(buy_reasons, f"Risk direction is {direction.lower()} — conditions are getting better")
+    if risk_level in ("LOW", "MODERATE"):
+        _reason_add(buy_reasons, f"Absolute risk is {risk_level} — environment broadly supportive")
+    if exec_quality == "STRONG":
+        _reason_add(buy_reasons, "Execution conditions are strong — breakouts holding, pullbacks bought")
+    if exec_mqs is not None and exec_mqs >= 70:
+        _reason_add(buy_reasons, f"Market quality score ({exec_mqs:.0f}/100) confirms tradable conditions")
+    if exec_decision == "YES":
+        _reason_add(buy_reasons, "Trading Dashboard confirms favorable entry conditions")
+    if risk_level == "LOW" and regime_assessment == "COMPLETE":
+        _reason_add(buy_reasons, "Low risk with complete data — high-confidence environment")
+
+    # Wait reasons
+    if exec_quality in ("MIXED", "WEAK"):
+        _reason_add(wait_reasons, f"Execution quality is {exec_quality.lower()} — wait for stronger confirmation")
+    if exec_status in ("expired", "warming", "unavailable"):
+        _reason_add(wait_reasons, "Execution data is not fully current — wait for updated dashboard")
+    if direction in ("STABLE", "UNKNOWN"):
+        _reason_add(wait_reasons, "Risk direction is not improving — no urgency to add")
+    if exec_mqs is not None and exec_mqs < 70 and exec_mqs >= 40:
+        _reason_add(wait_reasons, f"Market quality ({exec_mqs:.0f}/100) is mixed — selective only")
+    if risk_level == "ELEVATED":
+        _reason_add(wait_reasons, "Elevated risk warrants patience — better entries likely ahead")
+    if event_active:
+        _reason_add(wait_reasons, "Event risk overlay active — position size reduced")
+
+    # Reduce reasons
+    if risk_level in ("HIGH", "EXTREME"):
+        _reason_add(reduce_reasons, f"{risk_level} risk level — reduce exposure and tighten stops")
+    if direction == "WORSENING":
+        _reason_add(reduce_reasons, "Risk direction is WORSENING — defensive posture warranted")
+    if trade_bias in ("SHORT_HEDGE", "SELECTIVE_SHORT"):
+        _reason_add(reduce_reasons, f"{trade_bias.replace('_', ' ').title()} bias — defensive positioning")
+    if exec_quality == "WEAK":
+        _reason_add(reduce_reasons, "Execution conditions are weak — breakouts failing, leaders fading")
+    if exec_mqs is not None and exec_mqs < 40:
+        _reason_add(reduce_reasons, f"Market quality ({exec_mqs:.0f}/100) is below safe threshold")
+
+    # ── What would improve / worsen ───────────────────────────────────────
+    what_improve: list[str] = []
+    what_worsen: list[str] = []
+
+    def _improve(text: str) -> None:
+        if text not in what_improve and len(what_improve) < 4:
+            what_improve.append(text)
+
+    def _worsen(text: str) -> None:
+        if text not in what_worsen and len(what_worsen) < 4:
+            what_worsen.append(text)
+
+    # Conditions that would flip from regime
+    for cond in (conditions_flip or [])[:2]:
+        _improve(cond)
+
+    # Execution conditions that failed
+    if exec_status not in ("unavailable", "warming") and execution_snapshot:
+        dashboard = execution_snapshot.get("dashboard")
+        if dashboard:
+            for ec in (dashboard.get("execution_conditions") or []):
+                if not ec.get("ok") and len(what_improve) < 4:
+                    _improve(f"{ec['label']} {ec.get('value', 'N/A')} — {ec.get('status', 'unknown')}")
+
+    # Worsening conditions
+    if direction != "WORSENING":
+        _worsen("Risk direction shifts to WORSENING")
+    if risk_level not in ("HIGH", "EXTREME"):
+        _worsen("Risk level rises into HIGH or EXTREME")
+    if exec_quality in ("STRONG", "MIXED"):
+        _worsen("Execution quality deteriorates below safe thresholds")
+    if exec_mqs is not None and exec_mqs >= 40:
+        _worsen(f"Market quality ({exec_mqs:.0f}/100) falls below 40")
+    if not event_active:
+        _worsen("Active event overlay — size reduction triggered")
+
+    # ── why_now ───────────────────────────────────────────────────────────
+    session_note = "Signals reflect the latest completed US session." if not market_open else "US cash market is open."
+
+    why_now = []
+    why_now.append(f"Verdict: {verdict} — {action} {pos_size.replace('_', ' ')}")
+    why_now.append(f"Regime: {risk_level} risk, {direction.lower()}, {trade_bias.replace('_', ' ').lower()} bias")
+    if exec_status == "available":
+        why_now.append(f"Execution: {exec_quality} (MQS {exec_mqs:.0f}/100, EWS {exec_ews:.0f}/100)" if exec_mqs is not None else "Execution: available")
+    elif exec_status == "expired":
+        why_now.append("Execution: data expired — recent cached values used")
+    else:
+        why_now.append("Execution: warming or unavailable — regime-only guidance")
+    if len(why_now) < 4:
+        why_now.append(session_note)
+
+    # ── One-line ──────────────────────────────────────────────────────────
+    parts: list[str] = []
+
+    risk_part = f"{risk_level} risk, {direction.lower()}"
+    if regime_assessment == "INSUFFICIENT_DATA":
+        risk_part = "Insufficient data"
+
+    if exec_status == "available":
+        if exec_quality == "STRONG":
+            exec_part = "strong execution"
+        elif exec_quality == "MIXED":
+            exec_part = "mixed execution"
+        else:
+            exec_part = "weak execution"
+    elif exec_status == "expired":
+        exec_part = "cached execution data"
+    else:
+        exec_part = "execution data warming"
+
+    if verdict == "YES" and action == "PRESS":
+        one_line = f"{risk_part} with {exec_part} supports pressing high-quality leaders at {pos_size} size."
+    elif verdict == "YES":
+        one_line = f"{risk_part} with {exec_part} supports selective entries at {pos_size} size."
+    elif action == "WAIT":
+        one_line = f"{risk_part} with {exec_part} — wait for stronger confirmation before adding at more than {pos_size} size."
+    elif action == "REDUCE":
+        one_line = f"{risk_part} with {exec_part} favors reducing exposure to {pos_size} size."
+    elif action == "HEDGE":
+        one_line = f"{risk_part} — conditions warrant hedging, {pos_size}."
+    else:
+        one_line = f"{risk_part} with {exec_part} — {action.lower()} entries at {pos_size} size."
+
+    if not market_open:
+        one_line += " Signals reflect the latest completed US session."
+
+    return {
+        "version":                    "home_decision_v1",
+        "calibration_status":         "deterministic_uncalibrated",
+        "verdict":                    verdict,
+        "action":                     action,
+        "one_line":                   one_line,
+        "position_size_hint":         pos_size,
+        "confidence":                 confidence,
+        "assessment_status":          assessment,
+        "market_context":             market_context,
+        "regime": {
+            "risk_score":             risk_score,
+            "risk_level":             risk_level,
+            "direction":              direction,
+            "trade_bias":             trade_bias,
+            "position_size_hint":     regime_pos_size,
+            "assessment_status":      regime_assessment,
+        },
+        "execution": {
+            "status":                  exec_status,
+            "refresh_status":          execution_refresh_status,
+            "quality":                 exec_quality,
+            "market_quality_score":    exec_mqs,
+            "execution_window_score":  exec_ews,
+            "decision":                exec_decision,
+            "mode":                    "swing",
+            "as_of":                   exec_as_of,
+            "age_seconds":             exec_age,
+            "from_cache":              exec_from_cache,
+            "expired":                 exec_expired,
+        },
+        "why_now":                   why_now,
+        "buy_reasons":               buy_reasons,
+        "wait_reasons":              wait_reasons,
+        "reduce_reasons":            reduce_reasons,
+        "what_would_improve":        what_improve,
+        "what_would_worsen":         what_worsen,
+    }
+
+
+# -----------------------------------------------------------------------------
 # Canonical why_market_is_moving builder
 # -----------------------------------------------------------------------------
 
@@ -601,7 +990,9 @@ def _project_trade_decision_from_swing_regime(swing_regime: dict, vix_payload: d
     return {
         "label":              label,
         "score":              score,
+        "score_source":       "swing_regime_inverse_projection",
         "mode":               mode,
+        "position_size_hint": pos_hint,
         "position_size_hint": pos_hint,
         "one_line":           one_line,
         "avoid":              avoid,
@@ -933,7 +1324,7 @@ def _project_risk_cluster_from_swing_regime(
 # Main builder
 # -----------------------------------------------------------------------------
 
-async def build_home_risk_intelligence(macro_provider) -> dict:
+async def build_home_risk_intelligence(macro_provider, trading_fetch=None) -> dict:
     t0      = time.monotonic()
     now_utc = datetime.now(timezone.utc)
 
@@ -1157,7 +1548,55 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
         ],
     }
 
-    # 15. Assemble result
+    # 15. Resolve execution snapshot and build home_decision
+    execution_refresh_status: str | None = None
+    execution_snapshot = None
+
+    if trading_fetch is not None:
+        try:
+            from services.trading_dashboard_service import (
+                get_trading_dashboard_snapshot,
+                schedule_trading_dashboard_refresh,
+            )
+            execution_snapshot = get_trading_dashboard_snapshot("swing", allow_expired=True)
+
+            snap_status = execution_snapshot.get("status", "unavailable") if execution_snapshot else "unavailable"
+            snap_age = (execution_snapshot.get("age_seconds") or 0) if execution_snapshot else 0
+
+            needs_refresh = (
+                snap_status in ("unavailable", "warming") or
+                (snap_status == "expired" and snap_age > _EXPIRED_MAX_AGE) or
+                snap_status == "expired"
+            )
+            if needs_refresh:
+                refresh_result = schedule_trading_dashboard_refresh(
+                    mode="swing",
+                    fetch_fresh_data=trading_fetch,
+                )
+                execution_refresh_status = refresh_result.get("status")
+            else:
+                execution_refresh_status = "not_needed"
+        except Exception:
+            pass  # graceful degradation — regime-only decision
+
+    home_decision = _build_home_decision(
+        swing_regime=swing_regime,
+        execution_snapshot=execution_snapshot,
+        execution_refresh_status=execution_refresh_status,
+        market_open=market_open,
+        why_market_is_moving=why_bullets,
+    )
+
+    # Determine cache TTL — short when execution is warming
+    exec_dyn_status = home_decision.get("execution", {}).get("status", "unavailable")
+    exec_dyn_refresh = home_decision.get("execution", {}).get("refresh_status")
+    use_short_ttl = (
+        exec_dyn_status in ("warming", "unavailable") or
+        (exec_dyn_status == "expired" and exec_dyn_refresh in ("scheduled", "already_running"))
+    )
+    effective_ttl = 5 if use_short_ttl else _RISK_INTEL_TTL
+
+    # 16. Assemble result
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     print(
         f"[RISK_INTEL] built in {elapsed_ms}ms - "
@@ -1175,19 +1614,20 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
         "trade_decision":            trade_decision,
         "risk_cluster":              risk_cluster,
         "swing_regime":              swing_regime,
+        "home_decision":             home_decision,
         "upcoming_economic_events":  upcoming_events,
         "why_market_is_moving":      why_bullets,
         "legacy_why_market_is_moving": legacy_why_bullets,
     }
 
-    cache.set(_RISK_INTEL_KEY,     result, _RISK_INTEL_TTL)
+    cache.set(_RISK_INTEL_KEY,     result, effective_ttl)
     cache.set(_RISK_INTEL_LKG_KEY, result, _RISK_INTEL_LKG_TTL)
     return result
 
 
-async def build_home_risk_intelligence_safe(macro_provider) -> dict:
+async def build_home_risk_intelligence_safe(macro_provider, trading_fetch=None) -> dict:
     try:
-        return await build_home_risk_intelligence(macro_provider)
+        return await build_home_risk_intelligence(macro_provider, trading_fetch=trading_fetch)
     except Exception as exc:
         print(f"[RISK_INTEL] build error (trying LKG): {exc}")
         lkg = cache.get(_RISK_INTEL_LKG_KEY)

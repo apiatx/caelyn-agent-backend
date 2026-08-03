@@ -15924,6 +15924,112 @@ def _get_macro_provider():
     return _macro_provider
 
 
+def _build_trading_fetch_fresh(mp):
+    """Build the canonical provider callback for Trading Dashboard refresh.
+
+    Returns an async callable that gathers:
+      (risk_data, macro_data, calendar_data, sector_perf_raw,
+       spy_qqq_extended, vix_history)
+
+    Used by both GET /api/trading-dashboard and
+    GET /api/home/risk-intelligence (for background execution warmup).
+    """
+    async def _fetch_fresh():
+        async def _fetch_spy_qqq_extended():
+            if not mp.tradier:
+                return {}
+            try:
+                from datetime import date, timedelta
+                start = (date.today() - timedelta(days=320)).isoformat()
+                end = date.today().isoformat()
+                spy_hist, qqq_hist = await asyncio.gather(
+                    mp.tradier.get_history("SPY", interval="daily", start=start, end=end),
+                    mp.tradier.get_history("QQQ", interval="daily", start=start, end=end),
+                    return_exceptions=True,
+                )
+                result_ext = {}
+                for sym, hist in [("SPY", spy_hist), ("QQQ", qqq_hist)]:
+                    if isinstance(hist, Exception) or not hist:
+                        continue
+                    bars = [d for d in hist if d.get("close")]
+                    closes = [d["close"] for d in bars]
+                    if len(closes) >= 50:
+                        sma50 = round(sum(closes[-50:]) / 50, 2)
+                        sma200 = round(sum(closes[-200:]) / 200, 2) if len(closes) >= 200 else None
+                        result_ext[sym] = {
+                            "price": closes[-1] if closes else None,
+                            "priceAvg50": sma50,
+                            "priceAvg200": sma200,
+                            "recent_bars": bars[-10:],
+                        }
+                return result_ext
+            except Exception:
+                return {}
+
+        async def _fetch_sector_perf():
+            _SECTOR_ETFS = ["XLK", "XLV", "XLF", "XLE", "XLI", "XLP", "XLY", "XLB", "XLU", "XLRE", "XLC"]
+            if mp.tradier:
+                try:
+                    from data.tradier_budget import lane as _sec_lane
+                    with _sec_lane("quotes"):
+                        quotes = await mp.tradier.get_quotes(_SECTOR_ETFS)
+                    result = []
+                    ETF_TO_SECTOR = {
+                        "XLK": "Technology", "XLV": "Healthcare", "XLF": "Financial Services",
+                        "XLE": "Energy", "XLI": "Industrials", "XLP": "Consumer Defensive",
+                        "XLY": "Consumer Cyclical", "XLB": "Basic Materials", "XLU": "Utilities",
+                        "XLRE": "Real Estate", "XLC": "Communication Services",
+                    }
+                    for q in quotes:
+                        sym = q.get("symbol", "")
+                        if sym in ETF_TO_SECTOR:
+                            result.append({
+                                "sector": ETF_TO_SECTOR[sym],
+                                "changesPercentage": q.get("change_percentage", 0) or 0,
+                            })
+                    return result
+                except Exception:
+                    pass
+            if mp.fmp:
+                try:
+                    return await mp.fmp.get_sector_performance() or []
+                except Exception:
+                    pass
+            return []
+
+        def _fetch_vix_history():
+            try:
+                return mp.get_history("vix", 12)
+            except Exception:
+                return {}
+
+        risk_data, macro_data, calendar_data, sector_perf_raw, spy_qqq_extended, vix_history = await asyncio.gather(
+            mp.get_risk(),
+            mp.get_dashboard(),
+            mp.get_calendar(days_ahead=14),
+            _fetch_sector_perf(),
+            _fetch_spy_qqq_extended(),
+            asyncio.to_thread(_fetch_vix_history),
+            return_exceptions=True,
+        )
+        if isinstance(risk_data, Exception):
+            risk_data = {}
+        if isinstance(macro_data, Exception):
+            macro_data = {}
+        if isinstance(calendar_data, Exception):
+            calendar_data = {}
+        if isinstance(sector_perf_raw, Exception):
+            sector_perf_raw = []
+        if isinstance(spy_qqq_extended, Exception):
+            spy_qqq_extended = {}
+        if isinstance(vix_history, Exception):
+            vix_history = {}
+
+        return (risk_data, macro_data, calendar_data, sector_perf_raw, spy_qqq_extended, vix_history)
+
+    return _fetch_fresh
+
+
 # ── Background refresh loop ──────────────────────────────────────────
 
 _MACRO_PRECOMPUTE_INTERVAL = 720  # 12 minutes (cache TTL is 15 min)
@@ -16413,7 +16519,8 @@ async def home_risk_intelligence(
         _cache.delete("home:risk_intel:v1")
     try:
         from services.home_risk_intelligence import build_home_risk_intelligence_safe
-        payload = await build_home_risk_intelligence_safe(mp)
+        trading_fetch = _build_trading_fetch_fresh(mp) if mp else None
+        payload = await build_home_risk_intelligence_safe(mp, trading_fetch=trading_fetch)
         return JSONResponse(content=payload)
     except Exception as exc:
         import traceback
@@ -16832,98 +16939,7 @@ async def trading_dashboard(
             content={"error": "Macro provider not initialized. Ensure FRED_API_KEY is set."},
         )
 
-    async def _fetch_fresh():
-        async def _fetch_spy_qqq_extended():
-            if not mp.tradier:
-                return {}
-            try:
-                from datetime import date, timedelta
-                start = (date.today() - timedelta(days=320)).isoformat()
-                end = date.today().isoformat()
-                spy_hist, qqq_hist = await asyncio.gather(
-                    mp.tradier.get_history("SPY", interval="daily", start=start, end=end),
-                    mp.tradier.get_history("QQQ", interval="daily", start=start, end=end),
-                    return_exceptions=True,
-                )
-                result_ext = {}
-                for sym, hist in [("SPY", spy_hist), ("QQQ", qqq_hist)]:
-                    if isinstance(hist, Exception) or not hist:
-                        continue
-                    bars = [d for d in hist if d.get("close")]
-                    closes = [d["close"] for d in bars]
-                    if len(closes) >= 50:
-                        sma50 = round(sum(closes[-50:]) / 50, 2)
-                        sma200 = round(sum(closes[-200:]) / 200, 2) if len(closes) >= 200 else None
-                        result_ext[sym] = {
-                            "price": closes[-1] if closes else None,
-                            "priceAvg50": sma50,
-                            "priceAvg200": sma200,
-                            "recent_bars": bars[-10:],
-                        }
-                return result_ext
-            except Exception:
-                return {}
-
-        async def _fetch_sector_perf():
-            _SECTOR_ETFS = ["XLK", "XLV", "XLF", "XLE", "XLI", "XLP", "XLY", "XLB", "XLU", "XLRE", "XLC"]
-            if mp.tradier:
-                try:
-                    from data.tradier_budget import lane as _sec_lane
-                    with _sec_lane("quotes"):
-                        quotes = await mp.tradier.get_quotes(_SECTOR_ETFS)
-                    result = []
-                    ETF_TO_SECTOR = {
-                        "XLK": "Technology", "XLV": "Healthcare", "XLF": "Financial Services",
-                        "XLE": "Energy", "XLI": "Industrials", "XLP": "Consumer Defensive",
-                        "XLY": "Consumer Cyclical", "XLB": "Basic Materials", "XLU": "Utilities",
-                        "XLRE": "Real Estate", "XLC": "Communication Services",
-                    }
-                    for q in quotes:
-                        sym = q.get("symbol", "")
-                        if sym in ETF_TO_SECTOR:
-                            result.append({
-                                "sector": ETF_TO_SECTOR[sym],
-                                "changesPercentage": q.get("change_percentage", 0) or 0,
-                            })
-                    return result
-                except Exception:
-                    pass
-            if mp.fmp:
-                try:
-                    return await mp.fmp.get_sector_performance() or []
-                except Exception:
-                    pass
-            return []
-
-        def _fetch_vix_history():
-            try:
-                return mp.get_history("vix", 12)
-            except Exception:
-                return {}
-
-        risk_data, macro_data, calendar_data, sector_perf_raw, spy_qqq_extended, vix_history = await asyncio.gather(
-            mp.get_risk(),
-            mp.get_dashboard(),
-            mp.get_calendar(days_ahead=14),
-            _fetch_sector_perf(),
-            _fetch_spy_qqq_extended(),
-            asyncio.to_thread(_fetch_vix_history),
-            return_exceptions=True,
-        )
-        if isinstance(risk_data, Exception):
-            risk_data = {}
-        if isinstance(macro_data, Exception):
-            macro_data = {}
-        if isinstance(calendar_data, Exception):
-            calendar_data = {}
-        if isinstance(sector_perf_raw, Exception):
-            sector_perf_raw = []
-        if isinstance(spy_qqq_extended, Exception):
-            spy_qqq_extended = {}
-        if isinstance(vix_history, Exception):
-            vix_history = {}
-
-        return (risk_data, macro_data, calendar_data, sector_perf_raw, spy_qqq_extended, vix_history)
+    _fetch_fresh = _build_trading_fetch_fresh(mp)
 
     try:
         result = await get_trading_dashboard(mode=mode, force=force, fetch_fresh_data=_fetch_fresh)

@@ -675,6 +675,194 @@ def test_ews_0_with_all_missing() -> None:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Run
 # ═══════════════════════════════════════════════════════════════════════════════
+# Singleflight refresh tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+import asyncio as _asyncio
+from services.trading_dashboard_service import (
+    schedule_trading_dashboard_refresh,
+    _inflight,
+)
+
+
+async def test_singleflight_not_needed():
+    """Available cache → not_needed."""
+    clear_dashboard_cache()
+
+    async def fetch():
+        return fixtures()
+
+    # First, populate cache
+    await get_trading_dashboard(mode="swing", fetch_fresh_data=fetch)
+    snap = get_trading_dashboard_snapshot("swing")
+    assert snap["status"] == "available"
+
+    # Now schedule — should be not_needed
+    result = schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=fetch)
+    assert result["status"] == "not_needed"
+
+    clear_dashboard_cache()
+    print("test_singleflight_not_needed PASSED")
+
+
+async def test_singleflight_cold_start_scheduled():
+    """Cold start → scheduled."""
+    clear_dashboard_cache()
+
+    build_count = [0]
+
+    async def fetch():
+        build_count[0] += 1
+        return fixtures()
+
+    result = schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=fetch)
+    assert result["status"] == "scheduled"
+
+    # Allow background task to complete
+    await _asyncio.sleep(0.2)
+    assert build_count[0] == 1
+
+    # Cache should now be populated
+    snap = get_trading_dashboard_snapshot("swing")
+    assert snap["status"] == "available"
+
+    clear_dashboard_cache()
+    print("test_singleflight_cold_start_scheduled PASSED")
+
+
+async def test_singleflight_already_running():
+    """Second schedule while task active → already_running."""
+    clear_dashboard_cache()
+
+    build_count = [0]
+
+    async def fetch():
+        build_count[0] += 1
+        await _asyncio.sleep(0.3)
+        return fixtures()
+
+    r1 = schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=fetch)
+    assert r1["status"] == "scheduled"
+
+    r2 = schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=fetch)
+    assert r2["status"] == "already_running"
+
+    await _asyncio.sleep(0.5)
+    assert build_count[0] == 1  # Only one fetch
+
+    clear_dashboard_cache()
+    print("test_singleflight_already_running PASSED")
+
+
+async def test_singleflight_one_provider_call():
+    """One provider callback despite multiple schedule attempts."""
+    clear_dashboard_cache()
+
+    build_count = [0]
+
+    async def fetch():
+        build_count[0] += 1
+        return fixtures()
+
+    schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=fetch)
+    schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=fetch)
+    schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=fetch)
+
+    await _asyncio.sleep(0.2)
+    assert build_count[0] == 1
+
+    clear_dashboard_cache()
+    print("test_singleflight_one_provider_call PASSED")
+
+
+async def test_singleflight_mode_isolation():
+    """Swing and day tasks remain isolated."""
+    clear_dashboard_cache()
+
+    build_count = [0, 0]  # swing, day
+
+    async def fetch_swing():
+        build_count[0] += 1
+        return fixtures()
+
+    async def fetch_day():
+        build_count[1] += 1
+        return fixtures()
+
+    schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=fetch_swing)
+    schedule_trading_dashboard_refresh(mode="day", fetch_fresh_data=fetch_day)
+
+    await _asyncio.sleep(0.2)
+    assert build_count[0] == 1
+    assert build_count[1] == 1
+
+    snap_swing = get_trading_dashboard_snapshot("swing")
+    snap_day = get_trading_dashboard_snapshot("day")
+    assert snap_swing["status"] == "available"
+    assert snap_day["status"] == "available"
+    assert snap_swing["dashboard"]["mode"] == "swing"
+    assert snap_day["dashboard"]["mode"] == "day"
+
+    clear_dashboard_cache()
+    print("test_singleflight_mode_isolation PASSED")
+
+
+async def test_singleflight_task_registry_cleanup():
+    """In-flight registry cleaned after completion."""
+    clear_dashboard_cache()
+
+    async def fetch():
+        return fixtures()
+
+    schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=fetch)
+    await _asyncio.sleep(0.2)
+
+    # Task should have completed and been removed from registry
+    assert _inflight.get("swing") is None or _inflight["swing"].done()
+
+    clear_dashboard_cache()
+    print("test_singleflight_task_registry_cleanup PASSED")
+
+
+async def test_singleflight_failed_task_clears_registry():
+    """Failed task clears in-flight registry."""
+    clear_dashboard_cache()
+
+    async def failing_fetch():
+        raise RuntimeError("test error")
+
+    schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=failing_fetch)
+    await _asyncio.sleep(0.2)
+
+    assert _inflight.get("swing") is None or _inflight["swing"].done()
+
+    clear_dashboard_cache()
+    print("test_singleflight_failed_task_clears_registry PASSED")
+
+
+async def test_singleflight_no_sync_provider_call():
+    """No synchronous provider call before schedule returns."""
+    clear_dashboard_cache()
+
+    call_made = [False]
+
+    async def fetch():
+        call_made[0] = True
+        return fixtures()
+
+    result = schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=fetch)
+    # Provider must NOT have been called synchronously
+    assert call_made[0] is False
+    assert result["status"] == "scheduled"
+
+    await _asyncio.sleep(0.2)
+    assert call_made[0] is True
+
+    clear_dashboard_cache()
+    print("test_singleflight_no_sync_provider_call PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     test_baseline_swing_mode_shape()
@@ -716,4 +904,14 @@ if __name__ == "__main__":
     test_snapshot_expired_disallow()
     test_snapshot_defensive_copy()
 
-    print("\nAll 31 tests PASSED")
+    # Singleflight tests
+    asyncio.run(test_singleflight_not_needed())
+    asyncio.run(test_singleflight_cold_start_scheduled())
+    asyncio.run(test_singleflight_already_running())
+    asyncio.run(test_singleflight_one_provider_call())
+    asyncio.run(test_singleflight_mode_isolation())
+    asyncio.run(test_singleflight_task_registry_cleanup())
+    asyncio.run(test_singleflight_failed_task_clears_registry())
+    asyncio.run(test_singleflight_no_sync_provider_call())
+
+    print("\nAll 39 tests PASSED")

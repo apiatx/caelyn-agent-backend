@@ -851,9 +851,143 @@ def test_lkg_fallback_no_mutation() -> None:
     print("test_lkg_fallback_no_mutation PASSED")
 
 
-# =============================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase B — Composer and contract tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_home_decision_builder_importable():
+    """_build_home_decision is importable and callable."""
+    from services.home_risk_intelligence import _build_home_decision
+    sr = {
+        "risk_score": 43, "risk_level": "MODERATE",
+        "regime_direction": "STABLE", "trade_bias": "SELECTIVE_LONG",
+        "position_size_hint": "selective", "one_line": "test",
+        "assessment_status": "COMPLETE", "dominant_driver": "broad_market_trend",
+        "event_overlay": {"active": False},
+        "conditions_that_would_flip": [],
+        "pillars": {},
+    }
+    es = {
+        "status": "available", "age_seconds": 45.0, "expired": False,
+        "dashboard": {
+            "market_quality_score": 62.0, "execution_window_score": 50.0,
+            "decision": "CAUTION", "as_of": "test", "from_cache": True,
+            "execution_conditions": [],
+        },
+    }
+    d = _build_home_decision(
+        swing_regime=sr, execution_snapshot=es,
+        execution_refresh_status="not_needed",
+        market_open=True, why_market_is_moving=["test"],
+    )
+    assert isinstance(d, dict)
+    assert d["verdict"] in ("YES", "CAUTION", "NO")
+    print("test_home_decision_builder_importable PASSED")
+
+
+def test_trade_decision_has_score_source():
+    """trade_decision includes score_source field."""
+    from services.home_risk_intelligence import _project_trade_decision_from_swing_regime
+    sr = {
+        "risk_score": 43, "risk_level": "MODERATE",
+        "regime_direction": "STABLE", "trade_bias": "SELECTIVE_LONG",
+        "position_size_hint": "selective", "one_line": "test",
+        "dominant_driver": "broad_market_trend",
+    }
+    td = _project_trade_decision_from_swing_regime(sr, {})
+    assert "score_source" in td
+    assert td["score_source"] == "swing_regime_inverse_projection"
+    print("test_trade_decision_has_score_source PASSED")
+
+
+def test_home_decision_no_score_averaging_in_builder():
+    """_build_home_decision never computes an averaged score."""
+    from services.home_risk_intelligence import _build_home_decision
+    sr = {
+        "risk_score": 43, "risk_level": "MODERATE",
+        "regime_direction": "STABLE", "trade_bias": "SELECTIVE_LONG",
+        "position_size_hint": "selective", "one_line": "test",
+        "assessment_status": "COMPLETE",
+        "event_overlay": {"active": False},
+        "conditions_that_would_flip": [],
+        "pillars": {},
+    }
+    es = {
+        "status": "available", "age_seconds": 45.0, "expired": False,
+        "dashboard": {
+            "market_quality_score": 62.0, "execution_window_score": 50.0,
+            "decision": "CAUTION", "as_of": "test", "from_cache": True,
+            "execution_conditions": [],
+        },
+    }
+    d = _build_home_decision(
+        swing_regime=sr, execution_snapshot=es,
+        execution_refresh_status="not_needed",
+        market_open=True, why_market_is_moving=[],
+    )
+    for forbidden in ("combined_score", "aggregate_score", "home_score"):
+        assert forbidden not in d, f"Found forbidden field: {forbidden}"
+    assert d["regime"]["risk_score"] == 43
+    assert d["execution"]["market_quality_score"] == 62.0
+    print("test_home_decision_no_score_averaging_in_builder PASSED")
+
+
+def test_home_decision_expired_confidence_never_high():
+    """Expired execution restricts confidence."""
+    from services.home_risk_intelligence import _build_home_decision
+    sr = {
+        "risk_score": 25, "risk_level": "MODERATE",
+        "regime_direction": "IMPROVING", "trade_bias": "SELECTIVE_LONG",
+        "position_size_hint": "selective", "one_line": "test",
+        "assessment_status": "COMPLETE",
+        "event_overlay": {"active": False},
+        "conditions_that_would_flip": [],
+        "pillars": {},
+    }
+    es = {
+        "status": "expired", "age_seconds": 700.0, "expired": True,
+        "dashboard": {
+            "market_quality_score": 85.0, "execution_window_score": 100.0,
+            "decision": "YES", "as_of": "test", "from_cache": True,
+            "execution_conditions": [],
+        },
+    }
+    d = _build_home_decision(
+        swing_regime=sr, execution_snapshot=es,
+        execution_refresh_status="scheduled",
+        market_open=True, why_market_is_moving=[],
+    )
+    assert d["confidence"] != "HIGH", f"Expired execution should not be HIGH, got {d['confidence']}"
+    assert d["verdict"] != "YES"
+    print("test_home_decision_expired_confidence_never_high PASSED")
+
+
+def test_home_decision_unavailable_execution_partial():
+    """Unavailable execution produces PARTIAL assessment."""
+    from services.home_risk_intelligence import _build_home_decision
+    sr = {
+        "risk_score": 35, "risk_level": "MODERATE",
+        "regime_direction": "STABLE", "trade_bias": "SELECTIVE_LONG",
+        "position_size_hint": "selective", "one_line": "test",
+        "assessment_status": "COMPLETE",
+        "event_overlay": {"active": False},
+        "conditions_that_would_flip": [],
+        "pillars": {},
+    }
+    d = _build_home_decision(
+        swing_regime=sr, execution_snapshot=None,
+        execution_refresh_status="scheduled",
+        market_open=True, why_market_is_moving=[],
+    )
+    assert d["assessment_status"] == "PARTIAL"
+    assert d["execution"]["status"] == "unavailable"
+    assert d["execution"]["market_quality_score"] is None
+    print("test_home_decision_unavailable_execution_partial PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Run
-# =============================================================================
+# ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     # C1: Canonical display triggers
@@ -923,4 +1057,11 @@ if __name__ == "__main__":
     test_position_size_with_event()
     test_lkg_fallback_no_mutation()
 
-    print("\nAll 54 tests PASSED")
+    # Phase B composer tests
+    test_home_decision_builder_importable()
+    test_trade_decision_has_score_source()
+    test_home_decision_no_score_averaging_in_builder()
+    test_home_decision_expired_confidence_never_high()
+    test_home_decision_unavailable_execution_partial()
+
+    print("\nAll 59 tests PASSED")

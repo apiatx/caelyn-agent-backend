@@ -16,10 +16,14 @@ Import direction:
 """
 from __future__ import annotations
 
+import asyncio
 import copy
+import logging
 import time as _time
 from datetime import datetime as _dt, timezone as _tz, timedelta as _td
 from typing import Any
+
+_logger = logging.getLogger(__name__)
 
 
 # ── Sector ETF mapping ───────────────────────────────────────────────────────
@@ -794,3 +798,74 @@ def get_trading_dashboard_snapshot(
         "expired": expired,
         "status": "available" if not expired else "expired",
     }
+
+
+# ── Singleflight background refresh ───────────────────────────────────────────
+
+# In-flight registry per mode: True when a background task is active
+_inflight: dict[str, asyncio.Task | None] = {}
+
+
+def schedule_trading_dashboard_refresh(
+    *,
+    mode: str,
+    fetch_fresh_data=None,
+) -> dict:
+    """Schedule a nonblocking canonical refresh of the Trading Dashboard.
+
+    Parameters
+    ----------
+    mode : str
+        "swing" or "day".
+    fetch_fresh_data : async callable
+        Same callback used by get_trading_dashboard().
+
+    Returns
+    -------
+    dict
+        {"status": "not_needed" | "scheduled" | "already_running", "mode": str}
+    """
+    mode = mode.lower() if mode.lower() in ("swing", "day") else "swing"
+
+    # Check if cache is already fresh
+    key = _cache_key(mode)
+    entry = _cache.get(key)
+    if entry and (_time.time() - entry.get("_ts", 0)) < _DASHBOARD_TTL:
+        return {"status": "not_needed", "mode": mode}
+
+    # Check if already in flight
+    task = _inflight.get(mode)
+    if task is not None and not task.done():
+        return {"status": "already_running", "mode": mode}
+
+    if fetch_fresh_data is None:
+        return {"status": "not_needed", "mode": mode}
+
+    # Create background task
+    async def _refresh():
+        try:
+            result = await get_trading_dashboard(
+                mode=mode,
+                force=True,
+                fetch_fresh_data=fetch_fresh_data,
+            )
+            return result
+        except Exception as exc:
+            _logger.warning(
+                "[TRADING_DASHBOARD] background refresh failed (mode=%s): %s",
+                mode, exc,
+            )
+            raise
+        finally:
+            _inflight.pop(mode, None)
+
+    _inflight[mode] = asyncio.ensure_future(_refresh())
+    return {"status": "scheduled", "mode": mode}
+
+
+def _clear_inflight():
+    """Remove completed tasks from the in-flight registry (used in tests)."""
+    for mode in list(_inflight.keys()):
+        task = _inflight.get(mode)
+        if task is not None and task.done():
+            _inflight.pop(mode, None)
