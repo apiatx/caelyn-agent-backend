@@ -1,0 +1,43 @@
+# Exclude large dev-tool data directories from the deployment image.
+# These are AI agent session databases, caches, and build artifacts that
+# have no purpose in a production container and push the image over the 8 GiB limit.
+
+# OpenCode AI agent session database (~6 GB SQLite DB + WAL)
+.local/share/opencode/
+
+# Replit internal agent + log-query databases (~1.7 GB)
+.local/state/replit/
+
+# npm package cache (~342 MB) — not needed at runtime (no Node build step)
+.config/npm/
+
+# OpenCode config (~62 MB)
+.config/opencode/
+
+# pip wheel / package cache (~190 MB)
+.cache/pip/
+
+# OpenCode and yfinance caches
+.cache/opencode/
+.cache/py-yfinance/
+
+# Codex CLI session data, logs, and plugin binaries (~64 MB)
+.codex/
+
+# OpenCode persistent state
+.opencode-persistent/
+
+# OpenCode session state file (~748 KB)
+opencode-session.json
+opencode-copy.sh
+codex.sh
+
+# Root-level attached assets (not the backend ones, which may be used)
+attached_assets/
+
+# Git history (~434 MB) — not needed in a production container
+.git/
+
+# Workflow and scribe logs
+.local/state/workflow-logs/
+.local/state/scribe/
