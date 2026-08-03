@@ -500,6 +500,174 @@ def test_regime_size_ceiling():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Language hardening tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_RAW_ENUM_LIKE = ("MODERATE", "ELEVATED", "EXTREME", "IMPROVING", "WORSENING",
+                  "CAUTION", "SELECTIVE_LONG", "SHORT_HEDGE", "UNKNOWN",
+                  "STRONG", "MIXED", "PRESS", "HEDGE")
+
+def _no_raw_enums_in(text: str) -> bool:
+    words = set(text.replace(".", " ").replace(",", " ").replace("/", " ").split())
+    for enum_val in _RAW_ENUM_LIKE:
+        if enum_val in words:
+            return False
+    return True
+
+def test_one_line_no_repeated_selective():
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG", pos_size="selective")
+    es = _make_exec_snapshot(mqs=62.0, ews=50.0, decision="CAUTION")
+    d = _hd(sr, es)
+    count = d["one_line"].lower().count("selective")
+    assert count <= 1, f"Too many 'selective': {d['one_line']}"
+    print("test_one_line_no_repeated_selective PASSED")
+
+def test_one_line_no_raw_enum_casing():
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG")
+    es = _make_exec_snapshot()
+    d = _hd(sr, es)
+    assert _no_raw_enums_in(d["one_line"]), f"Raw enum in: {d['one_line']}"
+    print("test_one_line_no_raw_enum_casing PASSED")
+
+def test_why_now_no_repeated_words():
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG", pos_size="selective")
+    es = _make_exec_snapshot()
+    d = _hd(sr, es)
+    for bullet in d["why_now"]:
+        assert "SELECTIVE selective" not in bullet, f"Duplicate: {bullet}"
+        assert "selective entries at selective" not in bullet.lower()
+    print("test_why_now_no_repeated_words PASSED")
+
+def test_why_now_no_raw_enum_casing():
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG")
+    es = _make_exec_snapshot()
+    d = _hd(sr, es)
+    for bullet in d["why_now"]:
+        assert _no_raw_enums_in(bullet), f"Raw enum in: {bullet}"
+    print("test_why_now_no_raw_enum_casing PASSED")
+
+def test_moderate_not_broadly_supportive():
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG")
+    es = _make_exec_snapshot(mqs=62.0, ews=50.0, decision="CAUTION")
+    d = _hd(sr, es)
+    assert "broadly supportive" not in d["one_line"].lower()
+    for r in d["buy_reasons"]:
+        assert "broadly supportive" not in r.lower()
+    print("test_moderate_not_broadly_supportive PASSED")
+
+def test_moderate_stable_mixed_coherent():
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG")
+    es = _make_exec_snapshot(mqs=62.0, ews=50.0, decision="CAUTION")
+    d = _hd(sr, es)
+    assert d["verdict"] == "CAUTION"; assert d["action"] == "SELECTIVE"
+    one_line = d["one_line"]
+    assert "Moderate" in one_line
+    assert "selective entries" in one_line.lower() or "selective " in one_line.lower()
+    assert "broad aggressive" in one_line.lower() or "mixed execution" in one_line.lower()
+    bullets = d["why_now"]
+    assert any("Decision: Caution" in b for b in bullets)
+    assert any("Regime: Moderate" in b for b in bullets)
+    assert any("Execution:" in b and "Mixed" in b for b in bullets)
+    assert len(d["wait_reasons"]) >= 1
+    assert all("broadly" not in r.lower() for r in d["buy_reasons"])
+    assert d["reduce_reasons"] == []
+    print("test_moderate_stable_mixed_coherent PASSED")
+
+def test_caution_selective_reason_invariants():
+    for risk in ("LOW", "MODERATE", "ELEVATED", "HIGH", "EXTREME"):
+        for direc in ("IMPROVING", "STABLE"):
+            sr = _make_regime(risk, direc, "SELECTIVE_LONG", pos_size="selective")
+            es = _make_exec_snapshot(mqs=65.0, ews=55.0, decision="CAUTION")
+            d = _hd(sr, es)
+            if d["verdict"] == "CAUTION" and d["action"] == "SELECTIVE":
+                assert len(d["wait_reasons"]) >= 1, f"({risk},{direc}): empty wait_reasons"
+    print("test_caution_selective_reason_invariants PASSED")
+
+def test_caution_wait_buy_reasons_restricted():
+    sr = _make_regime("MODERATE", "STABLE", "NEUTRAL")
+    es = _make_exec_snapshot(mqs=30.0, ews=25.0, decision="NO")
+    d = _hd(sr, es)
+    assert d["verdict"] == "CAUTION"; assert d["action"] == "WAIT"
+    assert d["buy_reasons"] == []
+    sr2 = _make_regime("MODERATE", "IMPROVING", "SELECTIVE_LONG")
+    d2 = _hd(sr2, es)
+    assert len(d2["buy_reasons"]) <= 1
+    print("test_caution_wait_buy_reasons_restricted PASSED")
+
+def test_yes_buy_reasons_nonempty():
+    sr = _make_regime("LOW", "IMPROVING", "LONG", pos_size="normal")
+    es = _make_exec_snapshot(mqs=75.0, ews=80.0, decision="YES")
+    d = _hd(sr, es)
+    assert d["verdict"] == "YES"; assert d["action"] == "PRESS"
+    assert len(d["buy_reasons"]) >= 1
+    assert d["reduce_reasons"] == []
+    assert len(d["wait_reasons"]) <= 1
+    print("test_yes_buy_reasons_nonempty PASSED")
+
+def test_no_buy_reasons_empty():
+    for risk_level, direction in [("HIGH", "STABLE"), ("EXTREME", "WORSENING")]:
+        sr = _make_regime(risk_level, direction, "SHORT_HEDGE", pos_size="half-size")
+        es = _make_exec_snapshot()
+        d = _hd(sr, es)
+        assert d["verdict"] == "NO"
+        assert d["buy_reasons"] == [], f"({risk_level},{direction}): {d['buy_reasons']}"
+        assert len(d["reduce_reasons"]) >= 1
+    print("test_no_buy_reasons_empty PASSED")
+
+def test_insufficient_data_buy_reasons_empty():
+    sr = _make_regime("MODERATE", "UNKNOWN", "NEUTRAL", assessment="INSUFFICIENT_DATA")
+    es = _make_exec_snapshot()
+    d = _hd(sr, es)
+    assert d["buy_reasons"] == []
+    assert len(d["wait_reasons"]) >= 1
+    print("test_insufficient_data_buy_reasons_empty PASSED")
+
+def test_expired_one_line_cached():
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG")
+    es = _make_exec_snapshot(status="expired", mqs=85.0, ews=80.0, decision="YES", age=700.0)
+    d = _hd(sr, es, refresh="scheduled")
+    assert "cached" in d["one_line"].lower() or "refresh" in d["one_line"].lower()
+    print("test_expired_one_line_cached PASSED")
+
+def test_warming_no_mqs_ews_prose():
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG")
+    es = _make_exec_snapshot(status="unavailable")
+    d = _hd(sr, es, refresh="scheduled")
+    assert d["execution"]["market_quality_score"] is None
+    assert "/100" not in d["one_line"]
+    print("test_warming_no_mqs_ews_prose PASSED")
+
+def test_market_closed_language():
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG")
+    es = _make_exec_snapshot()
+    d = _hd(sr, es, market_open=False)
+    assert "latest completed" in d["one_line"].lower() or "completed" in d["one_line"].lower()
+    print("test_market_closed_language PASSED")
+
+def test_improve_worsen_deduplication():
+    sr = _make_regime("MODERATE", "STABLE", "SELECTIVE_LONG",
+                      flip_conditions=["Breadth rises above 50", "Breadth rises above 50"])
+    es = _make_exec_snapshot(mqs=62.0, ews=50.0)
+    d = _hd(sr, es)
+    assert len(d["what_would_improve"]) == len(set(d["what_would_improve"]))
+    assert len(d["what_would_worsen"]) == len(set(d["what_would_worsen"]))
+    for entry in d["what_would_improve"]:
+        assert _no_raw_enums_in(entry), f"Raw enum: {entry}"
+    for entry in d["what_would_worsen"]:
+        assert _no_raw_enums_in(entry), f"Raw enum: {entry}"
+    print("test_improve_worsen_deduplication PASSED")
+
+def test_machine_enum_fields_unchanged():
+    d = _hd()
+    assert d["verdict"] in ("YES", "CAUTION", "NO")
+    assert d["action"] in ("PRESS", "SELECTIVE", "WAIT", "REDUCE", "HEDGE")
+    assert d["regime"]["risk_level"] in ("LOW", "MODERATE", "ELEVATED", "HIGH", "EXTREME")
+    assert d["regime"]["direction"] in ("IMPROVING", "STABLE", "WORSENING", "UNKNOWN")
+    assert d["execution"]["quality"] in ("STRONG", "MIXED", "WEAK", "UNAVAILABLE")
+    print("test_machine_enum_fields_unchanged PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Run
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -553,4 +721,22 @@ if __name__ == "__main__":
     test_reasons_are_capped()
     test_regime_size_ceiling()
 
-    print("\nAll 34 tests PASSED")
+    # Language hardening
+    test_one_line_no_repeated_selective()
+    test_one_line_no_raw_enum_casing()
+    test_why_now_no_repeated_words()
+    test_why_now_no_raw_enum_casing()
+    test_moderate_not_broadly_supportive()
+    test_moderate_stable_mixed_coherent()
+    test_caution_selective_reason_invariants()
+    test_caution_wait_buy_reasons_restricted()
+    test_yes_buy_reasons_nonempty()
+    test_no_buy_reasons_empty()
+    test_insufficient_data_buy_reasons_empty()
+    test_expired_one_line_cached()
+    test_warming_no_mqs_ews_prose()
+    test_market_closed_language()
+    test_improve_worsen_deduplication()
+    test_machine_enum_fields_unchanged()
+
+    print("\nAll 50 tests PASSED")

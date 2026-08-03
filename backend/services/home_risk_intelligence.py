@@ -496,6 +496,43 @@ _EXPIRED_MAX_AGE = 3600  # 60 minutes — max age for usable expired snapshot
 _SIZE_CONSERVATISM = ["normal", "selective", "half-size", "preserve capital"]
 
 
+# ── Narrative humanization helpers ────────────────────────────────────────────
+
+def _h_level(level: str) -> str:
+    """Humanize risk level for prose."""
+    return {"LOW": "Low", "MODERATE": "Moderate", "ELEVATED": "Elevated",
+            "HIGH": "High", "EXTREME": "Extreme"}.get(level, level)
+
+def _h_dir(direction: str) -> str:
+    """Humanize direction for prose."""
+    return {"IMPROVING": "Improving", "STABLE": "Stable",
+            "WORSENING": "Worsening", "UNKNOWN": "Unknown"}.get(direction, direction)
+
+def _h_verdict(v: str) -> str:
+    return {"YES": "Yes", "CAUTION": "Caution", "NO": "No"}.get(v, v)
+
+def _h_action(a: str) -> str:
+    return {"PRESS": "Press", "SELECTIVE": "Selective", "WAIT": "Wait",
+            "REDUCE": "Reduce", "HEDGE": "Hedge"}.get(a, a)
+
+def _h_bias(bias: str) -> str:
+    return {"LONG": "Long", "SELECTIVE_LONG": "Selective Long",
+            "NEUTRAL": "Neutral", "SELECTIVE_SHORT": "Selective Short",
+            "SHORT_HEDGE": "Short / Hedge"}.get(bias, bias.replace("_", " "))
+
+def _h_size(s: str) -> str:
+    return {"normal": "normal", "selective": "selective",
+            "half-size": "half-size", "preserve capital": "preserve capital"}.get(s, s)
+
+def _h_quality(q: str) -> str:
+    return {"STRONG": "strong", "MIXED": "mixed",
+            "WEAK": "weak", "UNAVAILABLE": "unavailable"}.get(q, q)
+
+def _h_exec_status(s: str) -> str:
+    return {"available": "available", "expired": "cached, awaiting refresh",
+            "warming": "warming", "unavailable": "unavailable"}.get(s, s)
+
+
 def _most_conservative(a: str, b: str) -> str:
     ia = _SIZE_CONSERVATISM.index(a) if a in _SIZE_CONSERVATISM else 1
     ib = _SIZE_CONSERVATISM.index(b) if b in _SIZE_CONSERVATISM else 1
@@ -511,6 +548,429 @@ def _execution_quality(mqs: float | None, ews: float | None) -> str:
         return "MIXED"
     return "WEAK"
 
+
+# ── Narrative builders ────────────────────────────────────────────────────────
+
+
+def _build_one_line(
+    *,
+    verdict: str,
+    action: str,
+    risk_level: str,
+    direction: str,
+    regime_assessment: str,
+    exec_status: str,
+    exec_quality: str,
+    pos_size: str,
+    market_open: bool,
+    exec_mqs: float | None,
+    exec_ews: float | None,
+) -> str:
+    """Construct a human-readable one-line answer."""
+
+    if regime_assessment == "INSUFFICIENT_DATA":
+        risk_text = "Insufficient data — no reliable directional conclusion"
+    else:
+        risk_text = f"{_h_level(risk_level)}, {_h_dir(direction).lower()} regime risk"
+
+    if exec_status == "available":
+        if exec_quality == "STRONG":
+            exec_text = "strong execution"
+        elif exec_quality == "MIXED":
+            exec_text = "mixed execution"
+        else:
+            exec_text = "weak execution"
+    elif exec_status == "expired":
+        exec_text = "cached execution data awaiting refresh"
+    else:
+        exec_text = "execution data still warming"
+
+    # ── Template selection ─────────────────────────────────────────────────
+    if verdict == "YES" and action == "PRESS":
+        line = (
+            f"{risk_text} with {exec_text} supports pressing "
+            f"high-quality leaders at {_h_size(pos_size)} size."
+        )
+    elif verdict == "YES":
+        line = (
+            f"{risk_text} with {exec_text} supports "
+            f"selective long entries."
+        )
+    elif action == "WAIT":
+        if exec_status in ("warming", "unavailable"):
+            line = (
+                f"{risk_text} — execution data is {exec_text}; "
+                f"wait for confirmation before adding exposure."
+            )
+        else:
+            line = (
+                f"{risk_text} with {exec_text} — wait for stronger "
+                f"breadth and follow-through before adding exposure."
+            )
+    elif action == "REDUCE":
+        line = (
+            f"{risk_text} with {exec_text} favors reducing "
+            f"exposure and avoiding new entries."
+        )
+    elif action == "HEDGE":
+        line = (
+            f"{risk_text} — conditions warrant hedging and "
+            f"preserving capital."
+        )
+    else:  # SELECTIVE with any non-YES verdict
+        if exec_status == "available" and exec_quality == "MIXED":
+            line = (
+                f"{risk_text} with {exec_text} favors selective entries, "
+                f"not broad aggressive buying."
+            )
+        elif exec_status == "available":
+            line = (
+                f"{risk_text} with {exec_text} supports selective "
+                f"entries at {_h_size(pos_size)} size."
+            )
+        elif exec_status == "expired":
+            line = (
+                f"{risk_text} favors selective entries; "
+                f"execution data is cached and awaiting refresh."
+            )
+        else:
+            line = (
+                f"{risk_text} supports selective positioning; "
+                f"execution data is still warming."
+            )
+
+    if not market_open:
+        line += " Signals reflect the latest completed US session."
+
+    return line
+
+
+def _build_why_now_bullets(
+    *,
+    verdict: str,
+    action: str,
+    risk_level: str,
+    direction: str,
+    trade_bias: str,
+    exec_status: str,
+    exec_quality: str,
+    exec_mqs: float | None,
+    exec_ews: float | None,
+    market_open: bool,
+    event_active: bool,
+    event_title: str | None,
+    event_days: int | None,
+    regime_assessment: str,
+) -> list[str]:
+    """Build up to four clean why-now bullets."""
+
+    bullets: list[str] = []
+
+    # 1. Decision
+    if verdict == "YES" and action == "PRESS":
+        bullets.append(f"Decision: Yes — Press entries")
+    elif verdict == "YES":
+        bullets.append(f"Decision: Yes — Selective entries")
+    elif action == "WAIT":
+        bullets.append(f"Decision: Caution — Wait")
+    elif action == "REDUCE":
+        bullets.append(f"Decision: No — Reduce exposure")
+    elif action == "HEDGE":
+        bullets.append(f"Decision: No — Hedge")
+    else:  # SELECTIVE, CAUTION
+        bullets.append(f"Decision: Caution — Selective entries")
+
+    # 2. Regime
+    if regime_assessment == "INSUFFICIENT_DATA":
+        bullets.append("Regime: Insufficient data for directional conclusion")
+    else:
+        bullets.append(
+            f"Regime: {_h_level(risk_level)} risk, "
+            f"{_h_dir(direction)} direction"
+        )
+
+    # 3. Execution
+    if exec_status == "available":
+        if exec_mqs is not None and exec_ews is not None:
+            bullets.append(
+                f"Execution: {_h_quality(exec_quality).title()} — "
+                f"Market Quality {exec_mqs:.0f}/100, "
+                f"Execution Window {exec_ews:.0f}/100"
+            )
+        else:
+            bullets.append("Execution: Available — scores pending")
+    elif exec_status == "expired":
+        bullets.append("Execution: Cached, awaiting refresh")
+    else:
+        bullets.append("Execution: Warming — no current confirmation available")
+
+    # 4. Session/event context
+    if event_active and event_title:
+        days_str = f" in {event_days} day{'s' if event_days != 1 else ''}" if event_days is not None else ""
+        bullets.append(
+            f"Event: {event_title}{days_str} — sizing reduced, "
+            f"directional verdict unchanged"
+        )
+    elif not market_open:
+        bullets.append("Session: Latest completed US session")
+    elif market_open and len(bullets) < 4:
+        bullets.append("Session: US cash market is open")
+
+    return bullets[:4]
+
+
+# ── Reason builders ───────────────────────────────────────────────────────────
+
+def _build_buy_reasons(
+    *,
+    verdict: str,
+    direction: str,
+    risk_level: str,
+    exec_quality: str,
+    exec_mqs: float | None,
+    exec_decision: str | None,
+    trade_bias: str,
+    regime_assessment: str,
+    exec_status: str,
+) -> list[str]:
+    """Buy reasons — only genuinely positive evidence.
+
+    Invariants:
+      - NO verdict → empty
+      - CAUTION / WAIT → empty unless direction IMPROVING (max 1)
+      - CAUTION / SELECTIVE → at most 2 real positive signals
+      - YES → up to 3 positive reasons when supported
+    """
+    out: list[str] = []
+
+    def _add(text: str) -> None:
+        if len(out) >= 3 or text in out:
+            return
+        out.append(text)
+
+    if verdict == "NO":
+        return []
+
+    is_improving = direction == "IMPROVING"
+    is_low = risk_level == "LOW"
+    quality_strong = exec_quality == "STRONG"
+
+    # Low risk is a genuine positive
+    if is_low and regime_assessment != "INSUFFICIENT_DATA":
+        _add("Regime risk is low.")
+
+    # Improving direction
+    if is_improving:
+        _add("Risk direction is improving.")
+
+    # Strong execution
+    if quality_strong and exec_status == "available":
+        _add("Execution quality is strong.")
+
+    # Trading Dashboard confirms
+    if exec_decision == "YES" and exec_status == "available":
+        _add("Trading Dashboard conditions support new entries.")
+
+    # High-quality regime allows positional exposure
+    if trade_bias in ("LONG", "SELECTIVE_LONG") and risk_level in ("LOW", "MODERATE"):
+        _add("The regime permits selective long exposure.")
+
+    # For WAIT action, trim to at most 1 even if direction is improving
+    if verdict == "CAUTION" and exec_quality != "STRONG" and not is_low:
+        out = out[:1]
+
+    return out
+
+
+def _build_wait_reasons(
+    *,
+    verdict: str,
+    action: str,
+    direction: str,
+    risk_level: str,
+    exec_quality: str,
+    exec_mqs: float | None,
+    exec_status: str,
+    event_active: bool,
+    regime_assessment: str,
+) -> list[str]:
+    """Wait reasons — explain why the action is not more aggressive.
+
+    Invariants:
+      - CAUTION / WAIT → wait_reasons non-empty
+      - YES / PRESS → at most 1 mild caution
+      - YES / SELECTIVE → may explain selectivity
+      - NO → may include cautionary context
+    """
+    out: list[str] = []
+
+    def _add(text: str) -> None:
+        if len(out) >= 3 or text in out:
+            return
+        out.append(text)
+
+    # Execution quality concerns
+    if exec_quality == "MIXED" and exec_status == "available":
+        _add("Execution quality is mixed; wait for broader confirmation.")
+    elif exec_quality == "WEAK" and exec_status == "available":
+        _add("Execution quality is weak; conditions are not confirming.")
+    elif exec_status in ("expired", "warming", "unavailable"):
+        _add("Execution data is not fully current; wait for updated dashboard.")
+
+    # Direction not improving
+    if direction == "STABLE":
+        _add("Risk direction is stable rather than improving.")
+    elif direction == "WORSENING":
+        _add("Risk direction is worsening.")
+
+    # Elevated risk levels
+    if risk_level == "ELEVATED":
+        _add("Elevated risk warrants patience — better entries likely ahead.")
+    elif risk_level in ("HIGH", "EXTREME"):
+        _add(f"{_h_level(risk_level)} risk demands caution.")
+    elif risk_level == "MODERATE" and not (exec_quality == "STRONG" and direction == "IMPROVING"):
+        if action != "PRESS":
+            _add("Moderate risk with current conditions does not support aggressive buying.")
+
+    # Event overlay
+    if event_active:
+        _add("Event risk is reducing permitted position size.")
+
+    # For YES verdicts, trim to at most 1
+    if verdict == "YES":
+        out = out[:1]
+
+    return out
+
+
+def _build_reduce_reasons(
+    *,
+    verdict: str,
+    risk_level: str,
+    direction: str,
+    trade_bias: str,
+    exec_quality: str,
+    exec_mqs: float | None,
+    exec_status: str,
+    regime_assessment: str,
+) -> list[str]:
+    """Reduce reasons — only when defensive evidence exists.
+
+    Invariants:
+      - NO verdict → non-empty
+      - YES verdict → empty
+      - CAUTION / SELECTIVE → empty unless explicit defensive signals
+      - CAUTION / WAIT → only with explicit defensive signals
+    """
+    out: list[str] = []
+
+    def _add(text: str) -> None:
+        if len(out) >= 3 or text in out:
+            return
+        out.append(text)
+
+    has_defensive = risk_level in ("HIGH", "EXTREME") or direction == "WORSENING" or trade_bias in ("SELECTIVE_SHORT", "SHORT_HEDGE") or exec_quality == "WEAK"
+
+    if verdict == "YES":
+        return []
+
+    if verdict == "CAUTION" and not has_defensive:
+        return []
+
+    # High/extreme risk
+    if risk_level == "EXTREME":
+        _add("Regime risk is Extreme — reduce exposure and tighten stops.")
+    elif risk_level == "HIGH":
+        _add("Regime risk is High and not improving.")
+
+    # Worsening direction
+    if direction == "WORSENING":
+        _add("Risk direction is worsening.")
+
+    # Defensive trade bias
+    if trade_bias in ("SHORT_HEDGE", "SELECTIVE_SHORT"):
+        _add(f"The regime suggests a {_h_bias(trade_bias).lower()} posture.")
+
+    # Weak execution
+    if exec_quality == "WEAK" and exec_status == "available":
+        _add("Execution quality is weak — breakouts failing, leaders fading.")
+
+    # MQS below threshold
+    if exec_mqs is not None and exec_mqs < 40 and exec_status == "available":
+        _add(f"Market Quality ({exec_mqs:.0f}/100) is below the safe threshold.")
+
+    # Trading Dashboard says no
+    if exec_status == "available" and exec_quality == "WEAK":
+        if len(out) < 3:
+            _add("The Trading Dashboard is not confirming new exposure.")
+
+    return out
+
+
+def _build_improve_worsen(
+    *,
+    verdict: str,
+    risk_level: str,
+    direction: str,
+    exec_quality: str,
+    exec_mqs: float | None,
+    exec_ews: float | None,
+    exec_status: str,
+    event_active: bool,
+    regime_assessment: str,
+    conditions_flip: list[str],
+    execution_snapshot: dict | None,
+) -> tuple[list[str], list[str]]:
+    """Build what-would-improve and what-would-worsen, deduplicating concepts."""
+
+    improve: list[str] = []
+    worsen: list[str] = []
+
+    def _improve(text: str) -> None:
+        if len(improve) >= 4:
+            return
+        norm = text.lower().strip()
+        existing = {i.lower().strip() for i in improve}
+        if norm not in existing:
+            improve.append(text)
+
+    def _worsen(text: str) -> None:
+        if len(worsen) >= 4:
+            return
+        norm = text.lower().strip()
+        existing = {w.lower().strip() for w in worsen}
+        if norm not in existing:
+            worsen.append(text)
+
+    # ── Conditions that would flip from regime ──────────────────────────
+    for cond in (conditions_flip or [])[:2]:
+        _improve(cond)
+
+    # ── Specific execution conditions that failed ───────────────────────
+    if exec_status not in ("unavailable", "warming") and execution_snapshot:
+        dashboard = execution_snapshot.get("dashboard")
+        if dashboard:
+            for ec in (dashboard.get("execution_conditions") or []):
+                if not ec.get("ok") and len(improve) < 4:
+                    label = ec.get("label", "").rstrip("?")
+                    _improve(f"{label} resumes confirming")
+
+    # ── Worsening conditions ────────────────────────────────────────────
+    if direction != "WORSENING":
+        _worsen("Risk direction shifts to worsening.")
+    if risk_level not in ("HIGH", "EXTREME"):
+        _worsen("Risk level rises to High or Extreme.")
+    if exec_mqs is not None and exec_mqs >= 40 and exec_status == "available":
+        _worsen(f"Market Quality falls below 40.")
+    if exec_ews is not None and exec_ews >= 50 and exec_status == "available":
+        _worsen(f"Execution Window falls below 50.")
+    if not event_active:
+        _worsen("Event overlay becomes active — position size reduced.")
+
+    return improve, worsen
+
+
+# ── Main decision builder ─────────────────────────────────────────────────────
 
 def _build_home_decision(
     *,
@@ -699,142 +1159,77 @@ def _build_home_decision(
     # ── Market context ────────────────────────────────────────────────────
     market_context = "live_session" if market_open else "closed_last_session"
 
-    # ── Reasons ───────────────────────────────────────────────────────────
-    buy_reasons: list[str] = []
-    wait_reasons: list[str] = []
-    reduce_reasons: list[str] = []
+    # ── Narrative text generation ──────────────────────────────────────
+    one_line = _build_one_line(
+        verdict=verdict, action=action,
+        risk_level=risk_level, direction=direction,
+        regime_assessment=regime_assessment,
+        exec_status=exec_status, exec_quality=exec_quality,
+        pos_size=pos_size, market_open=market_open,
+        exec_mqs=exec_mqs, exec_ews=exec_ews,
+    )
 
-    def _reason_add(target: list, text: str) -> None:
-        if len(target) >= 3:
-            return
-        if text not in target:
-            target.append(text)
+    why_now = _build_why_now_bullets(
+        verdict=verdict, action=action,
+        risk_level=risk_level, direction=direction,
+        trade_bias=trade_bias,
+        exec_status=exec_status, exec_quality=exec_quality,
+        exec_mqs=exec_mqs, exec_ews=exec_ews,
+        market_open=market_open,
+        event_active=event_active,
+        event_title=event_overlay.get("next_event"),
+        event_days=event_overlay.get("days_until_event"),
+        regime_assessment=regime_assessment,
+    )
 
-    # Buy reasons
-    if direction == "IMPROVING":
-        _reason_add(buy_reasons, f"Risk direction is {direction.lower()} — conditions are getting better")
-    if risk_level in ("LOW", "MODERATE"):
-        _reason_add(buy_reasons, f"Absolute risk is {risk_level} — environment broadly supportive")
-    if exec_quality == "STRONG":
-        _reason_add(buy_reasons, "Execution conditions are strong — breakouts holding, pullbacks bought")
-    if exec_mqs is not None and exec_mqs >= 70:
-        _reason_add(buy_reasons, f"Market quality score ({exec_mqs:.0f}/100) confirms tradable conditions")
-    if exec_decision == "YES":
-        _reason_add(buy_reasons, "Trading Dashboard confirms favorable entry conditions")
-    if risk_level == "LOW" and regime_assessment == "COMPLETE":
-        _reason_add(buy_reasons, "Low risk with complete data — high-confidence environment")
+    buy_reasons = _build_buy_reasons(
+        verdict=verdict,
+        direction=direction,
+        risk_level=risk_level,
+        exec_quality=exec_quality,
+        exec_mqs=exec_mqs,
+        exec_decision=exec_decision,
+        trade_bias=trade_bias,
+        regime_assessment=regime_assessment,
+        exec_status=exec_status,
+    )
 
-    # Wait reasons
-    if exec_quality in ("MIXED", "WEAK"):
-        _reason_add(wait_reasons, f"Execution quality is {exec_quality.lower()} — wait for stronger confirmation")
-    if exec_status in ("expired", "warming", "unavailable"):
-        _reason_add(wait_reasons, "Execution data is not fully current — wait for updated dashboard")
-    if direction in ("STABLE", "UNKNOWN"):
-        _reason_add(wait_reasons, "Risk direction is not improving — no urgency to add")
-    if exec_mqs is not None and exec_mqs < 70 and exec_mqs >= 40:
-        _reason_add(wait_reasons, f"Market quality ({exec_mqs:.0f}/100) is mixed — selective only")
-    if risk_level == "ELEVATED":
-        _reason_add(wait_reasons, "Elevated risk warrants patience — better entries likely ahead")
-    if event_active:
-        _reason_add(wait_reasons, "Event risk overlay active — position size reduced")
+    wait_reasons = _build_wait_reasons(
+        verdict=verdict,
+        action=action,
+        direction=direction,
+        risk_level=risk_level,
+        exec_quality=exec_quality,
+        exec_mqs=exec_mqs,
+        exec_status=exec_status,
+        event_active=event_active,
+        regime_assessment=regime_assessment,
+    )
 
-    # Reduce reasons
-    if risk_level in ("HIGH", "EXTREME"):
-        _reason_add(reduce_reasons, f"{risk_level} risk level — reduce exposure and tighten stops")
-    if direction == "WORSENING":
-        _reason_add(reduce_reasons, "Risk direction is WORSENING — defensive posture warranted")
-    if trade_bias in ("SHORT_HEDGE", "SELECTIVE_SHORT"):
-        _reason_add(reduce_reasons, f"{trade_bias.replace('_', ' ').title()} bias — defensive positioning")
-    if exec_quality == "WEAK":
-        _reason_add(reduce_reasons, "Execution conditions are weak — breakouts failing, leaders fading")
-    if exec_mqs is not None and exec_mqs < 40:
-        _reason_add(reduce_reasons, f"Market quality ({exec_mqs:.0f}/100) is below safe threshold")
+    reduce_reasons = _build_reduce_reasons(
+        verdict=verdict,
+        risk_level=risk_level,
+        direction=direction,
+        trade_bias=trade_bias,
+        exec_quality=exec_quality,
+        exec_mqs=exec_mqs,
+        exec_status=exec_status,
+        regime_assessment=regime_assessment,
+    )
 
-    # ── What would improve / worsen ───────────────────────────────────────
-    what_improve: list[str] = []
-    what_worsen: list[str] = []
-
-    def _improve(text: str) -> None:
-        if text not in what_improve and len(what_improve) < 4:
-            what_improve.append(text)
-
-    def _worsen(text: str) -> None:
-        if text not in what_worsen and len(what_worsen) < 4:
-            what_worsen.append(text)
-
-    # Conditions that would flip from regime
-    for cond in (conditions_flip or [])[:2]:
-        _improve(cond)
-
-    # Execution conditions that failed
-    if exec_status not in ("unavailable", "warming") and execution_snapshot:
-        dashboard = execution_snapshot.get("dashboard")
-        if dashboard:
-            for ec in (dashboard.get("execution_conditions") or []):
-                if not ec.get("ok") and len(what_improve) < 4:
-                    _improve(f"{ec['label']} {ec.get('value', 'N/A')} — {ec.get('status', 'unknown')}")
-
-    # Worsening conditions
-    if direction != "WORSENING":
-        _worsen("Risk direction shifts to WORSENING")
-    if risk_level not in ("HIGH", "EXTREME"):
-        _worsen("Risk level rises into HIGH or EXTREME")
-    if exec_quality in ("STRONG", "MIXED"):
-        _worsen("Execution quality deteriorates below safe thresholds")
-    if exec_mqs is not None and exec_mqs >= 40:
-        _worsen(f"Market quality ({exec_mqs:.0f}/100) falls below 40")
-    if not event_active:
-        _worsen("Active event overlay — size reduction triggered")
-
-    # ── why_now ───────────────────────────────────────────────────────────
-    session_note = "Signals reflect the latest completed US session." if not market_open else "US cash market is open."
-
-    why_now = []
-    why_now.append(f"Verdict: {verdict} — {action} {pos_size.replace('_', ' ')}")
-    why_now.append(f"Regime: {risk_level} risk, {direction.lower()}, {trade_bias.replace('_', ' ').lower()} bias")
-    if exec_status == "available":
-        why_now.append(f"Execution: {exec_quality} (MQS {exec_mqs:.0f}/100, EWS {exec_ews:.0f}/100)" if exec_mqs is not None else "Execution: available")
-    elif exec_status == "expired":
-        why_now.append("Execution: data expired — recent cached values used")
-    else:
-        why_now.append("Execution: warming or unavailable — regime-only guidance")
-    if len(why_now) < 4:
-        why_now.append(session_note)
-
-    # ── One-line ──────────────────────────────────────────────────────────
-    parts: list[str] = []
-
-    risk_part = f"{risk_level} risk, {direction.lower()}"
-    if regime_assessment == "INSUFFICIENT_DATA":
-        risk_part = "Insufficient data"
-
-    if exec_status == "available":
-        if exec_quality == "STRONG":
-            exec_part = "strong execution"
-        elif exec_quality == "MIXED":
-            exec_part = "mixed execution"
-        else:
-            exec_part = "weak execution"
-    elif exec_status == "expired":
-        exec_part = "cached execution data"
-    else:
-        exec_part = "execution data warming"
-
-    if verdict == "YES" and action == "PRESS":
-        one_line = f"{risk_part} with {exec_part} supports pressing high-quality leaders at {pos_size} size."
-    elif verdict == "YES":
-        one_line = f"{risk_part} with {exec_part} supports selective entries at {pos_size} size."
-    elif action == "WAIT":
-        one_line = f"{risk_part} with {exec_part} — wait for stronger confirmation before adding at more than {pos_size} size."
-    elif action == "REDUCE":
-        one_line = f"{risk_part} with {exec_part} favors reducing exposure to {pos_size} size."
-    elif action == "HEDGE":
-        one_line = f"{risk_part} — conditions warrant hedging, {pos_size}."
-    else:
-        one_line = f"{risk_part} with {exec_part} — {action.lower()} entries at {pos_size} size."
-
-    if not market_open:
-        one_line += " Signals reflect the latest completed US session."
+    what_improve, what_worsen = _build_improve_worsen(
+        verdict=verdict,
+        risk_level=risk_level,
+        direction=direction,
+        exec_quality=exec_quality,
+        exec_mqs=exec_mqs,
+        exec_ews=exec_ews,
+        exec_status=exec_status,
+        event_active=event_active,
+        regime_assessment=regime_assessment,
+        conditions_flip=conditions_flip,
+        execution_snapshot=execution_snapshot,
+    )
 
     return {
         "version":                    "home_decision_v1",
