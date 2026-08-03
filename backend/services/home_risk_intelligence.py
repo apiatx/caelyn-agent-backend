@@ -158,7 +158,7 @@ def _read_rate_history() -> dict:
         from data.pg_storage import strategy_hist_read
         neon = strategy_hist_read(_DGS10_CACHE_KEY, 86400)
         if neon and isinstance(neon, list) and len(neon) >= 2:
-            return {"history": neon, "history_source": "strategy:hist:dgs10:1830 (Neon, <=24h stale)", "history_status": "stale"}
+            return {"history": neon, "history_source": "strategy:hist:dgs10:1830 (Neon fresh fallback)", "history_status": "available"}
     except Exception:
         pass
 
@@ -167,7 +167,7 @@ def _read_rate_history() -> dict:
         from data.pg_storage import strategy_hist_read
         neon = strategy_hist_read(_DGS10_CACHE_KEY, None)
         if neon and isinstance(neon, list) and len(neon) >= 2:
-            return {"history": neon, "history_source": "strategy:hist:dgs10:1830 (Neon, any-age stale)", "history_status": "stale"}
+            return {"history": neon, "history_source": "strategy:hist:dgs10:1830 (Neon stale fallback)", "history_status": "stale"}
     except Exception:
         pass
 
@@ -236,18 +236,18 @@ def _compute_yield_changes(history: list[dict], current_yield: float | None) -> 
 _VIXCLS_CACHE_KEY = "strategy:hist:vixcls:1830"
 
 
-def _read_vixcls_history() -> list[dict]:
+def _read_vixcls_history() -> dict:
     # 1. In-memory cache
     hit = cache.get(_VIXCLS_CACHE_KEY)
     if hit and isinstance(hit, list):
-        return hit
+        return {"history": hit, "history_source": "strategy:hist:vixcls:1830 (in-memory cache)", "history_status": "available"}
 
     # 2. Neon fresh fallback (max 24h)
     try:
         from data.pg_storage import strategy_hist_read
         neon = strategy_hist_read(_VIXCLS_CACHE_KEY, 86400)
         if neon and isinstance(neon, list):
-            return neon
+            return {"history": neon, "history_source": "strategy:hist:vixcls:1830 (Neon fresh fallback)", "history_status": "available"}
     except Exception:
         pass
 
@@ -256,11 +256,11 @@ def _read_vixcls_history() -> list[dict]:
         from data.pg_storage import strategy_hist_read
         neon = strategy_hist_read(_VIXCLS_CACHE_KEY, None)
         if neon and isinstance(neon, list):
-            return neon
+            return {"history": neon, "history_source": "strategy:hist:vixcls:1830 (Neon stale fallback)", "history_status": "stale"}
     except Exception:
         pass
 
-    return []
+    return {"history": [], "history_source": "strategy:hist:vixcls:1830", "history_status": "unavailable"}
 
 
 def _compute_vix_7d_return(vixcls: list[dict]) -> float | None:
@@ -967,9 +967,9 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
     rate_hist    = _safe(rate_hist, {})
     if isinstance(rate_hist, Exception):
         rate_hist = {"history": [], "history_source": "error", "history_status": "unavailable"}
-    vixcls_hist  = _safe(vixcls_hist, [])
+    vixcls_hist  = _safe(vixcls_hist, {})
     if isinstance(vixcls_hist, Exception):
-        vixcls_hist = []
+        vixcls_hist = {"history": [], "history_source": "error", "history_status": "unavailable"}
 
     breadth_score = sector_data.get("sector_breadth_1d")
 
@@ -1021,7 +1021,7 @@ async def build_home_risk_intelligence(macro_provider) -> dict:
     yc_status = rate_hist.get("history_status", "unavailable")
 
     # VIX 7-session return (real % change, not vix_min)
-    vix_7d_ret = _compute_vix_7d_return(vixcls_hist)
+    vix_7d_ret = _compute_vix_7d_return(vixcls_hist.get("history", []))
 
     # 4. Market snapshot
     market_snapshot = {

@@ -316,9 +316,11 @@ def test_rate_history_stale_fallback() -> None:
     # Ensure no in-memory data
     test_cache.delete(_DGS10_CACHE_KEY)
 
-    # No in-memory cache, Neon would return empty → any-age fallback tried
+    # Neon may have real data or not — either way, status is truthful
     result = _read_rate_history()
-    assert result["history_status"] in ("unavailable", "stale")
+    assert "history_status" in result
+    assert "history_source" in result
+    assert result["history_status"] in ("available", "stale", "unavailable")
     # No provider called, no fabricated data
     print("test_rate_history_stale_fallback PASSED")
 
@@ -329,7 +331,11 @@ def test_vixcls_history_stale_fallback() -> None:
 
     test_cache.delete(_VIXCLS_CACHE_KEY)
     result = _read_vixcls_history()
-    assert isinstance(result, list)
+    assert isinstance(result, dict)
+    assert "history" in result
+    assert "history_status" in result
+    assert "history_source" in result
+    assert result["history_status"] in ("available", "stale", "unavailable")
     print("test_vixcls_history_stale_fallback PASSED")
 
 
@@ -348,6 +354,99 @@ def test_yield_changes_from_stale_history() -> None:
     assert yc["change_5d_bps"] == -15.0, f"Should compute -15 bps from stale history, got {yc['change_5d_bps']}"
     assert yc["history_as_of"] is not None
     print("test_yield_changes_from_stale_history PASSED")
+
+
+def test_dgs10_fresh_neon_status_is_available() -> None:
+    """Fresh Neon fallback (<=24h) must have status=available, not stale."""
+    from unittest.mock import patch
+    from data.cache import cache as test_cache
+    from services.home_risk_intelligence import _read_rate_history, _DGS10_CACHE_KEY
+
+    test_cache.delete(_DGS10_CACHE_KEY)
+
+    mock_data = [
+        {"date": "2026-07-30", "value": 4.70},
+        {"date": "2026-07-31", "value": 4.76},
+    ]
+
+    with patch("data.pg_storage.strategy_hist_read") as mock_read:
+        mock_read.return_value = mock_data
+        result = _read_rate_history()
+        assert result["history_status"] == "available", \
+            f"Fresh Neon must be available, got: {result['history_status']}"
+        assert "fresh fallback" in result["history_source"]
+        assert mock_read.call_count == 1
+
+    test_cache.delete(_DGS10_CACHE_KEY)
+    print("test_dgs10_fresh_neon_status_is_available PASSED")
+
+
+def test_dgs10_stale_neon_status_is_stale() -> None:
+    """Any-age Neon fallback must have status=stale."""
+    from unittest.mock import patch
+    from data.cache import cache as test_cache
+    from services.home_risk_intelligence import _read_rate_history, _DGS10_CACHE_KEY
+
+    test_cache.delete(_DGS10_CACHE_KEY)
+
+    mock_data = [
+        {"date": "2026-07-20", "value": 4.60},
+        {"date": "2026-07-21", "value": 4.65},
+    ]
+
+    with patch("data.pg_storage.strategy_hist_read") as mock_read:
+        mock_read.side_effect = [None, mock_data]
+        result = _read_rate_history()
+        assert result["history_status"] == "stale", \
+            f"Any-age Neon must be stale, got: {result['history_status']}"
+        assert "stale fallback" in result["history_source"]
+        assert mock_read.call_count == 2
+
+    test_cache.delete(_DGS10_CACHE_KEY)
+    print("test_dgs10_stale_neon_status_is_stale PASSED")
+
+
+def test_dgs10_unavailable_status() -> None:
+    """All tiers empty -> status=unavailable, changes null."""
+    from unittest.mock import patch
+    from data.cache import cache as test_cache
+    from services.home_risk_intelligence import _read_rate_history, _DGS10_CACHE_KEY
+
+    test_cache.delete(_DGS10_CACHE_KEY)
+
+    with patch("data.pg_storage.strategy_hist_read", return_value=None):
+        result = _read_rate_history()
+        assert result["history_status"] == "unavailable"
+        assert result["history"] == []
+
+    from services.home_risk_intelligence import _compute_yield_changes
+    yc = _compute_yield_changes([], None)
+    assert yc["change_1d_bps"] is None
+    assert yc["history_status"] == "unavailable"
+
+    test_cache.delete(_DGS10_CACHE_KEY)
+    print("test_dgs10_unavailable_status PASSED")
+
+
+def test_vixcls_fresh_neon_status_is_available() -> None:
+    """Fresh VIXCLS Neon fallback must have status=available."""
+    from unittest.mock import patch
+    from data.cache import cache as test_cache
+    from services.home_risk_intelligence import _read_vixcls_history, _VIXCLS_CACHE_KEY
+
+    test_cache.delete(_VIXCLS_CACHE_KEY)
+
+    mock_data = [{"date": "2026-07-30", "value": 18.0}, {"date": "2026-07-31", "value": 19.0}]
+
+    with patch("data.pg_storage.strategy_hist_read") as mock_read:
+        mock_read.return_value = mock_data
+        result = _read_vixcls_history()
+        assert result["history_status"] == "available", \
+            f"Fresh VIXCLS Neon must be available, got: {result['history_status']}"
+        assert "fresh fallback" in result["history_source"]
+
+    test_cache.delete(_VIXCLS_CACHE_KEY)
+    print("test_vixcls_fresh_neon_status_is_available PASSED")
 
 
 # =============================================================================
@@ -778,6 +877,10 @@ if __name__ == "__main__":
     test_rate_history_stale_fallback()
     test_vixcls_history_stale_fallback()
     test_yield_changes_from_stale_history()
+    test_dgs10_fresh_neon_status_is_available()
+    test_dgs10_stale_neon_status_is_stale()
+    test_dgs10_unavailable_status()
+    test_vixcls_fresh_neon_status_is_available()
 
     # C5: Market-closed
     test_market_context_closed()
@@ -820,4 +923,4 @@ if __name__ == "__main__":
     test_position_size_with_event()
     test_lkg_fallback_no_mutation()
 
-    print("\nAll 50 tests PASSED")
+    print("\nAll 54 tests PASSED")
