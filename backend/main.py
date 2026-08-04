@@ -394,6 +394,7 @@ async def lifespan(app):
     # Timer starts at the very top so it captures the three lazy imports below
     # (insider/congressional/whale services) which can be slow on cold deployment.
     _lifespan_t0 = time.monotonic()
+    print("[STARTUP] lifespan entered — event loop free, healthcheck probe will respond 200 after yield")
     # ── Lazy-load services that pull in heavy deps (edgar, psycopg2 pool) ────
     # Keeping these out of module-level imports cuts cold-start by ~3-5s.
     # Routes are registered here before the yield so all endpoints are live.
