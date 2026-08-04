@@ -1,6 +1,6 @@
 {
-  "updated_at": "2026-08-03T22:55:31.968398+00:00",
-  "symbol_count": 449,
+  "updated_at": "2026-08-04T13:56:50.465269+00:00",
+  "symbol_count": 451,
   "results": {
     "AAOI": {
       "score": 46.1,
@@ -77,7 +77,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ACLS": {
       "score": 80.0,
@@ -154,20 +154,20 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ADEA": {
-      "score": 100.0,
+      "score": 77.5,
       "label": "S2-S3 Advance",
-      "reason": "Established advance. Price +12.8% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising. Vol 0.8\u00d7 avg.",
+      "reason": "Established advance. Price +8.2% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling. Vol 0.4\u00d7 avg.",
       "signals": {
-        "price_vs_30w_ma_pct": 12.76,
-        "ma_30w_slope_pct": 9.77,
-        "rs_vs_spy_trend": "rising",
-        "rs_vs_spy_8w_pct": 5.18,
-        "volume_ratio": 0.79,
+        "price_vs_30w_ma_pct": 8.18,
+        "ma_30w_slope_pct": 5.84,
+        "rs_vs_spy_trend": "falling",
+        "rs_vs_spy_8w_pct": -12.02,
+        "volume_ratio": 0.4,
         "weeks_above_30w_ma_of_8": 8,
-        "prior_26w_trend_pct": 44.62,
+        "prior_26w_trend_pct": 47.82,
         "breakout_watch": false,
         "danger_zone": false,
         "breadth_above_30w_ma_pct": null,
@@ -176,62 +176,62 @@
       "stage_confidence": "high",
       "stage_confidence_reason": "fmp_multi_year_history",
       "technical_metrics": {
-        "sma_20": 30.4195,
-        "sma_50": 29.9811,
-        "sma_200": 21.721,
-        "pct_vs_sma_20": -8.15,
-        "pct_vs_sma_50": -6.81,
-        "pct_vs_sma_200": 28.63,
-        "ma_stack": "bull",
+        "sma_20": 27.508,
+        "sma_50": 29.0176,
+        "sma_200": 22.2295,
+        "pct_vs_sma_20": 1.03,
+        "pct_vs_sma_50": -4.23,
+        "pct_vs_sma_200": 25.01,
+        "ma_stack": "mixed",
         "extension_risk": "pullback_buy_zone",
         "high_52w": 33.63,
         "low_52w": 11.74,
-        "pct_from_52w_high": -16.92,
-        "pct_from_52w_low": 137.99,
-        "range_position_52w": 74.0,
-        "high_20d": 33.0,
-        "high_50d": 33.63,
-        "breakout_signal": "failed_breakout",
-        "entry_zone": "50d_pullback",
-        "avg_volume_20d": 1779299.0,
-        "accumulation_days_20d": 3,
-        "distribution_days_20d": 3,
+        "pct_from_52w_high": -17.37,
+        "pct_from_52w_low": 136.71,
+        "range_position_52w": 73.3,
+        "high_20d": 32.05,
+        "high_50d": 33.0,
+        "breakout_signal": "no_setup",
+        "entry_zone": "20d_pullback",
+        "avg_volume_20d": 1298740.0,
+        "accumulation_days_20d": 2,
+        "distribution_days_20d": 2,
         "accumulation_distribution_score": 0,
         "accumulation_distribution_signal": "neutral",
-        "atr_14": 1.8524,
-        "atr_14_pct": 6.63,
-        "range_20d_pct": 25.3,
+        "atr_14": 1.6714,
+        "atr_14_pct": 6.01,
+        "range_20d_pct": 35.13,
         "squeeze_signal": "volatile",
-        "roc_20d": -12.47,
-        "roc_50d": -12.28,
+        "roc_20d": -15.61,
+        "roc_50d": -6.99,
         "momentum_trend": "negative",
         "technical_state": "pullback_entry",
-        "technical_timing_score": 70.0,
+        "technical_timing_score": 55.0,
         "missing_metric_reasons": []
       },
       "technical_state": "pullback_entry",
-      "technical_timing_score": 70.0,
+      "technical_timing_score": 55.0,
       "entry_family": "CONTINUATION",
-      "entry_state": "TRENDLINE_SUPPORT_TEST",
-      "entry_score": 70,
-      "entry_grade": "A",
+      "entry_state": "HIGH_BASE_COILING",
+      "entry_score": 20,
+      "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
-      "history_source": "canonical_tradier",
-      "bars_count": 2511,
-      "history_start_date": "2016-07-18",
-      "history_end_date": "2026-07-14",
+      "history_source": "canonical_tradier_reaction",
+      "bars_count": 2516,
+      "history_start_date": "2016-07-26",
+      "history_end_date": "2026-08-03",
       "has_ohlcv": true,
       "has_200d": true,
       "has_252d": true,
-      "stage_bar_count": 2511,
+      "stage_bar_count": 2516,
       "stage_years_available": 10.0,
       "stage_history_status": "available_5y",
-      "stage_history_source": "canonical_tradier",
+      "stage_history_source": "canonical_tradier_reaction",
       "stage_long_history_used": true,
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ADUR": {
       "score": 80.0,
@@ -308,7 +308,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AEHR": {
       "score": 80.0,
@@ -385,7 +385,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AEVA": {
       "score": 80.0,
@@ -462,35 +462,35 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AIM:FTC": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "AIM:ENSI": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "AIM:IQE": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "AIM:TRT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "AIR": {
       "score": 100.0,
@@ -567,7 +567,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ALAB": {
       "score": 80.0,
@@ -628,7 +628,7 @@
       "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 588,
       "history_start_date": "2024-03-20",
@@ -644,7 +644,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AKAM": {
       "score": 67.1,
@@ -721,7 +721,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ALGM": {
       "score": 58.0,
@@ -798,7 +798,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ALMU": {
       "score": 47.9,
@@ -859,7 +859,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 756,
       "history_start_date": "2022-11-16",
@@ -875,14 +875,14 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ALOY": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "AMBA": {
       "score": 63.7,
@@ -959,7 +959,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AMD": {
       "score": 100.0,
@@ -1036,7 +1036,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AME": {
       "score": 90.1,
@@ -1113,7 +1113,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AMKR": {
       "score": 57.4,
@@ -1170,11 +1170,11 @@
       },
       "technical_state": "neutral",
       "technical_timing_score": 50.0,
-      "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "REVERSAL_WATCH",
-      "entry_score": 20,
+      "entry_family": "CHASE_EXHAUSTION",
+      "entry_state": "FAILED_BREAKOUT",
+      "entry_score": 10,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier_reaction",
       "bars_count": 2515,
       "history_start_date": "2016-07-19",
@@ -1190,7 +1190,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AMPG": {
       "score": 100.0,
@@ -1251,7 +1251,7 @@
       "entry_state": "EXTREME_EXTENSION",
       "entry_score": 0,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2399,
       "history_start_date": "2016-07-18",
@@ -1267,7 +1267,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AMPX": {
       "score": 37.1,
@@ -1328,7 +1328,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 959,
       "history_start_date": "2022-09-15",
@@ -1344,20 +1344,20 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AMRC": {
-      "score": 2.6,
+      "score": 0.0,
       "label": "S4 Decline",
-      "reason": "Downtrend confirmed. Price -14.2% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "reason": "Downtrend confirmed. Price -19.6% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
       "signals": {
-        "price_vs_30w_ma_pct": -14.18,
-        "ma_30w_slope_pct": -2.83,
+        "price_vs_30w_ma_pct": -19.62,
+        "ma_30w_slope_pct": -3.44,
         "rs_vs_spy_trend": "falling",
-        "rs_vs_spy_8w_pct": -29.9,
-        "volume_ratio": 0.72,
-        "weeks_above_30w_ma_of_8": 1,
-        "prior_26w_trend_pct": -23.1,
+        "rs_vs_spy_8w_pct": -20.02,
+        "volume_ratio": 0.65,
+        "weeks_above_30w_ma_of_8": 0,
+        "prior_26w_trend_pct": -30.45,
         "breakout_watch": false,
         "danger_zone": false,
         "breadth_above_30w_ma_pct": null,
@@ -1366,34 +1366,34 @@
       "stage_confidence": "high",
       "stage_confidence_reason": "fmp_multi_year_history",
       "technical_metrics": {
-        "sma_20": 26.6705,
-        "sma_50": 29.4074,
-        "sma_200": 31.1676,
-        "pct_vs_sma_20": -6.26,
-        "pct_vs_sma_50": -14.99,
-        "pct_vs_sma_200": -19.79,
+        "sma_20": 23.3575,
+        "sma_50": 27.3712,
+        "sma_200": 30.339,
+        "pct_vs_sma_20": -2.69,
+        "pct_vs_sma_50": -16.96,
+        "pct_vs_sma_200": -25.08,
         "ma_stack": "bear",
         "extension_risk": "broken",
         "high_52w": 43.23,
         "low_52w": 15.87,
-        "pct_from_52w_high": -42.17,
-        "pct_from_52w_low": 57.53,
-        "range_position_52w": 33.4,
-        "high_20d": 28.94,
+        "pct_from_52w_high": -47.42,
+        "pct_from_52w_low": 43.23,
+        "range_position_52w": 25.1,
+        "high_20d": 27.05,
         "high_50d": 36.56,
         "breakout_signal": "failed_breakout",
         "entry_zone": "broken",
-        "avg_volume_20d": 548649.0,
+        "avg_volume_20d": 523602.0,
         "accumulation_days_20d": 1,
-        "distribution_days_20d": 2,
-        "accumulation_distribution_score": -1,
+        "distribution_days_20d": 3,
+        "accumulation_distribution_score": -2,
         "accumulation_distribution_signal": "neutral",
-        "atr_14": 1.6029,
-        "atr_14_pct": 6.41,
-        "range_20d_pct": 23.0,
-        "squeeze_signal": "coiling",
-        "roc_20d": -10.91,
-        "roc_50d": -15.51,
+        "atr_14": 1.7072,
+        "atr_14_pct": 7.51,
+        "range_20d_pct": 41.95,
+        "squeeze_signal": "volatile",
+        "roc_20d": -17.64,
+        "roc_50d": -31.18,
         "momentum_trend": "negative",
         "technical_state": "broken",
         "technical_timing_score": 0.0,
@@ -1406,22 +1406,22 @@
       "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
-      "history_source": "canonical_tradier",
-      "bars_count": 2511,
-      "history_start_date": "2016-07-18",
-      "history_end_date": "2026-07-14",
+      "history_source": "canonical_tradier_reaction",
+      "bars_count": 2516,
+      "history_start_date": "2016-07-26",
+      "history_end_date": "2026-08-03",
       "has_ohlcv": true,
       "has_200d": true,
       "has_252d": true,
-      "stage_bar_count": 2511,
+      "stage_bar_count": 2516,
       "stage_years_available": 10.0,
       "stage_history_status": "available_5y",
-      "stage_history_source": "canonical_tradier",
+      "stage_history_source": "canonical_tradier_reaction",
       "stage_long_history_used": true,
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ANET": {
       "score": 100.0,
@@ -1498,7 +1498,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AMSC": {
       "score": 46.9,
@@ -1559,7 +1559,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -1575,7 +1575,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AOSL": {
       "score": 80.0,
@@ -1636,7 +1636,7 @@
       "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -1652,7 +1652,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "APH": {
       "score": 81.2,
@@ -1729,7 +1729,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "APLD": {
       "score": 26.2,
@@ -1806,7 +1806,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ARM": {
       "score": 80.0,
@@ -1867,7 +1867,7 @@
       "entry_state": "LOW_BASE_COILING",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier_reaction",
       "bars_count": 721,
       "history_start_date": "2023-09-14",
@@ -1883,7 +1883,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ARRY": {
       "score": 1.9,
@@ -1960,7 +1960,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ASPI": {
       "score": 9.4,
@@ -2021,7 +2021,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 919,
       "history_start_date": "2022-11-10",
@@ -2037,7 +2037,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ASTS": {
       "score": 28.7,
@@ -2098,7 +2098,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1637,
       "history_start_date": "2019-11-01",
@@ -2114,21 +2114,21 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AIM:VLX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "AMS:BESI": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "ASYS": {
       "score": 80.0,
@@ -2205,7 +2205,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ATOM": {
       "score": 79.5,
@@ -2282,21 +2282,21 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ASX:AXE": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "ASX:EOS": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "AUR": {
       "score": 100.0,
@@ -2373,7 +2373,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AVAV": {
       "score": 0.0,
@@ -2450,14 +2450,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AVEX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "AXTI": {
       "score": 52.3,
@@ -2514,11 +2514,11 @@
       },
       "technical_state": "extended",
       "technical_timing_score": 45.0,
-      "entry_family": "PRE_MOVE",
-      "entry_state": "LOW_BASE_FORMING",
+      "entry_family": "BROKEN_OR_UNCLEAR",
+      "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier_reaction",
       "bars_count": 2518,
       "history_start_date": "2016-07-25",
@@ -2534,7 +2534,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "BB": {
       "score": 100.0,
@@ -2611,7 +2611,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "BE": {
       "score": 41.2,
@@ -2688,7 +2688,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "BKSY": {
       "score": 40.7,
@@ -2749,7 +2749,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1639,
       "history_start_date": "2019-12-20",
@@ -2765,7 +2765,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "BTDR": {
       "score": 59.9,
@@ -2842,7 +2842,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "BWA": {
       "score": 80.0,
@@ -2919,7 +2919,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "BZAI": {
       "score": 0.0,
@@ -2996,7 +2996,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CAMT": {
       "score": 45.2,
@@ -3073,14 +3073,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CBRS": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "CEG": {
       "score": 2.6,
@@ -3157,7 +3157,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CEVA": {
       "score": 100.0,
@@ -3234,7 +3234,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CGNX": {
       "score": 90.0,
@@ -3311,7 +3311,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CIEN": {
       "score": 80.0,
@@ -3388,7 +3388,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CIFR": {
       "score": 77.3,
@@ -3465,7 +3465,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CLFD": {
       "score": 58.8,
@@ -3542,7 +3542,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "COHR": {
       "score": 77.3,
@@ -3619,7 +3619,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CLSK": {
       "score": 65.1,
@@ -3696,7 +3696,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CODA": {
       "score": 34.2,
@@ -3773,7 +3773,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CORZ": {
       "score": 64.0,
@@ -3850,7 +3850,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "COHU": {
       "score": 80.0,
@@ -3927,7 +3927,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CPSH": {
       "score": 48.1,
@@ -4004,7 +4004,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CRDO": {
       "score": 90.0,
@@ -4081,7 +4081,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CRCL": {
       "score": 1.9,
@@ -4158,7 +4158,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CRML": {
       "score": 19.3,
@@ -4235,7 +4235,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CRUS": {
       "score": 50.4,
@@ -4312,7 +4312,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CSIQ": {
       "score": 1.2,
@@ -4389,7 +4389,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "DGXX": {
       "score": 69.2,
@@ -4466,7 +4466,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "DNN": {
       "score": 36.7,
@@ -4543,14 +4543,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ASX:EQR": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "DRS": {
       "score": 89.9,
@@ -4627,7 +4627,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "DVLT": {
       "score": 0.0,
@@ -4704,7 +4704,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ELVA": {
       "score": 42.8,
@@ -4781,7 +4781,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ENLT": {
       "score": 80.0,
@@ -4858,7 +4858,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ENPH": {
       "score": 39.4,
@@ -4935,7 +4935,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ENTG": {
       "score": 87.5,
@@ -5012,7 +5012,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ENVX": {
       "score": 5.6,
@@ -5089,7 +5089,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "EOSE": {
       "score": 0.0,
@@ -5166,35 +5166,35 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CSE:FTEL": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "CSE:MAXX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "EPA:ALRIB": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "EPA:MRN": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "EQIX": {
       "score": 84.1,
@@ -5271,7 +5271,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "EQT": {
       "score": 2.6,
@@ -5348,7 +5348,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ETN": {
       "score": 90.7,
@@ -5425,7 +5425,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ESLT": {
       "score": 47.5,
@@ -5502,49 +5502,49 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "EPA:SOI": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "EPA:XFAB": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "ETR:AIXA": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "ETR:JEN": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "ETR:LPK": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "ETR:P4O": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "FCEL": {
       "score": 90.0,
@@ -5621,14 +5621,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "FJET": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "FLNC": {
       "score": 5.6,
@@ -5705,7 +5705,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "FLY": {
       "score": 37.5,
@@ -5782,7 +5782,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "FN": {
       "score": 32.8,
@@ -5859,7 +5859,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "FORM": {
       "score": 46.2,
@@ -5936,21 +5936,21 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ETR:SMHN": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "ETR:TPE": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "FRMI": {
       "score": 9.4,
@@ -6030,7 +6030,7 @@
       "stage_data_depth_confidence": 0.25,
       "stage_data_limitation_reason": "no_200d_tradier_path",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "FSLR": {
       "score": 11.6,
@@ -6107,7 +6107,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "FTAI": {
       "score": 37.5,
@@ -6184,7 +6184,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "GFS": {
       "score": 80.0,
@@ -6261,7 +6261,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "GILT": {
       "score": 19.7,
@@ -6338,7 +6338,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "GLW": {
       "score": 41.2,
@@ -6415,7 +6415,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "GLXY": {
       "score": 33.3,
@@ -6492,14 +6492,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ETR:WAF": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "GNRC": {
       "score": 42.5,
@@ -6576,7 +6576,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "GSIT": {
       "score": 3.8,
@@ -6653,7 +6653,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "HIMX": {
       "score": 80.0,
@@ -6730,7 +6730,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "HLIT": {
       "score": 49.2,
@@ -6807,7 +6807,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "HNRG": {
       "score": 15.0,
@@ -6884,7 +6884,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "HUT": {
       "score": 80.0,
@@ -6961,7 +6961,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "HYLN": {
       "score": 80.0,
@@ -7038,20 +7038,20 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ICHR": {
-      "score": 100.0,
-      "label": "S3 Momentum",
-      "reason": "Extended momentum. Price +64.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising. Vol 1.2\u00d7 avg.",
+      "score": 80.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +25.7% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling. Vol 0.6\u00d7 avg.",
       "signals": {
-        "price_vs_30w_ma_pct": 63.95,
-        "ma_30w_slope_pct": 22.39,
-        "rs_vs_spy_trend": "rising",
-        "rs_vs_spy_8w_pct": 33.23,
-        "volume_ratio": 1.17,
+        "price_vs_30w_ma_pct": 25.72,
+        "ma_30w_slope_pct": 15.45,
+        "rs_vs_spy_trend": "falling",
+        "rs_vs_spy_8w_pct": -18.02,
+        "volume_ratio": 0.55,
         "weeks_above_30w_ma_of_8": 8,
-        "prior_26w_trend_pct": 201.88,
+        "prior_26w_trend_pct": 71.54,
         "breakout_watch": false,
         "danger_zone": false,
         "breadth_above_30w_ma_pct": null,
@@ -7060,62 +7060,62 @@
       "stage_confidence": "high",
       "stage_confidence_reason": "fmp_multi_year_history",
       "technical_metrics": {
-        "sma_20": 95.637,
-        "sma_50": 81.1447,
-        "sma_200": 44.8074,
-        "pct_vs_sma_20": -0.82,
-        "pct_vs_sma_50": 16.89,
-        "pct_vs_sma_200": 111.68,
+        "sma_20": 87.802,
+        "sma_50": 83.188,
+        "sma_200": 48.2388,
+        "pct_vs_sma_20": -8.62,
+        "pct_vs_sma_50": -3.56,
+        "pct_vs_sma_200": 66.32,
         "ma_stack": "bull",
         "extension_risk": "pullback_buy_zone",
         "high_52w": 112.28,
         "low_52w": 14.06,
-        "pct_from_52w_high": -15.52,
-        "pct_from_52w_low": 574.61,
-        "range_position_52w": 82.3,
-        "high_20d": 112.28,
+        "pct_from_52w_high": -28.54,
+        "pct_from_52w_low": 470.63,
+        "range_position_52w": 67.4,
+        "high_20d": 111.77,
         "high_50d": 112.28,
         "breakout_signal": "failed_breakout",
-        "entry_zone": "20d_pullback",
-        "avg_volume_20d": 1344248.0,
+        "entry_zone": "50d_pullback",
+        "avg_volume_20d": 1128847.0,
         "accumulation_days_20d": 2,
         "distribution_days_20d": 3,
         "accumulation_distribution_score": -1,
         "accumulation_distribution_signal": "neutral",
-        "atr_14": 10.2803,
-        "atr_14_pct": 10.84,
-        "range_20d_pct": 33.71,
-        "squeeze_signal": "expansion",
-        "roc_20d": 9.27,
-        "roc_50d": 43.78,
-        "momentum_trend": "positive",
+        "atr_14": 9.9478,
+        "atr_14_pct": 12.4,
+        "range_20d_pct": 64.6,
+        "squeeze_signal": "volatile",
+        "roc_20d": -28.54,
+        "roc_50d": 9.5,
+        "momentum_trend": "negative",
         "technical_state": "pullback_entry",
-        "technical_timing_score": 88.0,
+        "technical_timing_score": 70.0,
         "missing_metric_reasons": []
       },
       "technical_state": "pullback_entry",
-      "technical_timing_score": 88.0,
+      "technical_timing_score": 70.0,
       "entry_family": "CHASE_EXHAUSTION",
-      "entry_state": "EXTREME_EXTENSION",
-      "entry_score": 0,
+      "entry_state": "FAILED_BREAKOUT",
+      "entry_score": 2,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
-      "history_source": "canonical_tradier",
-      "bars_count": 2409,
+      "history_source": "canonical_tradier_reaction",
+      "bars_count": 2420,
       "history_start_date": "2016-12-09",
-      "history_end_date": "2026-07-14",
+      "history_end_date": "2026-08-03",
       "has_ohlcv": true,
       "has_200d": true,
       "has_252d": true,
-      "stage_bar_count": 2409,
+      "stage_bar_count": 2420,
       "stage_years_available": 9.6,
       "stage_history_status": "available_5y",
-      "stage_history_source": "canonical_tradier",
+      "stage_history_source": "canonical_tradier_reaction",
       "stage_long_history_used": true,
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "IMSR": {
       "score": 3.8,
@@ -7192,7 +7192,7 @@
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "INDI": {
       "score": 65.8,
@@ -7269,21 +7269,21 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "INFQ": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "FRA:APR": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "INTC": {
       "score": 80.0,
@@ -7360,7 +7360,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "INTT": {
       "score": 76.2,
@@ -7437,7 +7437,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "IONQ": {
       "score": 14.5,
@@ -7514,7 +7514,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "INV": {
       "score": 26.1,
@@ -7591,7 +7591,7 @@
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "IPGP": {
       "score": 51.3,
@@ -7668,7 +7668,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "IPI": {
       "score": 49.7,
@@ -7745,7 +7745,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "IPWR": {
       "score": 68.8,
@@ -7822,14 +7822,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "FRA:KLA": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "IPX": {
       "score": 1.9,
@@ -7906,7 +7906,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "JOBY": {
       "score": 1.9,
@@ -7983,7 +7983,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "IREN": {
       "score": 14.2,
@@ -8060,7 +8060,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "KEYS": {
       "score": 80.0,
@@ -8137,7 +8137,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "KLAC": {
       "score": 74.1,
@@ -8214,7 +8214,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "KEEL": {
       "score": 80.0,
@@ -8291,7 +8291,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "KLIC": {
       "score": 100.0,
@@ -8368,7 +8368,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "KRMN": {
       "score": 0.0,
@@ -8445,7 +8445,7 @@
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "KTOS": {
       "score": 0.0,
@@ -8522,7 +8522,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "KOPN": {
       "score": 80.0,
@@ -8599,7 +8599,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "LAES": {
       "score": 0.0,
@@ -8676,7 +8676,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "KULR": {
       "score": 22.1,
@@ -8753,7 +8753,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "LAC": {
       "score": 1.9,
@@ -8830,7 +8830,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "LITE": {
       "score": 80.0,
@@ -8907,7 +8907,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "LASR": {
       "score": 80.0,
@@ -8984,7 +8984,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "LIDR": {
       "score": 0.0,
@@ -9061,7 +9061,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "LOGI": {
       "score": 71.0,
@@ -9138,42 +9138,42 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "KRX:000660": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "LON:0RPO": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "LON:0ABT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "LON:CWR": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "LON:QQ": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "LPTH": {
       "score": 47.6,
@@ -9250,7 +9250,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "LSCC": {
       "score": 80.0,
@@ -9327,7 +9327,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "LUNR": {
       "score": 37.5,
@@ -9404,7 +9404,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "LWLG": {
       "score": 41.6,
@@ -9481,7 +9481,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "MARA": {
       "score": 80.0,
@@ -9558,7 +9558,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "MEI": {
       "score": 100.0,
@@ -9635,7 +9635,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "MDA": {
       "score": 76.7,
@@ -9712,7 +9712,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "MCHP": {
       "score": 78.4,
@@ -9789,7 +9789,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "MPWR": {
       "score": 64.4,
@@ -9866,7 +9866,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "MP": {
       "score": 5.2,
@@ -9943,7 +9943,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "MNTS": {
       "score": 7.5,
@@ -10020,7 +10020,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "MRAM": {
       "score": 74.4,
@@ -10097,7 +10097,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "MRVL": {
       "score": 100.0,
@@ -10174,7 +10174,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "MTSI": {
       "score": 79.2,
@@ -10251,7 +10251,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "MX": {
       "score": 39.4,
@@ -10328,7 +10328,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "MU": {
       "score": 90.0,
@@ -10405,7 +10405,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "MXL": {
       "score": 80.0,
@@ -10482,7 +10482,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NNE": {
       "score": 3.8,
@@ -10559,7 +10559,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NBIS": {
       "score": 80.0,
@@ -10636,7 +10636,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NNBR": {
       "score": 100.0,
@@ -10713,7 +10713,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NOK": {
       "score": 48.6,
@@ -10790,7 +10790,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NTAP": {
       "score": 90.0,
@@ -10867,7 +10867,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NUAI": {
       "score": 42.4,
@@ -10944,7 +10944,7 @@
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NRGV": {
       "score": 5.6,
@@ -11021,7 +11021,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NVEC": {
       "score": 100.0,
@@ -11098,7 +11098,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NVTS": {
       "score": 37.5,
@@ -11175,7 +11175,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NVT": {
       "score": 80.0,
@@ -11252,7 +11252,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NXT": {
       "score": 33.8,
@@ -11329,7 +11329,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NXXT": {
       "score": 0.0,
@@ -11406,20 +11406,20 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ON": {
-      "score": 80.0,
-      "label": "S2-S3 Advance",
-      "reason": "Established advance. Price +14.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling. Vol 1.1\u00d7 avg.",
+      "score": 50.4,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -4.8% vs flat 30-week MA. Prior 26w: +11%. RS vs SPY: falling. No breakout signal yet.",
       "signals": {
-        "price_vs_30w_ma_pct": 14.41,
-        "ma_30w_slope_pct": 6.8,
+        "price_vs_30w_ma_pct": -4.77,
+        "ma_30w_slope_pct": 4.69,
         "rs_vs_spy_trend": "falling",
-        "rs_vs_spy_8w_pct": -21.68,
-        "volume_ratio": 1.06,
-        "weeks_above_30w_ma_of_8": 8,
-        "prior_26w_trend_pct": 51.23,
+        "rs_vs_spy_8w_pct": -33.28,
+        "volume_ratio": 0.46,
+        "weeks_above_30w_ma_of_8": 6,
+        "prior_26w_trend_pct": 11.34,
         "breakout_watch": false,
         "danger_zone": false,
         "breadth_above_30w_ma_pct": null,
@@ -11428,34 +11428,34 @@
       "stage_confidence": "high",
       "stage_confidence_reason": "fmp_multi_year_history",
       "technical_metrics": {
-        "sma_20": 103.945,
-        "sma_50": 110.318,
-        "sma_200": 72.553,
-        "pct_vs_sma_20": -9.83,
-        "pct_vs_sma_50": -15.04,
-        "pct_vs_sma_200": 29.19,
+        "sma_20": 89.4215,
+        "sma_50": 105.7022,
+        "sma_200": 74.5547,
+        "pct_vs_sma_20": -10.09,
+        "pct_vs_sma_50": -23.94,
+        "pct_vs_sma_200": 7.84,
         "ma_stack": "mixed",
         "extension_risk": "healthy",
         "high_52w": 133.93,
         "low_52w": 44.9,
-        "pct_from_52w_high": -30.02,
-        "pct_from_52w_low": 108.75,
-        "range_position_52w": 54.8,
-        "high_20d": 131.55,
+        "pct_from_52w_high": -39.97,
+        "pct_from_52w_low": 79.06,
+        "range_position_52w": 39.9,
+        "high_20d": 97.87,
         "high_50d": 133.93,
         "breakout_signal": "failed_breakout",
         "entry_zone": "neutral",
-        "avg_volume_20d": 14201274.0,
+        "avg_volume_20d": 10149319.0,
         "accumulation_days_20d": 2,
-        "distribution_days_20d": 2,
-        "accumulation_distribution_score": 0,
+        "distribution_days_20d": 3,
+        "accumulation_distribution_score": -1,
         "accumulation_distribution_signal": "neutral",
-        "atr_14": 8.0225,
-        "atr_14_pct": 8.56,
-        "range_20d_pct": 49.03,
-        "squeeze_signal": "volatile",
-        "roc_20d": -19.74,
-        "roc_50d": -7.02,
+        "atr_14": 5.2227,
+        "atr_14_pct": 6.5,
+        "range_20d_pct": 29.64,
+        "squeeze_signal": "coiling",
+        "roc_20d": -14.96,
+        "roc_50d": -28.92,
         "momentum_trend": "negative",
         "technical_state": "neutral",
         "technical_timing_score": 50.0,
@@ -11463,27 +11463,27 @@
       },
       "technical_state": "neutral",
       "technical_timing_score": 50.0,
-      "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "NO_CLEAR_ENTRY",
-      "entry_score": 20,
+      "entry_family": "CHASE_EXHAUSTION",
+      "entry_state": "FAILED_BREAKOUT",
+      "entry_score": 10,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
-      "history_source": "canonical_tradier",
-      "bars_count": 2511,
-      "history_start_date": "2016-07-18",
-      "history_end_date": "2026-07-14",
+      "history_source": "canonical_tradier_reaction",
+      "bars_count": 2516,
+      "history_start_date": "2016-07-26",
+      "history_end_date": "2026-08-03",
       "has_ohlcv": true,
       "has_200d": true,
       "has_252d": true,
-      "stage_bar_count": 2511,
+      "stage_bar_count": 2516,
       "stage_years_available": 10.0,
       "stage_history_status": "available_5y",
-      "stage_history_source": "canonical_tradier",
+      "stage_history_source": "canonical_tradier_reaction",
       "stage_long_history_used": true,
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "OKLO": {
       "score": 0.0,
@@ -11560,7 +11560,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "OCC": {
       "score": 100.0,
@@ -11637,7 +11637,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ONDS": {
       "score": 3.8,
@@ -11714,7 +11714,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "OPTX": {
       "score": 72.7,
@@ -11791,7 +11791,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ONTO": {
       "score": 100.0,
@@ -11868,7 +11868,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ORA": {
       "score": 25.3,
@@ -11945,7 +11945,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "OSS": {
       "score": 80.0,
@@ -12022,35 +12022,35 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "OSL:NAPA": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "OSL:SMOP": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "OTC:ATEYY": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "OTC:CGEH": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "OUST": {
       "score": 80.0,
@@ -12127,7 +12127,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "P": {
       "score": 60.0,
@@ -12204,7 +12204,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "PATH": {
       "score": 38.6,
@@ -12281,7 +12281,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "PDFS": {
       "score": 100.0,
@@ -12358,7 +12358,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "PH": {
       "score": 84.6,
@@ -12435,7 +12435,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "PENG": {
       "score": 100.0,
@@ -12512,7 +12512,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "PKE": {
       "score": 100.0,
@@ -12589,7 +12589,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "PI": {
       "score": 57.6,
@@ -12666,7 +12666,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "PLAB": {
       "score": 19.4,
@@ -12743,7 +12743,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "PL": {
       "score": 39.4,
@@ -12820,7 +12820,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "POET": {
       "score": 65.6,
@@ -12897,7 +12897,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "PLUG": {
       "score": 44.2,
@@ -12974,7 +12974,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "POWI": {
       "score": 80.0,
@@ -13051,84 +13051,84 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "POWL": {
-      "score": 79.1,
-      "label": "S2-S3 Advance",
-      "reason": "Established advance. Price +9.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling. Vol 1.2\u00d7 avg.",
+      "score": 55.1,
+      "label": "S2 Breakout",
+      "reason": "Confirmed breakout from base. Price -2.1% above 30-week MA (rising slope). Prior 26w: +13%. RS vs SPY: falling. Vol 0.8\u00d7 avg.",
       "signals": {
-        "price_vs_30w_ma_pct": 9.39,
-        "ma_30w_slope_pct": 9.31,
+        "price_vs_30w_ma_pct": -2.09,
+        "ma_30w_slope_pct": 6.84,
         "rs_vs_spy_trend": "falling",
-        "rs_vs_spy_8w_pct": -17.02,
-        "volume_ratio": 1.18,
-        "weeks_above_30w_ma_of_8": 8,
-        "prior_26w_trend_pct": 68.14,
-        "breakout_watch": false,
+        "rs_vs_spy_8w_pct": -25.46,
+        "volume_ratio": 0.78,
+        "weeks_above_30w_ma_of_8": 6,
+        "prior_26w_trend_pct": 12.66,
+        "breakout_watch": true,
         "danger_zone": false,
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_confidence": "high",
+      "stage_confidence": "medium",
       "stage_confidence_reason": "fmp_multi_year_history",
       "technical_metrics": {
-        "sma_20": 269.5745,
-        "sma_50": 281.8966,
-        "sma_200": 182.6238,
-        "pct_vs_sma_20": -13.1,
-        "pct_vs_sma_50": -16.9,
-        "pct_vs_sma_200": 28.27,
+        "sma_20": 229.3085,
+        "sma_50": 264.6204,
+        "sma_200": 189.1835,
+        "pct_vs_sma_20": -4.18,
+        "pct_vs_sma_50": -16.97,
+        "pct_vs_sma_200": 16.14,
         "ma_stack": "mixed",
-        "extension_risk": "healthy",
+        "extension_risk": "pullback_buy_zone",
         "high_52w": 322.05,
-        "low_52w": 70.1867,
-        "pct_from_52w_high": -27.26,
-        "pct_from_52w_low": 233.75,
-        "range_position_52w": 65.1,
-        "high_20d": 309.2,
-        "high_50d": 322.05,
+        "low_52w": 75.8867,
+        "pct_from_52w_high": -31.77,
+        "pct_from_52w_low": 189.54,
+        "range_position_52w": 58.4,
+        "high_20d": 264.86,
+        "high_50d": 309.2,
         "breakout_signal": "failed_breakout",
-        "entry_zone": "neutral",
-        "avg_volume_20d": 873478.0,
+        "entry_zone": "20d_pullback",
+        "avg_volume_20d": 779280.0,
         "accumulation_days_20d": 1,
-        "distribution_days_20d": 3,
-        "accumulation_distribution_score": -2,
+        "distribution_days_20d": 4,
+        "accumulation_distribution_score": -3,
         "accumulation_distribution_signal": "neutral",
-        "atr_14": 16.8591,
-        "atr_14_pct": 7.2,
-        "range_20d_pct": 40.15,
+        "atr_14": 15.0718,
+        "atr_14_pct": 6.86,
+        "range_20d_pct": 41.79,
         "squeeze_signal": "volatile",
-        "roc_20d": -20.53,
-        "roc_50d": -15.52,
+        "roc_20d": -23.27,
+        "roc_50d": -24.92,
         "momentum_trend": "negative",
-        "technical_state": "neutral",
-        "technical_timing_score": 50.0,
+        "technical_state": "pullback_entry",
+        "technical_timing_score": 55.0,
         "missing_metric_reasons": []
       },
-      "technical_state": "neutral",
-      "technical_timing_score": 50.0,
+      "technical_state": "pullback_entry",
+      "technical_timing_score": 55.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
       "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 20,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
-      "history_source": "canonical_tradier",
-      "bars_count": 2511,
-      "history_start_date": "2016-07-18",
-      "history_end_date": "2026-07-14",
+      "history_source": "canonical_tradier_reaction",
+      "bars_count": 2516,
+      "history_start_date": "2016-07-26",
+      "history_end_date": "2026-08-03",
       "has_ohlcv": true,
       "has_200d": true,
       "has_252d": true,
-      "stage_bar_count": 2511,
+      "stage_bar_count": 2516,
       "stage_years_available": 10.0,
       "stage_history_status": "available_5y",
-      "stage_history_source": "canonical_tradier",
+      "stage_history_source": "canonical_tradier_reaction",
       "stage_long_history_used": true,
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "Q": {
       "score": 78.1,
@@ -13208,7 +13208,7 @@
       "stage_data_depth_confidence": 0.25,
       "stage_data_limitation_reason": "insufficient_weekly_bars_for_stage",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "PPSI": {
       "score": 10.0,
@@ -13285,7 +13285,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "QS": {
       "score": 0.0,
@@ -13362,7 +13362,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "QRVO": {
       "score": 55.8,
@@ -13439,21 +13439,21 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "OTC:HGRAF": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "OTC:KRKNF": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "RDW": {
       "score": 42.2,
@@ -13530,7 +13530,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "QUIK": {
       "score": 80.0,
@@ -13607,7 +13607,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "RGTI": {
       "score": 5.6,
@@ -13684,7 +13684,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "RKLB": {
       "score": 46.6,
@@ -13761,7 +13761,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ROK": {
       "score": 100.0,
@@ -13838,7 +13838,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "RMBS": {
       "score": 29.7,
@@ -13915,7 +13915,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "RUN": {
       "score": 1.9,
@@ -13992,7 +13992,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SANM": {
       "score": 46.8,
@@ -14069,7 +14069,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SATL": {
       "score": 39.4,
@@ -14146,7 +14146,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SATS": {
       "score": null,
@@ -14230,7 +14230,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SEI": {
       "score": 90.0,
@@ -14307,14 +14307,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SHAZ": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "SES": {
       "score": 0.0,
@@ -14391,7 +14391,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SHLS": {
       "score": 80.0,
@@ -14468,7 +14468,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SHMD": {
       "score": 22.1,
@@ -14545,7 +14545,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SILC": {
       "score": 80.0,
@@ -14622,7 +14622,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SIDU": {
       "score": 37.5,
@@ -14699,7 +14699,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SIMO": {
       "score": 80.0,
@@ -14776,7 +14776,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SITM": {
       "score": 80.0,
@@ -14853,7 +14853,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SKYT": {
       "score": 70.1,
@@ -14930,7 +14930,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SLAB": {
       "score": 89.7,
@@ -15007,7 +15007,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SLNH": {
       "score": 11.7,
@@ -15084,7 +15084,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SMCI": {
       "score": 8.5,
@@ -15238,7 +15238,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SMTC": {
       "score": 80.0,
@@ -15315,7 +15315,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SNDK": {
       "score": 100.0,
@@ -15392,7 +15392,7 @@
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SPIR": {
       "score": 61.2,
@@ -15469,7 +15469,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SSYS": {
       "score": 7.1,
@@ -15546,7 +15546,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "STEM": {
       "score": 0.0,
@@ -15623,7 +15623,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "STM": {
       "score": 90.0,
@@ -15700,35 +15700,35 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "STO:ACCON": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "STO:GAPW.B": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "STO:HTRO": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "STO:SILEX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "STX": {
       "score": 80.0,
@@ -15805,7 +15805,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SVCO": {
       "score": 100.0,
@@ -15882,7 +15882,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SYNA": {
       "score": 80.0,
@@ -15959,7 +15959,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SYM": {
       "score": 0.0,
@@ -16036,7 +16036,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TE": {
       "score": 52.7,
@@ -16113,7 +16113,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SYPR": {
       "score": 17.5,
@@ -16190,7 +16190,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TEL": {
       "score": 7.1,
@@ -16267,7 +16267,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TER": {
       "score": 55.1,
@@ -16344,7 +16344,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TOYO": {
       "score": 22.3,
@@ -16421,35 +16421,35 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SWX:HUBN": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "STO:SIVE": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "TPE:3661": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "TPE:8271": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "TRMB": {
       "score": 0.0,
@@ -16526,7 +16526,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TPL": {
       "score": 78.0,
@@ -16603,7 +16603,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TRT": {
       "score": 80.0,
@@ -16680,7 +16680,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TSAT": {
       "score": 57.6,
@@ -16757,7 +16757,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TSEM": {
       "score": 90.0,
@@ -16834,7 +16834,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TSM": {
       "score": 90.0,
@@ -16911,63 +16911,63 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TPEX:6643": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "TSX:MAL": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "TSX:HPS.A": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "TSX:FLT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "TSXV:AAG": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "TSX:VNP": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "TSXV:XBOT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "TSX:MOLY": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "TXN": {
       "score": 90.0,
@@ -17044,7 +17044,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TYGO": {
       "score": 33.8,
@@ -17121,84 +17121,84 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TTI": {
-      "score": 49.5,
-      "label": "S1-2 Watch",
-      "reason": "Base tightening. Price -3.2% vs 30-week MA (rising slope). Prior 26w: -16%. RS vs SPY: falling. Watch for confirmed breakout. Vol 1.0\u00d7 avg.",
+      "score": 3.8,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -18.9% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
       "signals": {
-        "price_vs_30w_ma_pct": -3.17,
-        "ma_30w_slope_pct": 1.76,
+        "price_vs_30w_ma_pct": -18.9,
+        "ma_30w_slope_pct": -1.61,
         "rs_vs_spy_trend": "falling",
-        "rs_vs_spy_8w_pct": -6.72,
-        "volume_ratio": 1.01,
-        "weeks_above_30w_ma_of_8": 4,
-        "prior_26w_trend_pct": -16.03,
-        "breakout_watch": true,
+        "rs_vs_spy_8w_pct": -23.21,
+        "volume_ratio": 0.73,
+        "weeks_above_30w_ma_of_8": 2,
+        "prior_26w_trend_pct": -28.7,
+        "breakout_watch": false,
         "danger_zone": false,
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_confidence": "medium",
+      "stage_confidence": "high",
       "stage_confidence_reason": "fmp_multi_year_history",
       "technical_metrics": {
-        "sma_20": 10.001,
-        "sma_50": 10.1034,
-        "sma_200": 9.1047,
-        "pct_vs_sma_20": -5.21,
-        "pct_vs_sma_50": -6.17,
-        "pct_vs_sma_200": 4.12,
+        "sma_20": 8.716,
+        "sma_50": 9.6832,
+        "sma_200": 9.2373,
+        "pct_vs_sma_20": -10.51,
+        "pct_vs_sma_50": -19.45,
+        "pct_vs_sma_200": -15.56,
         "ma_stack": "mixed",
-        "extension_risk": "pullback_buy_zone",
+        "extension_risk": "broken",
         "high_52w": 12.32,
-        "low_52w": 3.23,
-        "pct_from_52w_high": -23.05,
-        "pct_from_52w_low": 193.5,
-        "range_position_52w": 68.8,
-        "high_20d": 11.38,
+        "low_52w": 3.82,
+        "pct_from_52w_high": -36.69,
+        "pct_from_52w_low": 104.19,
+        "range_position_52w": 46.8,
+        "high_20d": 10.25,
         "high_50d": 11.38,
         "breakout_signal": "failed_breakout",
-        "entry_zone": "20d_pullback",
-        "avg_volume_20d": 1879483.0,
-        "accumulation_days_20d": 3,
-        "distribution_days_20d": 0,
-        "accumulation_distribution_score": 3,
-        "accumulation_distribution_signal": "accumulation",
-        "atr_14": 0.5496,
-        "atr_14_pct": 5.8,
-        "range_20d_pct": 28.43,
+        "entry_zone": "broken",
+        "avg_volume_20d": 1713646.0,
+        "accumulation_days_20d": 1,
+        "distribution_days_20d": 3,
+        "accumulation_distribution_score": -2,
+        "accumulation_distribution_signal": "neutral",
+        "atr_14": 0.4999,
+        "atr_14_pct": 6.41,
+        "range_20d_pct": 57.44,
         "squeeze_signal": "volatile",
-        "roc_20d": -8.85,
-        "roc_50d": -0.42,
+        "roc_20d": -31.16,
+        "roc_50d": -25.86,
         "momentum_trend": "negative",
-        "technical_state": "pullback_entry",
-        "technical_timing_score": 60.0,
+        "technical_state": "broken",
+        "technical_timing_score": 25.0,
         "missing_metric_reasons": []
       },
-      "technical_state": "pullback_entry",
-      "technical_timing_score": 60.0,
-      "entry_family": "CHASE_EXHAUSTION",
-      "entry_state": "FAILED_BREAKOUT",
-      "entry_score": 10,
+      "technical_state": "broken",
+      "technical_timing_score": 25.0,
+      "entry_family": "BROKEN_OR_UNCLEAR",
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
-      "history_source": "canonical_tradier",
-      "bars_count": 2511,
-      "history_start_date": "2016-07-18",
-      "history_end_date": "2026-07-14",
+      "history_source": "canonical_tradier_reaction",
+      "bars_count": 2515,
+      "history_start_date": "2016-07-27",
+      "history_end_date": "2026-08-03",
       "has_ohlcv": true,
       "has_200d": true,
       "has_252d": true,
-      "stage_bar_count": 2511,
+      "stage_bar_count": 2515,
       "stage_years_available": 10.0,
       "stage_history_status": "available_5y",
-      "stage_history_source": "canonical_tradier",
+      "stage_history_source": "canonical_tradier_reaction",
       "stage_long_history_used": true,
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "UFO": {
       "score": 47.2,
@@ -17275,7 +17275,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "UAMY": {
       "score": 31.9,
@@ -17352,20 +17352,20 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "UCTT": {
-      "score": 100.0,
-      "label": "S3 Momentum",
-      "reason": "Extended momentum. Price +46.1% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising. Vol 1.3\u00d7 avg.",
+      "score": 80.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +15.9% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling. Vol 0.7\u00d7 avg.",
       "signals": {
-        "price_vs_30w_ma_pct": 46.13,
-        "ma_30w_slope_pct": 18.47,
-        "rs_vs_spy_trend": "rising",
-        "rs_vs_spy_8w_pct": 21.88,
-        "volume_ratio": 1.28,
+        "price_vs_30w_ma_pct": 15.9,
+        "ma_30w_slope_pct": 12.47,
+        "rs_vs_spy_trend": "falling",
+        "rs_vs_spy_8w_pct": -25.86,
+        "volume_ratio": 0.72,
         "weeks_above_30w_ma_of_8": 8,
-        "prior_26w_trend_pct": 138.61,
+        "prior_26w_trend_pct": 60.99,
         "breakout_watch": false,
         "danger_zone": false,
         "breadth_above_30w_ma_pct": null,
@@ -17374,62 +17374,62 @@
       "stage_confidence": "high",
       "stage_confidence_reason": "fmp_multi_year_history",
       "technical_metrics": {
-        "sma_20": 112.9737,
-        "sma_50": 96.8316,
-        "sma_200": 56.7042,
-        "pct_vs_sma_20": -8.15,
-        "pct_vs_sma_50": 7.17,
-        "pct_vs_sma_200": 83.0,
-        "ma_stack": "bull",
-        "extension_risk": "healthy",
+        "sma_20": 96.4597,
+        "sma_50": 98.3181,
+        "sma_200": 60.0697,
+        "pct_vs_sma_20": -7.56,
+        "pct_vs_sma_50": -9.3,
+        "pct_vs_sma_200": 48.44,
+        "ma_stack": "mixed",
+        "extension_risk": "pullback_buy_zone",
         "high_52w": 142.59,
         "low_52w": 21.63,
-        "pct_from_52w_high": -27.22,
-        "pct_from_52w_low": 379.75,
-        "range_position_52w": 67.9,
-        "high_20d": 142.59,
+        "pct_from_52w_high": -37.46,
+        "pct_from_52w_low": 312.25,
+        "range_position_52w": 55.8,
+        "high_20d": 129.59,
         "high_50d": 142.59,
         "breakout_signal": "failed_breakout",
-        "entry_zone": "neutral",
-        "avg_volume_20d": 1620892.0,
+        "entry_zone": "20d_pullback",
+        "avg_volume_20d": 1505680.0,
         "accumulation_days_20d": 2,
-        "distribution_days_20d": 3,
-        "accumulation_distribution_score": -1,
+        "distribution_days_20d": 4,
+        "accumulation_distribution_score": -2,
         "accumulation_distribution_signal": "neutral",
-        "atr_14": 12.9836,
-        "atr_14_pct": 12.51,
-        "range_20d_pct": 53.65,
-        "squeeze_signal": "expansion",
-        "roc_20d": -4.71,
-        "roc_50d": 32.78,
+        "atr_14": 10.0812,
+        "atr_14_pct": 11.31,
+        "range_20d_pct": 78.42,
+        "squeeze_signal": "volatile",
+        "roc_20d": -37.46,
+        "roc_50d": 3.76,
         "momentum_trend": "negative",
-        "technical_state": "neutral",
-        "technical_timing_score": 65.0,
+        "technical_state": "pullback_entry",
+        "technical_timing_score": 55.0,
         "missing_metric_reasons": []
       },
-      "technical_state": "neutral",
-      "technical_timing_score": 65.0,
-      "entry_family": "CHASE_EXHAUSTION",
-      "entry_state": "EXTREME_EXTENSION",
-      "entry_score": 0,
+      "technical_state": "pullback_entry",
+      "technical_timing_score": 55.0,
+      "entry_family": "BROKEN_OR_UNCLEAR",
+      "entry_state": "NO_CLEAR_ENTRY",
+      "entry_score": 20,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
-      "history_source": "canonical_tradier",
-      "bars_count": 2511,
-      "history_start_date": "2016-07-18",
-      "history_end_date": "2026-07-14",
+      "history_source": "canonical_tradier_reaction",
+      "bars_count": 2516,
+      "history_start_date": "2016-07-26",
+      "history_end_date": "2026-08-03",
       "has_ohlcv": true,
       "has_200d": true,
       "has_252d": true,
-      "stage_bar_count": 2511,
+      "stage_bar_count": 2516,
       "stage_years_available": 10.0,
       "stage_history_status": "available_5y",
-      "stage_history_source": "canonical_tradier",
+      "stage_history_source": "canonical_tradier_reaction",
       "stage_long_history_used": true,
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "UMAC": {
       "score": 80.0,
@@ -17506,7 +17506,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "USAR": {
       "score": 43.8,
@@ -17583,7 +17583,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "UUUU": {
       "score": 2.7,
@@ -17660,7 +17660,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "VECO": {
       "score": 90.0,
@@ -17737,7 +17737,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "VELO": {
       "score": 41.2,
@@ -17814,7 +17814,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "VIAV": {
       "score": 80.0,
@@ -17891,7 +17891,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "VICR": {
       "score": 80.0,
@@ -17968,7 +17968,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "VLN": {
       "score": 72.2,
@@ -18045,7 +18045,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "VIVO": {
       "score": 80.0,
@@ -18122,7 +18122,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "VRT": {
       "score": 43.9,
@@ -18199,84 +18199,84 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "VOYG": {
-      "score": 47.7,
-      "label": "S1-2 Watch",
-      "reason": "Base tightening. Price -5.4% vs 30-week MA (rising slope). Prior 26w: -20%. RS vs SPY: falling. Watch for confirmed breakout. Vol 0.7\u00d7 avg.",
+      "score": 12.8,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -10.2% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
       "signals": {
-        "price_vs_30w_ma_pct": -5.43,
-        "ma_30w_slope_pct": 2.68,
+        "price_vs_30w_ma_pct": -10.23,
+        "ma_30w_slope_pct": -0.62,
         "rs_vs_spy_trend": "falling",
-        "rs_vs_spy_8w_pct": -39.26,
-        "volume_ratio": 0.72,
-        "weeks_above_30w_ma_of_8": 5,
-        "prior_26w_trend_pct": -19.71,
-        "breakout_watch": true,
+        "rs_vs_spy_8w_pct": -24.83,
+        "volume_ratio": 0.36,
+        "weeks_above_30w_ma_of_8": 2,
+        "prior_26w_trend_pct": 7.57,
+        "breakout_watch": false,
         "danger_zone": false,
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_confidence": "medium",
+      "stage_confidence": "high",
       "stage_confidence_reason": "tradier_400d_history",
       "technical_metrics": {
-        "sma_20": 33.248,
-        "sma_50": 36.612,
-        "sma_200": 30.207,
-        "pct_vs_sma_20": -10.43,
-        "pct_vs_sma_50": -18.66,
-        "pct_vs_sma_200": -1.41,
+        "sma_20": 28.6045,
+        "sma_50": 35.7338,
+        "sma_200": 29.8635,
+        "pct_vs_sma_20": -2.08,
+        "pct_vs_sma_50": -21.61,
+        "pct_vs_sma_200": -6.21,
         "ma_stack": "mixed",
         "extension_risk": "broken",
         "high_52w": 51.77,
         "low_52w": 17.99,
-        "pct_from_52w_high": -42.48,
-        "pct_from_52w_low": 65.54,
-        "range_position_52w": 34.9,
-        "high_20d": 40.31,
+        "pct_from_52w_high": -45.9,
+        "pct_from_52w_low": 55.7,
+        "range_position_52w": 29.7,
+        "high_20d": 34.22,
         "high_50d": 51.77,
         "breakout_signal": "failed_breakout",
         "entry_zone": "broken",
-        "avg_volume_20d": 2288457.0,
-        "accumulation_days_20d": 1,
-        "distribution_days_20d": 5,
-        "accumulation_distribution_score": -4,
-        "accumulation_distribution_signal": "distribution",
-        "atr_14": 2.5511,
-        "atr_14_pct": 8.57,
-        "range_20d_pct": 47.48,
+        "avg_volume_20d": 1326449.0,
+        "accumulation_days_20d": 5,
+        "distribution_days_20d": 0,
+        "accumulation_distribution_score": 5,
+        "accumulation_distribution_signal": "heavy_accumulation",
+        "atr_14": 2.2864,
+        "atr_14_pct": 8.16,
+        "range_20d_pct": 52.16,
         "squeeze_signal": "coiling",
-        "roc_20d": -27.63,
-        "roc_50d": 12.76,
+        "roc_20d": -13.15,
+        "roc_50d": -18.67,
         "momentum_trend": "negative",
         "technical_state": "broken",
-        "technical_timing_score": 15.0,
+        "technical_timing_score": 35.0,
         "missing_metric_reasons": []
       },
       "technical_state": "broken",
-      "technical_timing_score": 15.0,
+      "technical_timing_score": 35.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
-      "history_source": "canonical_tradier",
-      "bars_count": 273,
+      "history_source": "canonical_tradier_reaction",
+      "bars_count": 284,
       "history_start_date": "2025-06-11",
-      "history_end_date": "2026-07-14",
+      "history_end_date": "2026-08-03",
       "has_ohlcv": true,
       "has_200d": true,
       "has_252d": true,
-      "stage_bar_count": 273,
+      "stage_bar_count": 284,
       "stage_years_available": 1.1,
       "stage_history_status": "intermediate_only",
-      "stage_history_source": "canonical_tradier",
+      "stage_history_source": "canonical_tradier_reaction",
       "stage_long_history_used": false,
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "tradier_400d_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "VPG": {
       "score": 80.0,
@@ -18353,7 +18353,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "VSAT": {
       "score": 80.0,
@@ -18430,7 +18430,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "VSH": {
       "score": 80.0,
@@ -18507,7 +18507,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "WDC": {
       "score": 100.0,
@@ -18584,7 +18584,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "WOLF": {
       "score": 80.0,
@@ -18661,7 +18661,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "WULF": {
       "score": 72.3,
@@ -18738,7 +18738,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "WYFI": {
       "score": 100.0,
@@ -18817,14 +18817,14 @@
       "stage_data_depth_confidence": 0.25,
       "stage_data_limitation_reason": "no_52w_tradier_path",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "XNDU": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "XTIA": {
       "score": 33.5,
@@ -18901,41 +18901,41 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TYO:6315": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "WSE:VGO": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "XSAT:SMOL": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "PLTR": {
-      "score": 6.6,
+      "score": 14.7,
       "label": "S4 Decline",
-      "reason": "Downtrend confirmed. Price -7.4% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "reason": "Downtrend confirmed. Price -9.6% below a falling 30-week MA. RS vs SPY: flat. Avoid new longs.",
       "signals": {
-        "price_vs_30w_ma_pct": -7.41,
-        "ma_30w_slope_pct": -4.92,
-        "rs_vs_spy_trend": "falling",
-        "rs_vs_spy_8w_pct": -13.96,
-        "volume_ratio": 0.9,
+        "price_vs_30w_ma_pct": -9.61,
+        "ma_30w_slope_pct": -5.06,
+        "rs_vs_spy_trend": "flat",
+        "rs_vs_spy_8w_pct": -1.58,
+        "volume_ratio": 0.57,
         "weeks_above_30w_ma_of_8": 0,
-        "prior_26w_trend_pct": -21.16,
+        "prior_26w_trend_pct": -4.38,
         "breakout_watch": false,
         "danger_zone": false,
         "breadth_above_30w_ma_pct": null,
@@ -18944,62 +18944,62 @@
       "stage_confidence": "high",
       "stage_confidence_reason": "fmp_multi_year_history",
       "technical_metrics": {
-        "sma_20": 125.154,
-        "sma_50": 132.9859,
-        "sma_200": 156.3114,
-        "pct_vs_sma_20": 6.84,
-        "pct_vs_sma_50": 0.55,
-        "pct_vs_sma_200": -14.45,
+        "sma_20": 128.0575,
+        "sma_50": 130.6277,
+        "sma_200": 153.2796,
+        "pct_vs_sma_20": -1.88,
+        "pct_vs_sma_50": -3.81,
+        "pct_vs_sma_200": -18.03,
         "ma_stack": "bear",
-        "extension_risk": "healthy",
+        "extension_risk": "broken",
         "high_52w": 207.18,
         "low_52w": 107.27,
-        "pct_from_52w_high": -35.46,
-        "pct_from_52w_low": 24.66,
-        "range_position_52w": 26.5,
-        "high_20d": 134.71,
+        "pct_from_52w_high": -39.35,
+        "pct_from_52w_low": 17.13,
+        "range_position_52w": 18.4,
+        "high_20d": 134.85,
         "high_50d": 160.65,
-        "breakout_signal": "near_trigger",
-        "entry_zone": "breakout_watch",
-        "avg_volume_20d": 46012492.0,
-        "accumulation_days_20d": 3,
-        "distribution_days_20d": 3,
-        "accumulation_distribution_score": 0,
-        "accumulation_distribution_signal": "neutral",
-        "atr_14": 7.3446,
-        "atr_14_pct": 5.49,
-        "range_20d_pct": 24.33,
+        "breakout_signal": "no_setup",
+        "entry_zone": "broken",
+        "avg_volume_20d": 39457942.0,
+        "accumulation_days_20d": 5,
+        "distribution_days_20d": 0,
+        "accumulation_distribution_score": 5,
+        "accumulation_distribution_signal": "heavy_accumulation",
+        "atr_14": 6.4153,
+        "atr_14_pct": 5.11,
+        "range_20d_pct": 16.72,
         "squeeze_signal": "volatile",
-        "roc_20d": 4.48,
-        "roc_50d": -3.87,
+        "roc_20d": 7.7,
+        "roc_50d": -6.22,
         "momentum_trend": "cooling",
-        "technical_state": "neutral",
-        "technical_timing_score": 37.0,
+        "technical_state": "broken",
+        "technical_timing_score": 22.0,
         "missing_metric_reasons": []
       },
-      "technical_state": "neutral",
-      "technical_timing_score": 37.0,
+      "technical_state": "broken",
+      "technical_timing_score": 22.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "DOWNTREND",
-      "entry_score": 5,
-      "entry_grade": "AVOID",
+      "entry_state": "LOWER_HIGH_WARNING",
+      "entry_score": 70,
+      "entry_grade": "A",
       "price_basis": "LAST_DAILY_CLOSE",
-      "history_source": "canonical_tradier",
-      "bars_count": 1452,
+      "history_source": "canonical_tradier_reaction",
+      "bars_count": 1463,
       "history_start_date": "2020-09-30",
-      "history_end_date": "2026-07-14",
+      "history_end_date": "2026-08-03",
       "has_ohlcv": true,
       "has_200d": true,
       "has_252d": true,
-      "stage_bar_count": 1452,
+      "stage_bar_count": 1463,
       "stage_years_available": 5.8,
       "stage_history_status": "available_5y",
-      "stage_history_source": "canonical_tradier",
+      "stage_history_source": "canonical_tradier_reaction",
       "stage_long_history_used": true,
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NVDA": {
       "score": 88.4,
@@ -19076,7 +19076,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ARQQ": {
       "score": 56.5,
@@ -19153,7 +19153,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ADPT": {
       "score": 100.0,
@@ -19230,7 +19230,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ABCL": {
       "score": 80.0,
@@ -19307,7 +19307,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AMAT": {
       "score": 100.0,
@@ -19384,7 +19384,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "BAND": {
       "score": 75.4,
@@ -19461,7 +19461,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "BTBT": {
       "score": 12.3,
@@ -19538,7 +19538,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CAI": {
       "score": 10.2,
@@ -19615,7 +19615,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "BTQ": {
       "score": 15.9,
@@ -19692,7 +19692,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CLS": {
       "score": 38.2,
@@ -19769,7 +19769,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CLYM": {
       "score": 100.0,
@@ -19846,7 +19846,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "DELL": {
       "score": 100.0,
@@ -19923,7 +19923,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CRWD": {
       "score": 100.0,
@@ -20000,7 +20000,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "FTNT": {
       "score": 100.0,
@@ -20077,7 +20077,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "FLR": {
       "score": 97.1,
@@ -20154,7 +20154,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "DIOD": {
       "score": 80.0,
@@ -20231,7 +20231,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "EVMN": {
       "score": 1.9,
@@ -20311,7 +20311,7 @@
       "stage_data_depth_confidence": 0.25,
       "stage_data_limitation_reason": "insufficient_weekly_bars_for_stage",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "GEV": {
       "score": 100.0,
@@ -20388,7 +20388,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "HIMS": {
       "score": 64.4,
@@ -20465,7 +20465,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "GRAL": {
       "score": 54.2,
@@ -20542,7 +20542,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "HALO": {
       "score": 94.7,
@@ -20619,7 +20619,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "HPE": {
       "score": 100.0,
@@ -20696,7 +20696,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "IBM": {
       "score": 9.4,
@@ -20773,7 +20773,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "HIVE": {
       "score": 80.0,
@@ -20850,7 +20850,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "HOOD": {
       "score": 66.2,
@@ -20927,7 +20927,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "IBRX": {
       "score": 100.0,
@@ -21004,7 +21004,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "INKT": {
       "score": 44.6,
@@ -21081,7 +21081,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "MDB": {
       "score": 62.7,
@@ -21158,7 +21158,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NAUT": {
       "score": 0.0,
@@ -21235,7 +21235,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NET": {
       "score": 100.0,
@@ -21312,7 +21312,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NGEN": {
       "score": 0.0,
@@ -21389,7 +21389,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NKLR": {
       "score": 11.7,
@@ -21469,7 +21469,7 @@
       "stage_data_depth_confidence": 0.25,
       "stage_data_limitation_reason": "no_200d_tradier_path",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NKTR": {
       "score": 86.5,
@@ -21546,7 +21546,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NTSK": {
       "score": 58.8,
@@ -21625,7 +21625,7 @@
       "stage_data_depth_confidence": 0.25,
       "stage_data_limitation_reason": "no_52w_tradier_path",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "OCGN": {
       "score": 54.6,
@@ -21702,7 +21702,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "OKTA": {
       "score": 100.0,
@@ -21779,7 +21779,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ORCL": {
       "score": 7.5,
@@ -21856,7 +21856,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "OSCR": {
       "score": 100.0,
@@ -21933,7 +21933,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "PANW": {
       "score": 100.0,
@@ -22010,14 +22010,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "PBLS": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "PRME": {
       "score": 31.2,
@@ -22094,7 +22094,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "PSNL": {
       "score": 100.0,
@@ -22171,7 +22171,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "QBTS": {
       "score": 13.6,
@@ -22248,14 +22248,14 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "QNT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "QUBT": {
       "score": 10.7,
@@ -22332,7 +22332,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "QURE": {
       "score": 100.0,
@@ -22409,7 +22409,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "RBLX": {
       "score": 0.0,
@@ -22486,7 +22486,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "RBRK": {
       "score": 96.1,
@@ -22563,7 +22563,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "RCAT": {
       "score": 33.8,
@@ -22640,7 +22640,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "RDDT": {
       "score": 58.9,
@@ -22717,7 +22717,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "RR": {
       "score": 0.0,
@@ -22794,7 +22794,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "RXRX": {
       "score": 8.6,
@@ -22871,14 +22871,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "OTC:IFNNY": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "SNOW": {
       "score": 100.0,
@@ -22955,14 +22955,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "OTC:NLST": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "SOFI": {
       "score": 0.0,
@@ -23039,7 +23039,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SPAI": {
       "score": 7.5,
@@ -23116,28 +23116,28 @@
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "SPCX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "SHA:603986": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "SHA:688008": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "STIM": {
       "score": 88.8,
@@ -23214,7 +23214,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TAC": {
       "score": 46.5,
@@ -23291,7 +23291,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TEM": {
       "score": 5.6,
@@ -23368,7 +23368,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TARS": {
       "score": 0.0,
@@ -23445,7 +23445,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "UMC": {
       "score": 80.0,
@@ -23522,20 +23522,20 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TGTX": {
-      "score": 100.0,
+      "score": 80.0,
       "label": "S2-S3 Advance",
-      "reason": "Established advance. Price +34.5% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising. Vol 0.8\u00d7 avg.",
+      "reason": "Established advance. Price +20.6% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling. Vol 0.6\u00d7 avg.",
       "signals": {
-        "price_vs_30w_ma_pct": 34.55,
-        "ma_30w_slope_pct": 9.2,
-        "rs_vs_spy_trend": "rising",
-        "rs_vs_spy_8w_pct": 5.68,
-        "volume_ratio": 0.76,
+        "price_vs_30w_ma_pct": 20.61,
+        "ma_30w_slope_pct": 8.35,
+        "rs_vs_spy_trend": "falling",
+        "rs_vs_spy_8w_pct": -10.32,
+        "volume_ratio": 0.59,
         "weeks_above_30w_ma_of_8": 8,
-        "prior_26w_trend_pct": 80.28,
+        "prior_26w_trend_pct": 66.32,
         "breakout_watch": false,
         "danger_zone": false,
         "breadth_above_30w_ma_pct": null,
@@ -23544,34 +23544,34 @@
       "stage_confidence": "high",
       "stage_confidence_reason": "fmp_multi_year_history",
       "technical_metrics": {
-        "sma_20": 55.02,
-        "sma_50": 48.9688,
-        "sma_200": 36.3598,
-        "pct_vs_sma_20": -5.43,
-        "pct_vs_sma_50": 6.25,
-        "pct_vs_sma_200": 43.1,
+        "sma_20": 54.643,
+        "sma_50": 49.1268,
+        "sma_200": 36.4219,
+        "pct_vs_sma_20": -13.26,
+        "pct_vs_sma_50": -3.51,
+        "pct_vs_sma_200": 30.14,
         "ma_stack": "bull",
         "extension_risk": "pullback_buy_zone",
         "high_52w": 59.06,
         "low_52w": 26.39,
-        "pct_from_52w_high": -11.9,
-        "pct_from_52w_low": 97.16,
-        "range_position_52w": 78.5,
+        "pct_from_52w_high": -19.74,
+        "pct_from_52w_low": 79.61,
+        "range_position_52w": 64.3,
         "high_20d": 59.06,
         "high_50d": 59.06,
         "breakout_signal": "failed_breakout",
-        "entry_zone": "20d_pullback",
-        "avg_volume_20d": 2080603.0,
+        "entry_zone": "50d_pullback",
+        "avg_volume_20d": 2073926.0,
         "accumulation_days_20d": 3,
         "distribution_days_20d": 3,
         "accumulation_distribution_score": 0,
         "accumulation_distribution_signal": "neutral",
-        "atr_14": 2.1846,
-        "atr_14_pct": 4.2,
-        "range_20d_pct": 15.66,
-        "squeeze_signal": "normal",
-        "roc_20d": -6.62,
-        "roc_50d": 27.56,
+        "atr_14": 2.5058,
+        "atr_14_pct": 5.29,
+        "range_20d_pct": 27.95,
+        "squeeze_signal": "volatile",
+        "roc_20d": -13.72,
+        "roc_50d": 20.0,
         "momentum_trend": "negative",
         "technical_state": "pullback_entry",
         "technical_timing_score": 70.0,
@@ -23580,18 +23580,18 @@
       "technical_state": "pullback_entry",
       "technical_timing_score": 70.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "REVERSAL_WATCH",
-      "entry_score": 45,
-      "entry_grade": "C",
+      "entry_state": "NO_CLEAR_ENTRY",
+      "entry_score": 70,
+      "entry_grade": "A",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier_reaction",
-      "bars_count": 2515,
+      "bars_count": 2516,
       "history_start_date": "2016-07-26",
-      "history_end_date": "2026-07-31",
+      "history_end_date": "2026-08-03",
       "has_ohlcv": true,
       "has_200d": true,
       "has_252d": true,
-      "stage_bar_count": 2515,
+      "stage_bar_count": 2516,
       "stage_years_available": 10.0,
       "stage_history_status": "available_5y",
       "stage_history_source": "canonical_tradier_reaction",
@@ -23599,7 +23599,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "XYZ": {
       "score": 100.0,
@@ -23676,7 +23676,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ZETA": {
       "score": 90.0,
@@ -23753,7 +23753,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ZURA": {
       "score": 61.0,
@@ -23830,7 +23830,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ZVRA": {
       "score": 100.0,
@@ -23907,7 +23907,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "MSFT": {
       "score": 20.8,
@@ -23984,7 +23984,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "VERA": {
       "score": 55.5,
@@ -24061,7 +24061,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AREC": {
       "score": 0.0,
@@ -24138,7 +24138,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ACOG": {
       "score": 98.1,
@@ -24215,7 +24215,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ABSI": {
       "score": 100.0,
@@ -24292,84 +24292,84 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ADTN": {
-      "score": 62.1,
-      "label": "S2 Breakout",
-      "reason": "Confirmed breakout from base. Price -0.2% above 30-week MA (rising slope). Prior 26w: +32%. RS vs SPY: falling. Vol 0.6\u00d7 avg.",
+      "score": 39.4,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -30.0% vs flat 30-week MA. Prior 26w: -13%. RS vs SPY: falling. No breakout signal yet.",
       "signals": {
-        "price_vs_30w_ma_pct": -0.23,
-        "ma_30w_slope_pct": 5.22,
+        "price_vs_30w_ma_pct": -30.03,
+        "ma_30w_slope_pct": 1.3,
         "rs_vs_spy_trend": "falling",
-        "rs_vs_spy_8w_pct": -23.25,
-        "volume_ratio": 0.57,
-        "weeks_above_30w_ma_of_8": 8,
-        "prior_26w_trend_pct": 31.94,
-        "breakout_watch": true,
+        "rs_vs_spy_8w_pct": -41.02,
+        "volume_ratio": 0.7,
+        "weeks_above_30w_ma_of_8": 5,
+        "prior_26w_trend_pct": -12.54,
+        "breakout_watch": false,
         "danger_zone": false,
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_confidence": "low",
+      "stage_confidence": "high",
       "stage_confidence_reason": "fmp_multi_year_history",
       "technical_metrics": {
-        "sma_20": 13.8035,
-        "sma_50": 15.118,
-        "sma_200": 11.475,
-        "pct_vs_sma_20": -8.72,
-        "pct_vs_sma_50": -16.66,
-        "pct_vs_sma_200": 9.8,
+        "sma_20": 11.174,
+        "sma_50": 13.775,
+        "sma_200": 11.5019,
+        "pct_vs_sma_20": -20.71,
+        "pct_vs_sma_50": -35.68,
+        "pct_vs_sma_200": -22.97,
         "ma_stack": "mixed",
-        "extension_risk": "healthy",
+        "extension_risk": "broken",
         "high_52w": 19.4,
         "low_52w": 7.25,
-        "pct_from_52w_high": -35.05,
-        "pct_from_52w_low": 73.79,
-        "range_position_52w": 44.0,
-        "high_20d": 15.58,
+        "pct_from_52w_high": -54.33,
+        "pct_from_52w_low": 22.21,
+        "range_position_52w": 13.3,
+        "high_20d": 13.64,
         "high_50d": 19.4,
         "breakout_signal": "failed_breakout",
-        "entry_zone": "neutral",
-        "avg_volume_20d": 1992663.0,
-        "accumulation_days_20d": 2,
-        "distribution_days_20d": 2,
-        "accumulation_distribution_score": 0,
-        "accumulation_distribution_signal": "neutral",
-        "atr_14": 0.7821,
-        "atr_14_pct": 6.21,
-        "range_20d_pct": 28.25,
+        "entry_zone": "broken",
+        "avg_volume_20d": 2192365.0,
+        "accumulation_days_20d": 3,
+        "distribution_days_20d": 1,
+        "accumulation_distribution_score": 2,
+        "accumulation_distribution_signal": "accumulation",
+        "atr_14": 0.8253,
+        "atr_14_pct": 9.31,
+        "range_20d_pct": 67.61,
         "squeeze_signal": "coiling",
-        "roc_20d": -17.43,
-        "roc_50d": -28.77,
+        "roc_20d": -36.26,
+        "roc_50d": -40.58,
         "momentum_trend": "negative",
-        "technical_state": "neutral",
-        "technical_timing_score": 50.0,
+        "technical_state": "broken",
+        "technical_timing_score": 30.0,
         "missing_metric_reasons": []
       },
-      "technical_state": "neutral",
-      "technical_timing_score": 50.0,
+      "technical_state": "broken",
+      "technical_timing_score": 30.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "REVERSAL_WATCH",
-      "entry_score": 20,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
-      "history_source": "canonical_tradier",
-      "bars_count": 2511,
-      "history_start_date": "2016-07-18",
-      "history_end_date": "2026-07-14",
+      "history_source": "canonical_tradier_reaction",
+      "bars_count": 2515,
+      "history_start_date": "2016-07-27",
+      "history_end_date": "2026-08-03",
       "has_ohlcv": true,
       "has_200d": true,
       "has_252d": true,
-      "stage_bar_count": 2511,
+      "stage_bar_count": 2515,
       "stage_years_available": 10.0,
       "stage_history_status": "available_5y",
-      "stage_history_source": "canonical_tradier",
+      "stage_history_source": "canonical_tradier_reaction",
       "stage_long_history_used": true,
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AAPL": {
       "score": 90.0,
@@ -24446,7 +24446,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ARKF": {
       "score": 31.9,
@@ -27064,7 +27064,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "VST": {
       "score": 17.0,
@@ -27125,7 +27125,7 @@
       "entry_state": "SUPPORT_TEST",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 2287,
       "history_start_date": "2017-06-09",
@@ -27141,7 +27141,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T14:55:58.505160+00:00"
+      "computed_at": "2026-08-04T10:59:45.793289+00:00"
     },
     "SNPS": {
       "score": 17.7,
@@ -27218,7 +27218,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "BCBP": {
       "score": 90.0,
@@ -27449,7 +27449,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ILMN": {
       "score": 100.0,
@@ -27526,7 +27526,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "GH": {
       "score": 100.0,
@@ -27603,7 +27603,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TXG": {
       "score": 100.0,
@@ -27680,20 +27680,20 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TWST": {
       "score": 100.0,
       "label": "S3 Momentum",
-      "reason": "Extended momentum. Price +49.1% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising. Vol 0.8\u00d7 avg.",
+      "reason": "Extended momentum. Price +52.7% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising. Vol 0.6\u00d7 avg.",
       "signals": {
-        "price_vs_30w_ma_pct": 49.06,
-        "ma_30w_slope_pct": 14.79,
+        "price_vs_30w_ma_pct": 52.71,
+        "ma_30w_slope_pct": 14.38,
         "rs_vs_spy_trend": "rising",
-        "rs_vs_spy_8w_pct": 20.81,
-        "volume_ratio": 0.83,
+        "rs_vs_spy_8w_pct": 11.31,
+        "volume_ratio": 0.58,
         "weeks_above_30w_ma_of_8": 8,
-        "prior_26w_trend_pct": 85.93,
+        "prior_26w_trend_pct": 97.36,
         "breakout_watch": false,
         "danger_zone": false,
         "breadth_above_30w_ma_pct": null,
@@ -27702,54 +27702,54 @@
       "stage_confidence": "high",
       "stage_confidence_reason": "fmp_multi_year_history",
       "technical_metrics": {
-        "sma_20": 91.4442,
-        "sma_50": 83.5076,
-        "sma_200": 52.5824,
-        "pct_vs_sma_20": 0.12,
-        "pct_vs_sma_50": 9.63,
-        "pct_vs_sma_200": 74.11,
+        "sma_20": 91.294,
+        "sma_50": 84.3729,
+        "sma_200": 52.9143,
+        "pct_vs_sma_20": 6.17,
+        "pct_vs_sma_50": 14.88,
+        "pct_vs_sma_200": 83.17,
         "ma_stack": "bull",
-        "extension_risk": "pullback_buy_zone",
+        "extension_risk": "healthy",
         "high_52w": 102.88,
         "low_52w": 24.16,
-        "pct_from_52w_high": -11.01,
-        "pct_from_52w_low": 278.93,
-        "range_position_52w": 85.6,
-        "high_20d": 99.93,
+        "pct_from_52w_high": -5.79,
+        "pct_from_52w_low": 301.18,
+        "range_position_52w": 92.4,
+        "high_20d": 96.925,
         "high_50d": 102.88,
-        "breakout_signal": "no_setup",
-        "entry_zone": "20d_pullback",
-        "avg_volume_20d": 1360198.0,
+        "breakout_signal": "fresh_breakout",
+        "entry_zone": "fresh_breakout",
+        "avg_volume_20d": 1341031.0,
         "accumulation_days_20d": 1,
         "distribution_days_20d": 3,
         "accumulation_distribution_score": -2,
         "accumulation_distribution_signal": "neutral",
-        "atr_14": 6.5046,
-        "atr_14_pct": 7.1,
-        "range_20d_pct": 23.59,
+        "atr_14": 7.4271,
+        "atr_14_pct": 7.66,
+        "range_20d_pct": 21.38,
         "squeeze_signal": "volatile",
-        "roc_20d": -7.75,
-        "roc_50d": 84.95,
+        "roc_20d": -3.01,
+        "roc_50d": 80.63,
         "momentum_trend": "negative",
-        "technical_state": "pullback_entry",
-        "technical_timing_score": 70.0,
+        "technical_state": "breakout_trigger",
+        "technical_timing_score": 65.0,
         "missing_metric_reasons": []
       },
-      "technical_state": "pullback_entry",
-      "technical_timing_score": 70.0,
+      "technical_state": "breakout_trigger",
+      "technical_timing_score": 65.0,
       "entry_family": "CONTINUATION",
       "entry_state": "WAIT_FOR_RETEST",
       "entry_score": 35,
       "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier_reaction",
-      "bars_count": 1946,
+      "bars_count": 1947,
       "history_start_date": "2018-10-31",
-      "history_end_date": "2026-07-31",
+      "history_end_date": "2026-08-03",
       "has_ohlcv": true,
       "has_200d": true,
       "has_252d": true,
-      "stage_bar_count": 1946,
+      "stage_bar_count": 1947,
       "stage_years_available": 7.7,
       "stage_history_status": "available_5y",
       "stage_history_source": "canonical_tradier_reaction",
@@ -27757,7 +27757,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "TEVA": {
       "score": 70.4,
@@ -27834,7 +27834,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CLBT": {
       "score": 58.4,
@@ -27911,7 +27911,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CLOV": {
       "score": 100.0,
@@ -27988,7 +27988,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "GOOGL": {
       "score": 51.5,
@@ -28065,7 +28065,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AMZN": {
       "score": 62.2,
@@ -28142,7 +28142,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "META": {
       "score": 56.4,
@@ -28219,7 +28219,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "MOD": {
       "score": 48.7,
@@ -28296,7 +28296,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CLF": {
       "score": 38.2,
@@ -28373,7 +28373,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CCJ": {
       "score": 5.8,
@@ -28450,7 +28450,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "ALB": {
       "score": 1.9,
@@ -28527,7 +28527,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "HYFT": {
       "score": 8.7,
@@ -28604,7 +28604,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "CEPL": {
       "score": 100.0,
@@ -28681,7 +28681,7 @@
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AXON": {
       "score": 58.1,
@@ -28758,7 +28758,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "OPFI": {
       "score": 57.3,
@@ -28835,7 +28835,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "NU": {
       "score": 34.6,
@@ -28912,7 +28912,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "AFRM": {
       "score": 92.5,
@@ -28989,7 +28989,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "WRLD": {
       "score": 90.0,
@@ -29066,7 +29066,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T12:24:17.554501+00:00"
+      "computed_at": "2026-08-04T08:38:34.283259+00:00"
     },
     "LB": {
       "score": 98.1,
@@ -29381,7 +29381,7 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-08-03T22:52:10.332539+00:00"
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     },
     "RIG": {
       "score": 37.0,
@@ -29439,10 +29439,10 @@
       "technical_state": "pullback_entry",
       "technical_timing_score": 67.0,
       "entry_family": "CONTINUATION",
-      "entry_state": "TRENDLINE_SUPPORT_TEST",
+      "entry_state": "BREAKOUT_PULLBACK",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-08-04",
@@ -29458,7 +29458,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T14:55:58.505160+00:00"
+      "computed_at": "2026-08-04T10:59:45.793289+00:00"
     },
     "VAL": {
       "score": 39.4,
@@ -29516,10 +29516,10 @@
       "technical_state": "coiling",
       "technical_timing_score": 80.0,
       "entry_family": "CONTINUATION",
-      "entry_state": "TRENDLINE_SUPPORT_TEST",
+      "entry_state": "BREAKOUT_PULLBACK",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 1793,
       "history_start_date": "2016-08-04",
@@ -29535,7 +29535,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T14:55:58.505160+00:00"
+      "computed_at": "2026-08-04T10:59:45.793289+00:00"
     },
     "VIST": {
       "score": 85.8,
@@ -29596,7 +29596,7 @@
       "entry_state": "HIGH_BASE_FORMING",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 1763,
       "history_start_date": "2019-07-26",
@@ -29612,7 +29612,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-08-03T14:55:58.505160+00:00"
+      "computed_at": "2026-08-04T10:59:45.793289+00:00"
     },
     "BLZE": {
       "score": 100.0,
@@ -29632,7 +29632,7 @@
         "breadth_rising_30w_ma_pct": null
       },
       "stage_confidence": "high",
-      "stage_confidence_reason": "tradier_400d_history",
+      "stage_confidence_reason": "fmp_multi_year_history",
       "technical_metrics": {
         "sma_20": 14.21,
         "sma_50": 11.4692,
@@ -29674,14 +29674,91 @@
       "entry_score": 0,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
-      "history_source": "tradier",
-      "bars_count": 274,
-      "history_start_date": "2025-06-30",
+      "history_source": "canonical_tradier",
+      "bars_count": 1183,
+      "history_start_date": "2021-11-11",
       "history_end_date": "2026-07-31",
       "has_ohlcv": true,
       "has_200d": true,
       "has_252d": true,
-      "stage_bar_count": 274,
+      "stage_bar_count": 1183,
+      "stage_years_available": 4.7,
+      "stage_history_status": "available_5y",
+      "stage_history_source": "canonical_tradier",
+      "stage_long_history_used": true,
+      "stage_data_depth_confidence": 0.85,
+      "stage_data_limitation_reason": "fmp_multi_year_history",
+      "status": "ok",
+      "computed_at": "2026-08-04T04:38:38.675115+00:00"
+    },
+    "IRDM": {
+      "score": 100.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +31.9% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising. Vol 0.5\u00d7 avg.",
+      "signals": {
+        "price_vs_30w_ma_pct": 31.94,
+        "ma_30w_slope_pct": 11.89,
+        "rs_vs_spy_trend": "rising",
+        "rs_vs_spy_8w_pct": 9.03,
+        "volume_ratio": 0.45,
+        "weeks_above_30w_ma_of_8": 8,
+        "prior_26w_trend_pct": 108.55,
+        "breakout_watch": false,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": null,
+        "breadth_rising_30w_ma_pct": null
+      },
+      "stage_confidence": "high",
+      "stage_confidence_reason": "tradier_400d_history",
+      "technical_metrics": {
+        "sma_20": 47.732,
+        "sma_50": 48.0011,
+        "sma_200": 30.405,
+        "pct_vs_sma_20": 1.23,
+        "pct_vs_sma_50": 0.66,
+        "pct_vs_sma_200": 58.92,
+        "ma_stack": "mixed",
+        "extension_risk": "pullback_buy_zone",
+        "high_52w": 55.72,
+        "low_52w": 15.84,
+        "pct_from_52w_high": -13.28,
+        "pct_from_52w_low": 205.05,
+        "range_position_52w": 81.4,
+        "high_20d": 51.09,
+        "high_50d": 55.72,
+        "breakout_signal": "no_setup",
+        "entry_zone": "20d_pullback",
+        "avg_volume_20d": 1711721.0,
+        "accumulation_days_20d": 0,
+        "distribution_days_20d": 3,
+        "accumulation_distribution_score": -3,
+        "accumulation_distribution_signal": "neutral",
+        "atr_14": 1.7903,
+        "atr_14_pct": 3.71,
+        "range_20d_pct": 16.85,
+        "squeeze_signal": "coiling",
+        "roc_20d": -8.12,
+        "roc_50d": 6.71,
+        "momentum_trend": "negative",
+        "technical_state": "pullback_entry",
+        "technical_timing_score": 55.0,
+        "missing_metric_reasons": []
+      },
+      "technical_state": "pullback_entry",
+      "technical_timing_score": 55.0,
+      "entry_family": "CONTINUATION",
+      "entry_state": "WAIT_FOR_RETEST",
+      "entry_score": 70,
+      "entry_grade": "A",
+      "price_basis": "LAST_DAILY_CLOSE",
+      "history_source": "tradier",
+      "bars_count": 275,
+      "history_start_date": "2025-06-30",
+      "history_end_date": "2026-08-03",
+      "has_ohlcv": true,
+      "has_200d": true,
+      "has_252d": true,
+      "stage_bar_count": 275,
       "stage_years_available": 1.1,
       "stage_history_status": "intermediate_only",
       "stage_history_source": "tradier",
@@ -29689,7 +29766,14 @@
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "tradier_400d_history",
       "status": "ok",
-      "computed_at": "2026-08-03T05:11:24.341366+00:00"
+      "computed_at": "2026-08-04T04:38:38.675115+00:00"
+    },
+    "SKHY": {
+      "score": null,
+      "label": null,
+      "reason": null,
+      "status": "no_bars",
+      "computed_at": "2026-08-04T13:53:16.814854+00:00"
     }
   }
 }

@@ -1,25 +1,5 @@
 [
   {
-    "scan_ts": "2026-07-07T15:02:05.306082+00:00",
-    "accounts_count": 16,
-    "batch_count": 2,
-    "batches_returned": 2,
-    "sections_ok": [
-      "_backend_ranked",
-      "_mention_data",
-      "consensus_picks",
-      "top_tickers"
-    ],
-    "sections_missing": [],
-    "lkg_sections_used": [],
-    "ticker_count": 34,
-    "mention_records": 14,
-    "consensus_picks": 10,
-    "top_tickers": 10,
-    "cache_write_status": "written_clean",
-    "error": null
-  },
-  {
     "scan_ts": "2026-07-08T14:05:56.785977+00:00",
     "accounts_count": 16,
     "batch_count": 2,
@@ -725,6 +705,34 @@
     "phase2_x_search_calls": 0,
     "total_input_tokens": 60177,
     "total_output_tokens": 12511,
+    "fresh_trades_fallback_used": false
+  },
+  {
+    "scan_ts": "2026-08-04T15:00:51.701894+00:00",
+    "accounts_count": 16,
+    "batch_count": 2,
+    "batches_returned": 2,
+    "sections_ok": [
+      "_backend_ranked",
+      "_mention_data",
+      "consensus_picks",
+      "top_tickers"
+    ],
+    "sections_missing": [],
+    "lkg_sections_used": [],
+    "ticker_count": 36,
+    "mention_records": 15,
+    "consensus_picks": 10,
+    "top_tickers": 10,
+    "cache_write_status": "written_clean",
+    "error": null,
+    "phase1_cost_in_usd_ticks": 1525233000,
+    "phase2_cost_in_usd_ticks": 191981000,
+    "total_cost_in_usd_ticks": 1717214000,
+    "phase1_x_search_calls": 16,
+    "phase2_x_search_calls": 0,
+    "total_input_tokens": 57252,
+    "total_output_tokens": 11100,
     "fresh_trades_fallback_used": false
   }
 ]
