@@ -1196,7 +1196,7 @@ def _compute_flip_conditions(pillars: dict, inputs: dict) -> list[str]:
     if us10y is not None and us10y >= 4.75 and chg_5d is not None and chg_5d <= 0:
         conditions.append("10Y yield falls below 4.75%")
     elif chg_5d is not None and chg_5d > 5:
-        conditions.append("10Y 5-session trend reverses (bps change turns negative)")
+        conditions.append("10Y 5-session change falls below 0 bps")
     dxy_chg = rd_comp.get("dxy_change_1d")
     if dxy_chg is not None and dxy_chg >= 0.5:
         conditions.append("DXY 1D strength reverses")

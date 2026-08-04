@@ -92,9 +92,48 @@ def _get_btc_from_hl() -> dict | None:
         return {
             "price":      _r(btc.mark_px, 2),
             "change_pct": _r(btc.pct_change_24h, 2),
+            "source":     "hyperliquid",
         }
     except Exception:
         return None
+
+
+async def _get_btc_snapshot() -> dict | None:
+    """Canonical BTC snapshot: HL (zero-call) → CMC (cached) → CoinGecko (cached)."""
+    # 1. Hyperliquid in-memory state — always zero API call
+    hl = _get_btc_from_hl()
+    if hl is not None:
+        return hl
+
+    # 2. CMC cached quote (120s TTL in CMCProvider._get)
+    try:
+        import main as _m
+        ds = getattr(_m, "data_service", None)
+        if ds and getattr(ds, "cmc", None):
+            data = await ds.cmc.get_quotes(["BTC"])
+            btc = (data or {}).get("BTC", {})
+            usd = (btc.get("quote") or {}).get("USD", {})
+            price = _r(usd.get("price"))
+            chg = _r(usd.get("percent_change_24h"))
+            if price is not None and chg is not None:
+                return {"price": price, "change_pct": chg, "source": "coinmarketcap"}
+    except Exception:
+        pass
+
+    # 3. CoinGecko cached dashboard (top_coins[0] is BTC, sorted by market cap)
+    try:
+        if ds and getattr(ds, "coingecko", None):
+            coins = await ds.coingecko.get_top_coins(limit=1)
+            if coins and isinstance(coins, list) and len(coins) > 0:
+                btc_data = coins[0]
+                price = _r(btc_data.get("current_price"))
+                chg = _r(btc_data.get("price_change_percentage_24h"))
+                if price is not None and chg is not None:
+                    return {"price": price, "change_pct": chg, "source": "coingecko"}
+    except Exception:
+        pass
+
+    return None
 
 
 # -----------------------------------------------------------------------------
@@ -648,51 +687,112 @@ def _most_conservative(a: str, b: str) -> str:
     return _SIZE_CONSERVATISM[max(ia, ib)]
 
 
-def _build_entry_guidance(action: str, pos_size: str) -> dict:
+def _build_entry_guidance(
+    action: str, pos_size: str,
+    exec_quality: str, exec_ews: float | None, exec_mqs: float | None,
+    exec_status: str,
+    event_active: bool, event_title: str | None,
+    leadership_conf_status: str,
+) -> dict:
     entry_permission = {
         "PRESS": "normal_entry", "SELECTIVE": "selective_entry",
         "WAIT": "no_new_entry", "REDUCE": "reduce_exposure",
         "HEDGE": "reduce_exposure",
     }.get(action, "no_new_entry")
-    conditional_size = pos_size if action in ("SELECTIVE",) else (
-        pos_size if action == "WAIT" else None
-    )
+    conditional_size = pos_size if action in ("SELECTIVE", "WAIT") else None
+
+    why_waiting: list[str] = []
+    conf_reqs: list[dict] = []
+
+    if action == "WAIT":
+        if exec_ews is not None and exec_ews < 50:
+            why_waiting.append("weak entry timing")
+            conf_reqs.append({
+                "source": "execution", "metric": "execution_window_score",
+                "current": exec_ews, "required": ">= 50",
+                "human": "Execution Window rises out of the Weak range",
+            })
+        if event_active and event_title:
+            why_waiting.append("active event constraint")
+            conf_reqs.append({
+                "source": "event_overlay", "metric": "event_cleared",
+                "human": f"{event_title} is released and the event overlay clears",
+            })
+        if leadership_conf_status in ("UNCONFIRMED",):
+            conf_reqs.append({
+                "source": "leadership", "metric": "confirmation_status",
+                "human": "Leadership confirmation becomes complete",
+            })
+        if exec_status not in ("available",):
+            conf_reqs.append({
+                "source": "execution", "metric": "execution_status",
+                "human": "Execution data becomes available",
+            })
+
     return {
         "current_action":          action,
         "current_entry_permission": entry_permission,
         "conditional_size":        conditional_size,
+        "why_waiting":             why_waiting if action == "WAIT" else [],
+        "confirmation_requirements": conf_reqs if action == "WAIT" else [],
     }
 
 
-def _build_synthesized_explanation(pillars: dict, action: str, verdict: str) -> str:
-    support_msgs: list[str] = []
-    risk_msgs: list[str] = []
-    for name, p in pillars.items():
-        for s in p.get("supportive_signals", []):
-            m = s.get("message", "")
-            if m and m not in support_msgs:
-                support_msgs.append(m)
-        for s in p.get("risk_signals", []):
-            m = s.get("message", "")
-            if m and m not in risk_msgs:
-                risk_msgs.append(m)
+def _build_synthesized_explanation(
+    verdict: str, action: str, pos_size: str,
+    risk_level: str, direction: str, trade_bias: str,
+    exec_quality: str, exec_ews: float | None, exec_mqs: float | None,
+    event_active: bool, event_title: str | None,
+    pillars: dict,
+) -> str:
+    """Polarity-aware one-sentence decision explanation."""
+    env_parts: list[str] = []
+    blocker_parts: list[str] = []
 
-    parts: list[str] = []
-    if support_msgs:
-        parts.append(support_msgs[0].rstrip(".").lower())
-    if risk_msgs:
-        parts.append(risk_msgs[0].rstrip(".").lower())
-    if parts and action in ("WAIT",):
-        parts.append("arguing against chasing strength")
-    elif parts and action in ("REDUCE", "HEDGE"):
-        parts.append("favoring defensive positioning")
-    elif parts and verdict == "YES":
-        parts.append("supporting selective entries")
-    elif parts:
-        parts.append("favoring selective positioning")
-    if parts:
-        return "Short-term participation improved, but " + ", ".join(parts) + "."
-    return ""
+    # Support: regime improving + healthy MQS + cyclicals leading
+    if direction == "IMPROVING":
+        env_parts.append("the market environment is improving")
+    elif direction == "STABLE":
+        env_parts.append("the market environment is stable")
+    else:
+        env_parts.append(f"conditions are {direction.lower()}")
+
+    if exec_mqs is not None and exec_mqs >= 40:
+        env_parts.append("market quality is healthy")
+
+    lc = pillars.get("leadership_and_cross_asset", {})
+    cvd = (lc.get("components") or {}).get("cyclical_vs_defensive_spread")
+    if cvd is not None and cvd > 0:
+        env_parts.append("cyclicals are leading")
+
+    # Trade bias
+    bias_str = trade_bias.replace("_", " ").lower()
+    if "long" in bias_str:
+        env_parts.append("directional bias is selectively bullish")
+
+    # Blockers: weak EWS, event, rising rates
+    if exec_ews is not None and exec_ews < 50:
+        blocker_parts.append("entry timing is weak")
+
+    if event_active and event_title:
+        blocker_parts.append(f"{event_title} is imminent")
+
+    rd = pillars.get("rates_and_dollar", {})
+    rd_chg = (rd.get("components") or {}).get("us10y_change_5d_bps")
+    if rd_chg is not None and rd_chg > 5:
+        blocker_parts.append("rising yields are adding pressure")
+
+    # Build
+    env_text = " and ".join(env_parts) if env_parts else "market conditions are mixed"
+    if blocker_parts:
+        block_text = " and ".join(blocker_parts)
+        implication = "do not chase" if action in ("WAIT",) else (
+            "favor selective entries" if action in ("SELECTIVE",) else "wait for stronger signals"
+        )
+        return f"{env_text.capitalize()}, but {block_text} — {implication}."
+    else:
+        implication = "selective entries are appropriate" if action != "WAIT" else "wait for further confirmation"
+        return f"{env_text.capitalize()} — {implication}."
 
 
 def _build_decision_completeness(
@@ -1518,16 +1618,28 @@ def _build_home_decision(
     )
 
     # ── Entry guidance ──────────────────────────────────────────────────
-    entry_guidance = _build_entry_guidance(action, pos_size)
+    lc_conf = pillars.get("leadership_and_cross_asset", {}).get("confirmation_status", "UNCONFIRMED")
+    entry_guidance = _build_entry_guidance(
+        action=action, pos_size=pos_size,
+        exec_quality=exec_quality, exec_ews=exec_ews, exec_mqs=exec_mqs,
+        exec_status=exec_status,
+        event_active=event_active, event_title=event_overlay.get("next_event"),
+        leadership_conf_status=lc_conf,
+    )
 
     # ── Decision completeness ───────────────────────────────────────────
-    lc_conf = pillars.get("leadership_and_cross_asset", {}).get("confirmation_status", "UNCONFIRMED")
     completeness = _build_decision_completeness(
         regime_assessment, confidence, exec_status, lc_conf,
     )
 
     # ── Synthesized explanation ─────────────────────────────────────────
-    synthesized = _build_synthesized_explanation(pillars, action, verdict)
+    synthesized = _build_synthesized_explanation(
+        verdict=verdict, action=action, pos_size=pos_size,
+        risk_level=risk_level, direction=direction, trade_bias=trade_bias,
+        exec_quality=exec_quality, exec_ews=exec_ews, exec_mqs=exec_mqs,
+        event_active=event_active, event_title=event_overlay.get("next_event"),
+        pillars=pillars,
+    )
 
     sizing = {
         "matrix_size":              pos_size_raw,
@@ -2114,9 +2226,10 @@ async def build_home_risk_intelligence(macro_provider, trading_fetch=None) -> di
     hyg_chg   = _r(hyg.get("change_pct"))
 
     # BTC
-    btc_data  = _get_btc_from_hl()
+    btc_data  = await _get_btc_snapshot()
     btc_price = (btc_data or {}).get("price")
     btc_chg   = (btc_data or {}).get("change_pct")
+    btc_src   = (btc_data or {}).get("source", "unavailable")
 
     # Rate history context
     yc = _compute_yield_changes(rate_hist.get("history", []), us10y)
@@ -2131,7 +2244,7 @@ async def build_home_risk_intelligence(macro_provider, trading_fetch=None) -> di
         "sp500":     {"symbol": "SPY",   "price": spy_price, "change_pct": spy_chg},
         "dow":       {"symbol": "DIA",   "price": dia_price, "change_pct": dia_chg},
         "nasdaq100": {"symbol": "QQQ",   "price": qqq_price, "change_pct": qqq_chg},
-        "bitcoin":   {"symbol": "BTC",   "price": btc_price, "change_pct": btc_chg},
+        "bitcoin":   {"symbol": "BTC",   "price": btc_price, "change_pct": btc_chg, "source": btc_src},
         "us10y": {
             "symbol":        "US10Y",
             "price":         us10y,
