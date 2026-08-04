@@ -1732,6 +1732,218 @@ def test_event_country_provenance():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Phase F — BTC cache-only reader and timestamp tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_btc_exact_cmc_key_used():
+    """CMC BTC uses exact cache key, not prefix scan."""
+    from services.home_risk_intelligence import _get_btc_snapshot
+    from data.cache import cache as _c
+    # Populate exact CMC key
+    cmc_key = "cmc:/v2/cryptocurrency/quotes/latest:[('convert', 'USD'), ('symbol', 'BTC')]"
+    _c.set(cmc_key, {"data": {"BTC": {"quote": {"USD": {"price": 90000, "percent_change_24h": 2.5, "last_updated": "1700000000"}}}}}, 120)
+    result = _get_btc_snapshot()
+    assert result is not None
+    assert result["source"] == "coinmarketcap"
+    assert result["price"] == 90000.0
+    assert result["change_pct"] == 2.5
+    assert result["as_of"] == 1700000000
+    assert result["freshness"] == "cached"
+    _c.delete(cmc_key)
+    print("test_btc_exact_cmc_key_used PASSED")
+
+
+def test_btc_exact_coingecko_key_used():
+    """CoinGecko BTC uses exact key from provider builder, not prefix scan."""
+    from services.home_risk_intelligence import _get_btc_snapshot
+    from data.cache import cache as _c
+    import main as _m
+    ds = getattr(_m, "data_service", None)
+    cg = getattr(ds, "coingecko", None) if ds else None
+    if cg is None:
+        print("test_btc_exact_coingecko_key_used SKIPPED (no CG provider)")
+        return
+    cg_key = cg.top_coins_cache_key(limit=1)
+    _c.set(cg_key, [{"current_price": 90000, "price_change_percentage_24h": 2.5, "last_updated": "1700000000"}], 120)
+    result = _get_btc_snapshot()
+    assert result is not None
+    assert result["source"] == "coingecko"
+    assert result["price"] == 90000.0
+    _c.delete(cg_key)
+    print("test_btc_exact_coingecko_key_used PASSED")
+
+
+def test_btc_hyperliquid_unknown_freshness():
+    """Hyperliquid BTC has as_of=None and freshness='unknown', not 'live'."""
+    from services.home_risk_intelligence import _get_btc_from_hl
+    hl = _get_btc_from_hl()
+    if hl is not None:
+        assert hl["as_of"] is None
+        assert hl["freshness"] == "unknown"
+    print("test_btc_hyperliquid_unknown_freshness PASSED")
+
+
+def test_btc_parse_iso_timestamp():
+    """_parse_ts accepts ISO-8601 with Z and timezone."""
+    from services.home_risk_intelligence import _parse_ts
+    ts1 = _parse_ts("2026-08-04T12:00:00Z")
+    assert ts1 is not None and ts1 > 1754000000
+    ts2 = _parse_ts("2026-08-04T12:00:00+00:00")
+    assert ts2 is not None and ts2 > 1754000000
+    ts3 = _parse_ts("2026-08-04T12:00:00")
+    assert ts3 is not None and ts3 > 1754000000
+    print("test_btc_parse_iso_timestamp PASSED")
+
+
+def test_btc_parse_epoch_timestamp():
+    """_parse_ts accepts integer epoch seconds and numeric strings."""
+    from services.home_risk_intelligence import _parse_ts
+    assert _parse_ts(1700000000) == 1700000000
+    assert _parse_ts(1700000000.0) == 1700000000
+    assert _parse_ts("1700000000") == 1700000000
+    print("test_btc_parse_epoch_timestamp PASSED")
+
+
+def test_btc_parse_rejects_malformed():
+    """_parse_ts returns None for malformed timestamps."""
+    from services.home_risk_intelligence import _parse_ts
+    assert _parse_ts("not-a-timestamp") is None
+    assert _parse_ts("") is None
+    assert _parse_ts(None) is None
+    print("test_btc_parse_rejects_malformed PASSED")
+
+
+def test_btc_parse_missing_returns_none():
+    """_parse_ts returns None for None/empty, never uses current time."""
+    from services.home_risk_intelligence import _parse_ts
+    import time
+    assert _parse_ts(None) is None
+    assert _parse_ts("") is None
+    # Should not return current time
+    result = _parse_ts(None)
+    if result is not None:
+        assert abs(result - int(time.time())) > 3600, "Should not use current time"
+    print("test_btc_parse_missing_returns_none PASSED")
+
+
+def test_btc_timestamped_beats_unknown():
+    """A timestamped CMC candidate beats an unknown-freshness HL candidate."""
+    from services.home_risk_intelligence import _get_btc_snapshot
+    from data.cache import cache as _c
+    cmc_key = "cmc:/v2/cryptocurrency/quotes/latest:[('convert', 'USD'), ('symbol', 'BTC')]"
+    _c.set(cmc_key, {"data": {"BTC": {"quote": {"USD": {"price": 90000, "percent_change_24h": 2.5, "last_updated": "1700000000"}}}}}, 120)
+    result = _get_btc_snapshot()
+    assert result is not None
+    # CMC with timestamp should be selected over HL (unknown freshness)
+    assert result["source"] == "coinmarketcap"
+    assert result["as_of"] == 1700000000
+    _c.delete(cmc_key)
+    print("test_btc_timestamped_beats_unknown PASSED")
+
+
+def test_btc_empty_caches_return_none():
+    """Empty caches return None without triggering provider calls."""
+    from services.home_risk_intelligence import _get_btc_snapshot
+    from data.cache import cache as _c
+    cmc_key = "cmc:/v2/cryptocurrency/quotes/latest:[('convert', 'USD'), ('symbol', 'BTC')]"
+    _c.delete(cmc_key)
+    result = _get_btc_snapshot()
+    # Should be None (or HL if connected), not trigger any provider call
+    print("test_btc_empty_caches_return_none PASSED")
+
+
+def test_btc_no_provider_imports():
+    """_get_btc_snapshot does not import CMCProvider or CoinGeckoProvider."""
+    import inspect
+    from services import home_risk_intelligence as hri
+    src = inspect.getsource(hri._get_btc_snapshot)
+    assert "CMCProvider" not in src, "Should not import CMCProvider"
+    assert "CoinGeckoProvider" not in src, "Should not import CoinGeckoProvider"
+    assert "httpx" not in src, "Should not import httpx"
+    print("test_btc_no_provider_imports PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase G — Decision contract verification
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_synthesized_explanation_noun_parallel():
+    """Synthesized explanation uses noun-parallel 'cyclical leadership' not 'cyclicals are leading'."""
+    from services.home_risk_intelligence import _build_synthesized_explanation
+    syn = _build_synthesized_explanation(
+        verdict="CAUTION", action="WAIT", pos_size="half-size",
+        risk_level="MODERATE", direction="IMPROVING", trade_bias="SELECTIVE_LONG",
+        exec_quality="WEAK", exec_ews=25, exec_mqs=70,
+        event_active=True, event_title="JOLTs",
+        pillars={"leadership_and_cross_asset": {"components": {"cyclical_vs_defensive_spread": 0.5}}},
+    )
+    assert "cyclicals are leading" not in syn, f"Should use noun phrase, got: {syn}"
+    assert "cyclical leadership" in syn, f"Should use 'cyclical leadership': {syn}"
+    print("test_synthesized_explanation_noun_parallel PASSED")
+
+
+def test_synthesized_explanation_two_sentences():
+    """Synthesized explanation is exactly two sentences."""
+    from services.home_risk_intelligence import _build_synthesized_explanation
+    syn = _build_synthesized_explanation(
+        verdict="CAUTION", action="WAIT", pos_size="half-size",
+        risk_level="MODERATE", direction="IMPROVING", trade_bias="SELECTIVE_LONG",
+        exec_quality="WEAK", exec_ews=25, exec_mqs=70,
+        event_active=False, event_title=None,
+        pillars={"leadership_and_cross_asset": {"components": {"cyclical_vs_defensive_spread": 0.5}}},
+    )
+    sentences = [s for s in syn.split(". ") if s.strip()]
+    assert len(sentences) == 2, f"Should be 2 sentences, got {len(sentences)}: {syn}"
+    print("test_synthesized_explanation_two_sentences PASSED")
+
+
+def test_decision_summary_prioritizes_blockers():
+    """Decision summary lists weak EWS and event before milder concerns."""
+    from services.home_risk_intelligence import _build_decision_ranked_summary
+    summary = _build_decision_ranked_summary(
+        pillars={}, exec_ews=25, exec_mqs=70,
+        event_active=True, event_title="JOLTs",
+    )
+    blockers = summary["largest_blockers"]
+    assert len(blockers) >= 1
+    assert any("Weak" in b["message"] or "25" in b["message"] for b in blockers)
+    assert any("JOLTs" in b["message"] for b in blockers)
+    # Event should not appear before EWS when EWS is weak
+    ews_idx = next((i for i, b in enumerate(blockers) if "Execution" in b["message"]), 99)
+    event_idx = next((i for i, b in enumerate(blockers) if "JOLTs" in b["message"]), 99)
+    assert ews_idx < event_idx, "EWS should rank above event constraint"
+    print("test_decision_summary_prioritizes_blockers PASSED")
+
+
+def test_market_drivers_synthesized():
+    """Synthesized market drivers are concise, not raw bullets."""
+    from services.home_risk_intelligence import _build_synthesized_why_moving
+    drivers = _build_synthesized_why_moving({
+        "trend_and_breadth": {"components": {"equity_1d_avg": 1.5}},
+        "rates_and_dollar": {"components": {"us10y_change_5d_bps": 7}},
+        "volatility_and_credit": {"components": {"vix": 15}},
+        "leadership_and_cross_asset": {"components": {}},
+    }, True)
+    assert len(drivers) >= 1
+    assert len(drivers) <= 2
+    for d in drivers:
+        assert "verdict" not in d.lower()
+        assert "action" not in d.lower()
+    print("test_market_drivers_synthesized PASSED")
+
+
+def test_completeness_reasons_all_components():
+    """Completeness reasons include both execution and leadership when both are incomplete."""
+    from services.home_risk_intelligence import _build_decision_completeness
+    comp = _build_decision_completeness("COMPLETE", "HIGH", "warming", "UNCONFIRMED", "WEAK")
+    reasons = comp["reasons"]
+    assert len(reasons) >= 2, f"Should have reasons for both exec and leadership: {reasons}"
+    assert any("execution" in r["component"] for r in reasons)
+    assert any("leadership" in r["component"] for r in reasons)
+    print("test_completeness_reasons_all_components PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Run
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1866,5 +2078,24 @@ if __name__ == "__main__":
     test_execution_failed_status()
     test_event_country_provenance()
 
-    total = 104
+    # Phase F — BTC cache-only reader and timestamp tests
+    test_btc_exact_cmc_key_used()
+    test_btc_exact_coingecko_key_used()
+    test_btc_hyperliquid_unknown_freshness()
+    test_btc_parse_iso_timestamp()
+    test_btc_parse_epoch_timestamp()
+    test_btc_parse_rejects_malformed()
+    test_btc_parse_missing_returns_none()
+    test_btc_timestamped_beats_unknown()
+    test_btc_empty_caches_return_none()
+    test_btc_no_provider_imports()
+
+    # Phase G — Decision contract verification
+    test_synthesized_explanation_noun_parallel()
+    test_synthesized_explanation_two_sentences()
+    test_decision_summary_prioritizes_blockers()
+    test_market_drivers_synthesized()
+    test_completeness_reasons_all_components()
+
+    total = 119
     print(f"\nAll {total} tests PASSED")

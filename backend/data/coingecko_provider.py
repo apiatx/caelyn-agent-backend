@@ -96,6 +96,20 @@ class CoinGeckoProvider:
 
     def __init__(self, api_key: str):
         self.api_key = api_key
+
+    def top_coins_cache_key(self, limit: int = 25) -> str:
+        """Return the exact cache key for get_top_coins(limit) — no HTTP."""
+        params = {
+            "vs_currency": "usd",
+            "order": "market_cap_desc",
+            "per_page": limit,
+            "page": 1,
+            "sparkline": "false",
+            "price_change_percentage": "1h,24h,7d,30d",
+            "x_cg_demo_api_key": self.api_key,
+        }
+        return f"coingecko:coins/markets:{str(sorted(params.items()))[:80]}"
+
     async def _get(self, endpoint: str, params: dict = None) -> dict | list:
         if params is None:
             params = {}

@@ -28,15 +28,6 @@ class TTLCache:
     def delete(self, key: str) -> None:
         """Remove a single key unconditionally."""
         self._store.pop(key, None)
-    def get_by_prefix(self, prefix: str) -> tuple[str, Any] | None:
-        """Return (key, value) for the first unexpired entry whose key starts with *prefix*.
-        Returns None when no match exists.  Never populates or refreshes — pure read.
-        """
-        now = time.time()
-        for k, (v, exp) in list(self._store.items()):
-            if k.startswith(prefix) and exp > now:
-                return (k, v)
-        return None
     def clear(self):
         """Clear all cached values."""
         self._store.clear()

@@ -94,25 +94,55 @@ def _get_btc_from_hl() -> dict | None:
             "change_pct":  _r(btc.pct_change_24h, 2),
             "source":      "hyperliquid",
             "as_of":       None,
-            "freshness":   "live",
+            "freshness":   "unknown",
         }
     except Exception:
         return None
 
 
+def _parse_ts(raw) -> int | None:
+    """Parse a provider timestamp into epoch seconds. Returns None on failure."""
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, (int, float)):
+            v = int(raw)
+            return v if v > 0 else None
+        s = str(raw).strip()
+        if not s:
+            return None
+        # ISO-8601 with timezone
+        if "T" in s and ("+" in s or s.endswith("Z")):
+            s2 = s.replace("Z", "+00:00")
+            dt = datetime.strptime(s2[:25], "%Y-%m-%dT%H:%M:%S%z")
+            return int(dt.timestamp())
+        # ISO-8601 without timezone (assume UTC)
+        if "T" in s:
+            dt = datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S")
+            return int(dt.replace(tzinfo=timezone.utc).timestamp())
+        # Epoch seconds (numeric string)
+        v = float(s)
+        if 1000000000 < v < 9999999999:
+            return int(v)  # epoch seconds
+        if 1000000000000 < v < 9999999999999:
+            return int(v / 1000)  # epoch milliseconds
+        return None
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
 def _get_btc_snapshot() -> dict | None:
-    """Cache-only BTC snapshot.  Reads existing provider caches — never HTTP.
+    """Cache-only BTC snapshot. Reads existing provider caches — never HTTP.
     Returns {price, change_pct, source, as_of, freshness} or None.
     """
     candidates: list[dict] = []
 
-    # 1. Hyperliquid in-memory state (zero-call)
+    # 1. Hyperliquid in-memory state (zero-call, freshness unknown)
     hl = _get_btc_from_hl()
     if hl is not None:
         candidates.append(hl)
 
-    # 2. CMC exact cache key (CMCProvider._get format)
-    # Key: cmc:/v2/cryptocurrency/quotes/latest:[('convert', 'USD'), ('symbol', 'BTC')]
+    # 2. CMC exact cache key
     try:
         from data.cache import cache as _c
         cmc_key = "cmc:/v2/cryptocurrency/quotes/latest:[('convert', 'USD'), ('symbol', 'BTC')]"
@@ -122,41 +152,34 @@ def _get_btc_snapshot() -> dict | None:
             usd = (btc.get("quote") or {}).get("USD", {})
             price = _r(usd.get("price"))
             chg = _r(usd.get("percent_change_24h"))
-            ts_raw = usd.get("last_updated")
+            ts = _parse_ts(usd.get("last_updated"))
             if price is not None and chg is not None:
-                as_of = None
-                try:
-                    as_of = int(float(ts_raw)) if ts_raw is not None else None
-                except (TypeError, ValueError):
-                    pass
                 candidates.append({
                     "price": price, "change_pct": chg,
                     "source": "coinmarketcap",
-                    "as_of": as_of, "freshness": "cached" if as_of else "unknown",
+                    "as_of": ts, "freshness": "cached" if ts else "unknown",
                 })
     except Exception:
         pass
 
-    # 3. CoinGecko cache (prefix scan — API key makes exact key unpredictable)
+    # 3. CoinGecko exact cache key (via provider key builder)
     try:
-        entry = _c.get_by_prefix("coingecko:coins/markets")
-        if entry is not None:
-            _key, coins = entry
+        import main as _m
+        ds = getattr(_m, "data_service", None)
+        cg = getattr(ds, "coingecko", None) if ds else None
+        if cg is not None:
+            cg_key = cg.top_coins_cache_key(limit=1)
+            coins = _c.get(cg_key)
             if isinstance(coins, list) and len(coins) > 0:
                 btc_data = coins[0]
                 price = _r(btc_data.get("current_price"))
                 chg = _r(btc_data.get("price_change_percentage_24h"))
-                ts_raw = btc_data.get("last_updated")
+                ts = _parse_ts(btc_data.get("last_updated"))
                 if price is not None and chg is not None:
-                    as_of = None
-                    try:
-                        as_of = int(float(ts_raw)) if ts_raw is not None else None
-                    except (TypeError, ValueError):
-                        pass
                     candidates.append({
                         "price": price, "change_pct": chg,
                         "source": "coingecko",
-                        "as_of": as_of, "freshness": "cached" if as_of else "unknown",
+                        "as_of": ts, "freshness": "cached" if ts else "unknown",
                     })
     except Exception:
         pass
@@ -164,7 +187,7 @@ def _get_btc_snapshot() -> dict | None:
     if not candidates:
         return None
 
-    # Select best: prefer valid as_of, then newest timestamp, then provider order
+    # Selection: prefer fresh over unknown, then newest timestamp, then provider order
     with_ts = [c for c in candidates if c.get("as_of") is not None]
     without_ts = [c for c in candidates if c.get("as_of") is None]
     selected = sorted(with_ts, key=lambda c: c["as_of"] or 0, reverse=True) if with_ts else without_ts
