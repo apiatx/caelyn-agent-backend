@@ -13141,6 +13141,13 @@ async def _master_screener_loop():
         t_cycle = _time.time()
         _ld_ms.update_master_loop("active")
         try:
+            # Yield Tradier capacity to request-driven work when saturated
+            from data.tradier_provider import TRADIER_LIMITER as _tl
+            if _tl.is_saturated():
+                print("[MASTER_SCREENER] limiter saturated — yielding for request traffic")
+                await asyncio.sleep(2.0)
+                continue
+
             engine = UnifiedOptionsEngine(data_service)
             engine._shared_sem = _TRADIER_GLOBAL_SEM
             # Share the expiry cache with the engine so Stage 1 can use cached results.
@@ -13647,6 +13654,13 @@ async def _sectors_fast_backfill_loop():
                 print(f"[SECTORS_BF] Price map build failed (non-fatal): {_sbf_pm_e}")
 
             # ── Run chain summarizer for this batch ────────────────────────────
+            # Yield Tradier capacity to request-driven work when saturated
+            from data.tradier_provider import TRADIER_LIMITER as _tl_sbf
+            if _tl_sbf.is_saturated():
+                print(f"[SECTORS_BF] limiter saturated — deferring batch, sleep {_sbf_sleep_s}s")
+                await asyncio.sleep(_sbf_sleep_s)
+                continue
+
             _now_sbf = _ts_sbf.time()
             results: list[dict] = []
             try:

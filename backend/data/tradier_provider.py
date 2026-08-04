@@ -183,6 +183,14 @@ class TradierProvider:
             _bgt.record_defer(_lane)
             print(f"[TRADIER_BUDGET] {_lane!r} lane over budget — deferring {path}")
             return None
+        # Global saturation guard: background lanes yield to request-driven work
+        # when the 110-call sliding window is full.  This prevents maintenance/
+        # sector/canonical jobs from blocking quote/options calls during active
+        # trading sessions.
+        _BACKGROUND_LANES = frozenset({"maintenance", "sectors", "canonical_history_backfill"})
+        if _enforce_budget and _lane in _BACKGROUND_LANES and TRADIER_LIMITER.is_saturated():
+            _bgt.record_defer(_lane)
+            return None
         await TRADIER_LIMITER.acquire()
         _bgt.record_call(_lane)
         url = f"{self.base_url}{path}"

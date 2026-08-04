@@ -817,6 +817,7 @@ _refresh_outcome: dict[str, str] = {}  # "succeeded" | "failed"
 _refresh_failure_count: dict[str, int] = {}
 _refresh_last_attempt: dict[str, float] = {}
 _FAILURE_BACKOFF = 30  # seconds before retrying after a failed refresh
+_REFRESH_DEADLINE = 25  # seconds — bounded build deadline for execution refresh
 
 
 def _refresh_state(mode: str) -> str:
@@ -878,10 +879,13 @@ def schedule_trading_dashboard_refresh(
     # Create background task
     async def _refresh():
         try:
-            result = await get_trading_dashboard(
-                mode=mode,
-                force=True,
-                fetch_fresh_data=fetch_fresh_data,
+            result = await asyncio.wait_for(
+                get_trading_dashboard(
+                    mode=mode,
+                    force=True,
+                    fetch_fresh_data=fetch_fresh_data,
+                ),
+                timeout=_REFRESH_DEADLINE,
             )
             _refresh_outcome[mode] = "succeeded"
             _refresh_failure_count.pop(mode, None)
