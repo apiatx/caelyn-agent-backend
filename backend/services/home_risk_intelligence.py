@@ -90,41 +90,54 @@ def _get_btc_from_hl() -> dict | None:
         if btc is None:
             return None
         return {
-            "price":      _r(btc.mark_px, 2),
-            "change_pct": _r(btc.pct_change_24h, 2),
-            "source":     "hyperliquid",
+            "price":       _r(btc.mark_px, 2),
+            "change_pct":  _r(btc.pct_change_24h, 2),
+            "source":      "hyperliquid",
+            "as_of":       None,
+            "freshness":   "live",
         }
     except Exception:
         return None
 
 
 def _get_btc_snapshot() -> dict | None:
-    """Cache-only BTC snapshot: HL state (zero-call) → CMC cache → CoinGecko cache.
-    Never makes upstream HTTP requests. Returns None when no valid cached source exists."""
-    import time as _t
+    """Cache-only BTC snapshot.  Reads existing provider caches — never HTTP.
+    Returns {price, change_pct, source, as_of, freshness} or None.
+    """
+    candidates: list[dict] = []
 
-    # 1. Hyperliquid in-memory state — always zero API call
+    # 1. Hyperliquid in-memory state (zero-call)
     hl = _get_btc_from_hl()
     if hl is not None:
-        return {**hl, "as_of": int(_t.time()), "freshness": "live"}
+        candidates.append(hl)
 
-    # 2. CMC cache — prefix scan, pure read
+    # 2. CMC exact cache key (CMCProvider._get format)
+    # Key: cmc:/v2/cryptocurrency/quotes/latest:[('convert', 'USD'), ('symbol', 'BTC')]
     try:
         from data.cache import cache as _c
-        entry = _c.get_by_prefix("cmc:/v2/cryptocurrency/quotes/latest")
-        if entry is not None:
-            _key, data = entry
-            btc = (data or {}).get("data", {}).get("BTC", {})
+        cmc_key = "cmc:/v2/cryptocurrency/quotes/latest:[('convert', 'USD'), ('symbol', 'BTC')]"
+        cmc_data = _c.get(cmc_key)
+        if cmc_data is not None:
+            btc = (cmc_data.get("data") or {}).get("BTC", {})
             usd = (btc.get("quote") or {}).get("USD", {})
             price = _r(usd.get("price"))
             chg = _r(usd.get("percent_change_24h"))
+            ts_raw = usd.get("last_updated")
             if price is not None and chg is not None:
-                return {"price": price, "change_pct": chg, "source": "coinmarketcap",
-                        "as_of": int(_t.time()), "freshness": "cached"}
+                as_of = None
+                try:
+                    as_of = int(float(ts_raw)) if ts_raw is not None else None
+                except (TypeError, ValueError):
+                    pass
+                candidates.append({
+                    "price": price, "change_pct": chg,
+                    "source": "coinmarketcap",
+                    "as_of": as_of, "freshness": "cached" if as_of else "unknown",
+                })
     except Exception:
         pass
 
-    # 3. CoinGecko cache — prefix scan, pure read
+    # 3. CoinGecko cache (prefix scan — API key makes exact key unpredictable)
     try:
         entry = _c.get_by_prefix("coingecko:coins/markets")
         if entry is not None:
@@ -133,13 +146,29 @@ def _get_btc_snapshot() -> dict | None:
                 btc_data = coins[0]
                 price = _r(btc_data.get("current_price"))
                 chg = _r(btc_data.get("price_change_percentage_24h"))
+                ts_raw = btc_data.get("last_updated")
                 if price is not None and chg is not None:
-                    return {"price": price, "change_pct": chg, "source": "coingecko",
-                            "as_of": int(_t.time()), "freshness": "cached"}
+                    as_of = None
+                    try:
+                        as_of = int(float(ts_raw)) if ts_raw is not None else None
+                    except (TypeError, ValueError):
+                        pass
+                    candidates.append({
+                        "price": price, "change_pct": chg,
+                        "source": "coingecko",
+                        "as_of": as_of, "freshness": "cached" if as_of else "unknown",
+                    })
     except Exception:
         pass
 
-    return None
+    if not candidates:
+        return None
+
+    # Select best: prefer valid as_of, then newest timestamp, then provider order
+    with_ts = [c for c in candidates if c.get("as_of") is not None]
+    without_ts = [c for c in candidates if c.get("as_of") is None]
+    selected = sorted(with_ts, key=lambda c: c["as_of"] or 0, reverse=True) if with_ts else without_ts
+    return selected[0] if selected else None
 
 
 # -----------------------------------------------------------------------------
@@ -755,7 +784,7 @@ def _build_synthesized_explanation(
     supports: list[str] = []
     blockers: list[str] = []
 
-    # Sentence 1: environment + directional support
+    # Sentence 1: environment + directional support (noun-parallel)
     if direction == "IMPROVING":
         supports.append("market conditions are improving")
     elif direction == "STABLE":
@@ -769,12 +798,15 @@ def _build_synthesized_explanation(
     lc = pillars.get("leadership_and_cross_asset", {})
     cvd = (lc.get("components") or {}).get("cyclical_vs_defensive_spread")
     if cvd is not None and cvd > 0:
-        supports.append("cyclicals are leading")
+        supports.append("cyclical leadership")
 
-    env = ", supported by " + " and ".join(supports[1:]) if len(supports) > 1 else ""
-    sent1 = (supports[0] if supports else "Market conditions are mixed") + env + "."
+    if len(supports) > 1:
+        env = ", supported by " + " and ".join(supports[1:])
+    else:
+        env = ""
+    sent1 = (supports[0] if supports else "Market conditions are mixed.") + env + "."
 
-    # Sentence 2: primary blocker + implication
+    # Sentence 2: blocker + implication
     if exec_ews is not None and exec_ews < 50:
         blockers.append("entry timing remains weak")
 
@@ -786,15 +818,115 @@ def _build_synthesized_explanation(
 
     if blockers:
         block_text = " and ".join(blockers[:2])
-        implication = "avoid chasing" if action in ("WAIT",) else "favor selective entries"
-        sent2 = f"{block_text.capitalize()}, so {implication}."
+        if action in ("WAIT",):
+            sent2 = f"{block_text.capitalize()}, so avoid chasing."
+        elif action in ("SELECTIVE",):
+            sent2 = f"{block_text.capitalize()}, so favor selective entries."
+        else:
+            sent2 = f"{block_text.capitalize()}."
     else:
-        sent2 = "Selective entries are appropriate."
         if verdict == "YES":
             sent2 = "Conditions support pressing entries."
+        else:
+            sent2 = "Selective entries are appropriate."
 
     return f"{sent1} {sent2}"
 
+
+def _build_synthesized_why_moving(pillars: dict, market_open: bool) -> list[str]:
+    """Produce up to two concise synthesized market-driver statements."""
+    lines: list[str] = []
+    sup: list[str] = []
+    res: list[str] = []
+
+    # Supportive drivers
+    tb = pillars.get("trend_and_breadth", {})
+    tb_comp = tb.get("components", {})
+    eq = tb_comp.get("equity_1d_avg")
+    breadth = tb_comp.get("breadth_1d")
+    if eq is not None and eq >= 0.5:
+        sup.append("equity participation")
+    if breadth is not None and breadth >= 55:
+        sup.append("broad sector participation")
+
+    lc = pillars.get("leadership_and_cross_asset", {})
+    lc_comp = lc.get("components", {})
+    cvd = lc_comp.get("cyclical_vs_defensive_spread")
+    if cvd is not None and cvd > 0:
+        sup.append("cyclical leadership")
+
+    if sup:
+        lines.append(f"{' and '.join(sup).capitalize()} {'is' if len(sup) == 1 else 'are'} supporting risk appetite.")
+
+    # Restraining drivers
+    rd = pillars.get("rates_and_dollar", {})
+    rd_comp = rd.get("components", {})
+    rd_chg = rd_comp.get("us10y_change_5d_bps")
+    if rd_chg is not None and rd_chg > 5:
+        res.append("rising yields")
+    vc = pillars.get("volatility_and_credit", {})
+    vc_comp = vc.get("components", {})
+    vix_val = vc_comp.get("vix")
+    vix_chg = vc_comp.get("vix_change_1d")
+    if vix_val is not None and vix_val >= 20:
+        res.append("elevated volatility")
+    elif vix_chg is not None and vix_chg >= 3:
+        res.append("rising volatility")
+    hyg_val = vc_comp.get("hyg_change_1d")
+    if hyg_val is not None and hyg_val <= -0.3:
+        res.append("credit stress")
+
+    if res:
+        lines.append(f"{' and '.join(res).capitalize()} {'is' if len(res) == 1 else 'are'} limiting entry quality.")
+
+    if not lines:
+        lines.append("Markets are trading within monitored parameters with no dominant driver.")
+
+    return lines[:2]
+
+
+def _build_decision_ranked_summary(
+    pillars: dict, exec_ews: float | None, exec_mqs: float | None,
+    event_active: bool, event_title: str | None,
+) -> dict:
+    """Decision-ranked supports and blockers — ordered by effect on current action."""
+    strong_supports: list[dict] = []
+    strong_blockers: list[dict] = []
+
+    # Supports
+    if exec_mqs is not None and exec_mqs >= 55:
+        strong_supports.append({"source": "execution", "message": f"Market Quality is healthy at {exec_mqs:.0f}/100."})
+
+    lc = pillars.get("leadership_and_cross_asset", {})
+    lc_comp = lc.get("components", {})
+    cvd = lc_comp.get("cyclical_vs_defensive_spread")
+    if cvd is not None and cvd > 0:
+        strong_supports.append({"source": "leadership", "message": "Cyclicals are leading defensives — risk-on rotation."})
+
+    tb = pillars.get("trend_and_breadth", {})
+    tb_comp = tb.get("components", {})
+    breadth = tb_comp.get("breadth_1d")
+    if breadth is not None and breadth >= 55:
+        strong_supports.append({"source": "trend_and_breadth", "message": f"Broad sector participation at {breadth:.0f}%."})
+
+    # Blockers
+    if exec_ews is not None and exec_ews < 50:
+        strong_blockers.append({"source": "execution", "message": f"Execution Window is Weak at {exec_ews:.0f}/100."})
+
+    if event_active and event_title:
+        strong_blockers.append({"source": "event_overlay", "message": f"{event_title} is imminent — event risk constrains position size."})
+
+    rd = pillars.get("rates_and_dollar", {})
+    rd_comp = rd.get("components", {})
+    rd_chg = rd_comp.get("us10y_change_5d_bps")
+    us10y = rd_comp.get("us10y")
+    if rd_chg is not None and rd_chg > 5 and us10y is not None and us10y >= 4.5:
+        strong_blockers.append({"source": "rates_and_dollar", "message": f"10Y at {us10y:.2f}% has risen {rd_chg:+.0f} bps over five sessions."})
+
+    return {
+        "strongest_supports":  strong_supports[:3],
+        "largest_blockers":    strong_blockers[:3],
+    }
 
 def _build_decision_completeness(
     regime_assessment: str, regime_confidence: str,
@@ -807,20 +939,20 @@ def _build_decision_completeness(
         overall = "INSUFFICIENT_DATA"
         reasons.append({"component": "regime", "status": regime_assessment,
                         "explanation": "Regime data is insufficient to support a meaningful decision."})
-    elif exec_status not in ("available", "expired"):
-        overall = "PARTIAL"
-        reasons.append({"component": "execution", "status": exec_status,
-                        "explanation": f"Execution confirmation is {exec_status}."})
-    elif leadership_conf_status in ("UNCONFIRMED",):
-        overall = "PARTIAL"
-        reasons.append({"component": "leadership", "status": leadership_conf_status,
-                        "explanation": "Leadership confirmation is incomplete."})
-    elif leadership_conf_status == "MIXED":
-        overall = "PARTIAL"
-        reasons.append({"component": "leadership", "status": "MIXED",
-                        "explanation": "Leadership signals are mixed."})
     else:
         overall = "COMPLETE"
+        if exec_status not in ("available", "expired"):
+            overall = "PARTIAL"
+            reasons.append({"component": "execution", "status": exec_status,
+                            "explanation": f"Execution confirmation is {exec_status}."})
+        if leadership_conf_status in ("UNCONFIRMED",):
+            overall = "PARTIAL"
+            reasons.append({"component": "leadership", "status": leadership_conf_status,
+                            "explanation": "Leadership confirmation is incomplete."})
+        elif leadership_conf_status == "MIXED":
+            overall = "PARTIAL"
+            reasons.append({"component": "leadership", "status": "MIXED",
+                            "explanation": "Leadership signals are mixed."})
 
     return {
         "regime_confidence":              regime_confidence,
@@ -1672,6 +1804,9 @@ def _build_home_decision(
     # ── Signal summary ────────────────────────────────────────────────────
     signal_summary: dict = _build_signal_summary(pillars, event_active, event_overlay, exec_status, exec_mqs, exec_ews)
 
+    # ── Decision-ranked summary ────────────────────────────────────────
+    decision_summary = _build_decision_ranked_summary(pillars, exec_ews, exec_mqs, event_active, event_overlay.get("next_event"))
+
     # ── Execution warmup contract ─────────────────────────────────────────
     exec_recommended_refetch: float | None = None
     exec_refresh_in_progress = False
@@ -1697,6 +1832,7 @@ def _build_home_decision(
         "completeness":               completeness,
         "synthesized_explanation":    synthesized,
         "signal_summary":             signal_summary,
+        "decision_summary":           decision_summary,
         "confidence":                 confidence,
         "assessment_status":          assessment,
         "market_context":             market_context,
@@ -2363,6 +2499,7 @@ async def build_home_risk_intelligence(macro_provider, trading_fetch=None) -> di
 
     # 12. Why bullets (canonical)
     why_bullets = _build_canonical_why_bullets(swing_regime, market_open)
+    synthesized_why = _build_synthesized_why_moving(swing_regime.get("pillars", {}), market_open)
 
     # 13. Legacy why bullets
     vix_sig_title = (vix_payload.get("vix_regime_signal") or {}).get("signal_title")
@@ -2471,8 +2608,9 @@ async def build_home_risk_intelligence(macro_provider, trading_fetch=None) -> di
         "swing_regime":              swing_regime,
         "home_decision":             home_decision,
         "upcoming_economic_events":  upcoming_events,
-        "why_market_is_moving":      why_bullets,
-        "legacy_why_market_is_moving": legacy_why_bullets,
+        "why_market_is_moving":            why_bullets,
+        "synthesized_why_market_is_moving": synthesized_why,
+        "legacy_why_market_is_moving":       legacy_why_bullets,
     }
 
     cache.set(_RISK_INTEL_KEY,     result, effective_ttl)
