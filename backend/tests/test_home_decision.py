@@ -867,6 +867,51 @@ def test_improvise_worsen_empty_not_monitor_daily():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Phase D: WEAKENING direction handling
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_weakening_moderate_waits():
+    """MODERATE + WEAKENING + STRONG exec → CAUTION / WAIT (not SELECTIVE)"""
+    sr = _make_regime("MODERATE", "WEAKENING", "NEUTRAL")
+    es = _make_exec_snapshot(mqs=75.0, ews=80.0, decision="YES")
+    d = _hd(sr, es)
+    assert d["verdict"] == "CAUTION"
+    assert d["action"] == "WAIT", f"expected WAIT, got {d['action']}"
+    assert d["position_size_hint"] == "half-size"
+    print("test_weakening_moderate_waits PASSED")
+
+
+def test_weakening_elevated_waits():
+    """ELEVATED + WEAKENING → CAUTION / WAIT (not SELECTIVE)"""
+    sr = _make_regime("ELEVATED", "WEAKENING", "NEUTRAL", pos_size="selective")
+    es = _make_exec_snapshot(mqs=75.0, ews=80.0, decision="YES")
+    d = _hd(sr, es)
+    assert d["verdict"] == "CAUTION"
+    assert d["action"] == "WAIT", f"expected WAIT, got {d['action']}"
+    assert d["position_size_hint"] == "half-size"
+    print("test_weakening_elevated_waits PASSED")
+
+
+def test_weakening_h_dir_mapping():
+    """_h_dir returns 'Weakening' not raw 'WEAKENING'"""
+    from services.home_risk_intelligence import _h_dir
+    assert _h_dir("WEAKENING") == "Weakening"
+    assert _h_dir("WORSENING") == "Worsening"
+    assert _h_dir("IMPROVING") == "Improving"
+    assert _h_dir("STABLE") == "Stable"
+    print("test_weakening_h_dir_mapping PASSED")
+
+
+def test_weakening_moderate_unavailable_waits():
+    """MODERATE + WEAKENING + UNAVAILABLE exec → WAIT"""
+    sr = _make_regime("MODERATE", "WEAKENING", "NEUTRAL")
+    es = _make_exec_snapshot(status="unavailable")
+    d = _hd(sr, es)
+    assert d["action"] == "WAIT", f"expected WAIT, got {d['action']}"
+    print("test_weakening_moderate_unavailable_waits PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Run
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -958,4 +1003,11 @@ if __name__ == "__main__":
     test_generic_reasons_not_present()
     test_improvise_worsen_empty_not_monitor_daily()
 
-    print("\nAll 68 tests PASSED")
+    # Phase D — WEAKENING direction handling
+    test_weakening_moderate_waits()
+    test_weakening_elevated_waits()
+    test_weakening_h_dir_mapping()
+    test_weakening_moderate_unavailable_waits()
+
+    total = 72
+    print(f"\nAll {total} tests PASSED")

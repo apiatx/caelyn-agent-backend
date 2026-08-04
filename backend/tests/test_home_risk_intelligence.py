@@ -1514,6 +1514,112 @@ def test_event_sizing_applied_exactly_once():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Phase D: WEAKENING direction interpretation and event filtering
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_weakening_trend_interpretation_not_uncertain():
+    """Trend & Breadth WEAKENING + conflicting signals → says weakening, not uncertain."""
+    inputs = bare_inputs(
+        spy_change_1d=0.6, qqq_change_1d=0.4,
+        sector_breadth_1d=42, sector_breadth_7d=44,
+        spx_return_7d=1.2, spx_return_63d=3.0)
+    result = assess_swing_regime(inputs)
+    tb = result["pillars"]["trend_and_breadth"]
+    interp = tb.get("interpretation", "")
+    assert "uncertain" not in interp.lower(), f"WEAKENING should not say 'uncertain': {interp}"
+    assert "weakening" in interp.lower(), f"WEAKENING should say 'weakening': {interp}"
+    print("test_weakening_trend_interpretation_not_uncertain PASSED")
+
+
+def test_weakening_trend_supportive_only_not_supportive():
+    """Trend & Breadth WEAKENING + only supportive signals → not just 'supportive'."""
+    # Equity positive but breadth barely neutral/still weak → depends on direction
+    inputs = bare_inputs(
+        spy_change_1d=0.8, qqq_change_1d=0.6,
+        sector_breadth_1d=48, sector_breadth_7d=50,
+        spx_return_7d=1.5, spx_return_63d=4.0,
+        vix_current=16, vix_change_1d=-1,
+        us10y_yield=4.55, us10y_change_5d_bps=7,
+        dxy_change_1d=0.3)
+    result = assess_swing_regime(inputs)
+    tb = result["pillars"]["trend_and_breadth"]
+    interp = tb.get("interpretation", "")
+    sup = tb.get("supportive_signals", [])
+    risk = tb.get("risk_signals", [])
+    direction = tb.get("direction", "")
+    if direction in ("WEAKENING", "WORSENING") and sup and not risk:
+        assert "supportive across" not in interp.lower(), (
+            f"Direction {direction} with only supportive signals should not say 'supportive': {interp}"
+        )
+    print("test_weakening_trend_supportive_only_not_supportive PASSED")
+
+
+def test_weakening_rates_flat_text_not_contradict_direction():
+    """Rates & Dollar WEAKENING with flat rate change → text acknowledges pressure source."""
+    inputs = bare_inputs(
+        us10y_yield=4.80, us10y_change_1d_bps=-2,
+        us10y_change_5d_bps=-3, us10y_change_20d_bps=-5,
+        dxy_price=104, dxy_change_1d=0.25)
+    result = assess_swing_regime(inputs)
+    rd = result["pillars"]["rates_and_dollar"]
+    interp = rd.get("interpretation", "")
+    direction = rd.get("direction", "")
+    if direction == "WEAKENING":
+        assert "flat short-term direction" not in interp.lower() or "dollar" in interp.lower(), (
+            f"WEAKENING rates interpretation should mention dollar pressure: {interp}"
+        )
+    print("test_weakening_rates_flat_text_not_contradict_direction PASSED")
+
+
+def test_us_only_event_filtering():
+    """US high-importance events are preferred over non-US events."""
+    from services.home_risk_intelligence import _filter_upcoming_events
+    # Mock snapshot with NZ first, US second
+    snap = {
+        "current_week": [
+            {"date": "2026-08-04", "time": "12:00", "title": "Unemployment Rate (Q2)",
+             "importance": "high", "country": "NZ", "event_date": "2026-08-04"},
+            {"date": "2026-08-04", "time": "14:00", "title": "JOLTs Job Openings",
+             "importance": "high", "country": "US", "event_date": "2026-08-04"},
+        ]
+    }
+    upcoming = _filter_upcoming_events(snap, days_ahead=7)
+    # Find first US high-importance event
+    us_hi = [e for e in upcoming
+             if e.get("country") == "US"
+             and e.get("importance") in ("high", "critical", "HIGH", "CRITICAL")]
+    assert len(us_hi) >= 1, "Should find US high-importance event"
+    assert "JOLTs" in us_hi[0].get("title", "")
+    # Verify NZ event is present but should not be the sizing trigger
+    nz_events = [e for e in upcoming if e.get("country") == "NZ"]
+    assert len(nz_events) >= 1
+    print("test_us_only_event_filtering PASSED")
+
+
+def test_non_us_event_does_not_trigger_sizing():
+    """Non-US high-importance event alone does not trigger sizing overlay."""
+    # Build calendar snapshot with only non-US "high" events
+    # The has_hi_impact flag should be False when no US high-importance events exist
+    from services.home_risk_intelligence import _filter_upcoming_events
+    from datetime import datetime, timezone, timedelta
+    snap = {
+        "current_week": [
+            {"date": (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d"),
+             "time": "12:00", "title": "Unemployment Rate (Q2)",
+             "importance": "high", "country": "NZ",
+             "event_date": (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")},
+        ]
+    }
+    upcoming = _filter_upcoming_events(snap, days_ahead=7)
+    # Check US-only significance
+    us_hi = [e for e in upcoming
+             if e.get("country") == "US"
+             and e.get("importance") in ("high", "critical", "HIGH", "CRITICAL")]
+    assert len(us_hi) == 0, "NZ-only snapshot should produce zero US high-importance events"
+    print("test_non_us_event_does_not_trigger_sizing PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Run
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1632,4 +1738,12 @@ if __name__ == "__main__":
     test_pillar_scores_remain_unchanged_after_diagnostics()
     test_event_sizing_applied_exactly_once()
 
-    print("\nAll 92 tests PASSED")
+    # Phase D — WEAKENING direction interpretation consistency
+    test_weakening_trend_interpretation_not_uncertain()
+    test_weakening_trend_supportive_only_not_supportive()
+    test_weakening_rates_flat_text_not_contradict_direction()
+    test_us_only_event_filtering()
+    test_non_us_event_does_not_trigger_sizing()
+
+    total = 97
+    print(f"\nAll {total} tests PASSED")

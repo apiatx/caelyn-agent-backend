@@ -506,7 +506,8 @@ def _h_level(level: str) -> str:
 def _h_dir(direction: str) -> str:
     """Humanize direction for prose."""
     return {"IMPROVING": "Improving", "STABLE": "Stable",
-            "WORSENING": "Worsening", "UNKNOWN": "Unknown"}.get(direction, direction)
+            "WEAKENING": "Weakening", "WORSENING": "Worsening",
+            "UNKNOWN": "Unknown"}.get(direction, direction)
 
 def _h_verdict(v: str) -> str:
     return {"YES": "Yes", "CAUTION": "Caution", "NO": "No"}.get(v, v)
@@ -1148,7 +1149,7 @@ def _build_home_decision(
     elif risk_level == "ELEVATED":
         if direction == "WORSENING":
             verdict = "NO";       action = "REDUCE";  pos_size_raw = "preserve capital"
-        elif direction in ("STABLE", "UNKNOWN"):
+        elif direction in ("STABLE", "UNKNOWN", "WEAKENING"):
             verdict = "CAUTION";  action = "WAIT";    pos_size_raw = "half-size"
         else:  # IMPROVING
             if exec_quality == "STRONG":
@@ -1157,7 +1158,7 @@ def _build_home_decision(
                 verdict = "CAUTION";  action = "WAIT";      pos_size_raw = "half-size"
 
     elif risk_level == "MODERATE":
-        if direction == "WORSENING":
+        if direction in ("WORSENING", "WEAKENING"):
             verdict = "CAUTION";  action = "WAIT";    pos_size_raw = "half-size"
         elif exec_quality == "STRONG":
             verdict = "YES" if direction in ("IMPROVING",) else "CAUTION"
@@ -1955,13 +1956,15 @@ async def build_home_risk_intelligence(macro_provider, trading_fetch=None) -> di
     has_hi_impact = any(
         ev.get("importance") in ("high", "critical", "HIGH", "CRITICAL")
         and (ev.get("date") or "9999") <= three_td_cutoff
+        and (ev.get("country") or "US") == "US"
         for ev in upcoming_events
     )
     next_hi_event = None
     next_hi_days = None
     if has_hi_impact:
         for ev in sorted(upcoming_events, key=lambda e: e.get("date", "9999")):
-            if ev.get("importance") in ("high", "critical", "HIGH", "CRITICAL"):
+            if (ev.get("importance") in ("high", "critical", "HIGH", "CRITICAL")
+                    and (ev.get("country") or "US") == "US"):
                 next_hi_event = ev.get("title") or ""
                 try:
                     ed = datetime.strptime((ev.get("date") or "")[:10], "%Y-%m-%d").date()

@@ -679,6 +679,10 @@ def _enrich_pillar_diagnostics(pillars: dict) -> None:
             neg_msg = tb_risk[0].get("message", "").rstrip(".")
             pos_msg = tb_support[0].get("message", "").rstrip(".")
             interpretation_parts.append(f"Latest-session participation is constructive, but {neg_msg.lower()}, leaving Trend & Breadth in a worsening state.")
+        elif tb_pillar_dir == "WEAKENING":
+            neg_msg = tb_risk[0].get("message", "").rstrip(".")
+            pos_msg = tb_support[0].get("message", "").rstrip(".")
+            interpretation_parts.append(f"{pos_msg} However, {neg_msg.lower()}; Trend & Breadth is weakening overall.")
         elif tb_pillar_dir == "STABLE":
             pos_msg = tb_support[0].get("message", "").rstrip(".")
             neg_msg = tb_risk[0].get("message", "").rstrip(".")
@@ -688,6 +692,9 @@ def _enrich_pillar_diagnostics(pillars: dict) -> None:
     elif tb_support:
         if tb_pillar_dir == "IMPROVING":
             interpretation_parts.append("Trend and breadth signals are supportive and improving across timeframes.")
+        elif tb_pillar_dir in ("WEAKENING", "WORSENING"):
+            pos_msg = tb_support[0].get("message", "").rstrip(".")
+            interpretation_parts.append(f"Short-term signals are mildly supportive ({pos_msg.lower()}), but the broader trend is {tb_pillar_dir.lower()}.")
         else:
             interpretation_parts.append("Trend and breadth signals are supportive across timeframes.")
     elif tb_risk:
@@ -830,6 +837,7 @@ def _enrich_pillar_diagnostics(pillars: dict) -> None:
     if dxy_val_rd is None:    rd_miss.append("dxy_price")
 
     # Interpretation with level + direction
+    rd_pillar_dir = pillars["rates_and_dollar"].get("direction", "STABLE")
     rd_parts: list[str] = []
     if us10y_val_rd is not None:
         if chg_5d_val is not None and chg_5d_val < -5:
@@ -837,9 +845,15 @@ def _enrich_pillar_diagnostics(pillars: dict) -> None:
         elif chg_5d_val is not None and chg_5d_val > 5:
             rd_parts.append(f"10Y is {us10y_val_rd:.2f}% and has risen {chg_5d_val:+.0f} bps over five sessions, increasing pressure on long-duration assets.")
         elif us10y_val_rd >= 4.75:
-            rd_parts.append(f"10Y is elevated at {us10y_val_rd:.2f}% with flat short-term direction.")
+            if rd_pillar_dir in ("WEAKENING", "WORSENING") and dxy_chg_val is not None and dxy_chg_val >= 0.2:
+                rd_parts.append(f"10Y is elevated at {us10y_val_rd:.2f}% with flat short-term rate direction, but dollar strengthening (DXY {dxy_chg_val:+.2f}%) is adding pressure.")
+            else:
+                rd_parts.append(f"10Y is elevated at {us10y_val_rd:.2f}% with flat short-term direction.")
         else:
-            rd_parts.append(f"10Y is at {us10y_val_rd:.2f}%.")
+            if rd_pillar_dir in ("WEAKENING", "WORSENING") and dxy_chg_val is not None and dxy_chg_val >= 0.2:
+                rd_parts.append(f"10Y is at {us10y_val_rd:.2f}%, but dollar strengthening (DXY {dxy_chg_val:+.2f}%) is adding pressure.")
+            else:
+                rd_parts.append(f"10Y is at {us10y_val_rd:.2f}%.")
     if dxy_chg_val is not None and dxy_chg_val >= 0.3:
         rd_parts.append(f"DXY rose {dxy_chg_val:+.2f}%, adding pressure.")
 
