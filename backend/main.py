@@ -316,7 +316,7 @@ async def _terminal_prewarm():
     swallowed — they never affect the startup sequence.
     """
     import asyncio as _asyncio_pw
-    await _asyncio_pw.sleep(15)          # let _do_init thread finish first
+    await _asyncio_pw.sleep(60)          # let _do_init finish + Tradier headroom for core services
     try:
         await _wait_for_init()           # data_service ready
         from data.portfolio_store import canonical_file as _cf, load_active_holdings as _lh
@@ -564,12 +564,6 @@ async def lifespan(app):
     import threading
     threading.Thread(target=_deferred_sync_startup, daemon=True, name="startup-sync").start()
     threading.Thread(target=_do_init, daemon=True).start()
-
-    # Begin Tradier startup pacing to prevent background-task storms from
-    # exhausting the 110-call sliding window.
-    from data.tradier_provider import TRADIER_LIMITER as _tl
-    _tl._begin_startup_pacing()
-
     asyncio.create_task(_briefing_precompute_loop())
     asyncio.create_task(_edgar_cache_loop())
     # Continuous background classification loop for ETF vs stock resolution.
@@ -13095,7 +13089,7 @@ async def _master_screener_loop():
 
     from data.unified_options_engine import UnifiedOptionsEngine
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _init_event.wait, 30)
+    await loop.run_in_executor(None, _init_event.wait, 90)
 
     if data_service is None or not data_service.tradier:
         print("[MASTER_SCREENER] Tradier provider not available, skipping loop")

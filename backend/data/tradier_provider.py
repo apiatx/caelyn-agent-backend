@@ -67,28 +67,8 @@ class _TradierRateLimiter:
         self._lock = asyncio.Lock()
         self.total_calls: int = 0
         self.total_throttled: int = 0
-        # Startup pacing: throttle concurrent burst acquisitions for the first
-        # 90s so background-task storms do not exhaust the entire 110-call window.
-        self._startup_until: float = 0.0
-        self._startup_sem: asyncio.Semaphore | None = None
-
-    def _begin_startup_pacing(self) -> None:
-        """Enable startup pacing for 90s. Call once after the event loop is running."""
-        if self._startup_sem is None:
-            self._startup_sem = asyncio.Semaphore(4)  # at most 4 concurrent acquisitions during startup
-            self._startup_until = asyncio.get_event_loop().time() + 90.0
 
     async def acquire(self) -> None:
-        # During startup pacing window, limit concurrent acquisitions to
-        # prevent background-task storms from filling the entire budget window.
-        sem = self._startup_sem
-        if sem is not None and asyncio.get_event_loop().time() < self._startup_until:
-            async with sem:
-                await self._acquire_impl()
-            return
-        await self._acquire_impl()
-
-    async def _acquire_impl(self) -> None:
         while True:
             async with self._lock:
                 now = asyncio.get_event_loop().time()

@@ -14,7 +14,7 @@ Design contract:
       strategy:hist:dgs10:1830    precomputed DGS10 history (6h TTL + Neon)   - 10Y rate direction
       strategy:hist:vixcls:1830   precomputed VIXCLS history (6h TTL + Neon)  - VIX 7-session return
 
-  - Composer cache: home:risk_intel:v1 (60 s TTL), LKG: home:risk_intel:v1:lkg (4 h)
+  - Composer cache: home:risk_intel:v1 (60 s TTL), LKG: home:risk_intel:v1:lkg (4 h, in-memory)
   - Canonical scoring is delegated to swing_regime_service (pure, testable).
   - risk_cluster.triggers are canonical pillar-based display triggers.
   - legacy_triggers / legacy_trigger_count / legacy_headline / legacy_summary
@@ -35,7 +35,7 @@ from data.cache import cache
 _RISK_INTEL_KEY     = "home:risk_intel:v1"
 _RISK_INTEL_LKG_KEY = "home:risk_intel:v1:lkg"
 _RISK_INTEL_TTL     = 60          # 1 min - upstream caches do the heavy lifting
-_RISK_INTEL_LKG_TTL = 4 * 3600   # 4 h  - survives cold restarts
+_RISK_INTEL_LKG_TTL = 4 * 3600   # 4 h  — survives transient errors within a process lifetime
 
 
 # -----------------------------------------------------------------------------

@@ -26,3 +26,6 @@ dependencies = [
     "edgartools>=2.0.0",
     "resend>=2.0.0",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
