@@ -101,6 +101,30 @@ class _TradierRateLimiter:
         recent = [t for t in self._timestamps if t > now - self._window]
         return len(recent) >= self._max
 
+    def remaining_capacity(self) -> int:
+        """Approximate remaining global slots in the current 60s window.
+
+        Lock-free read — intentionally approximate.  Returns 0 when the
+        event loop is not running.
+        """
+        try:
+            now = asyncio.get_event_loop().time()
+        except RuntimeError:
+            return 0
+        recent = len([t for t in self._timestamps if t > now - self._window])
+        return max(0, self._max - recent)
+
+    def can_start_background_batch(self, estimated_calls: int, reserve: int = 5) -> bool:
+        """Check whether a background batch of *estimated_calls* may proceed
+        while preserving at least *reserve* slots for request-driven traffic.
+
+        Returns False when estimated_calls is zero or negative (unknown demand).
+        Uses lock-free approximate reads — safe for pre-cycle gating.
+        """
+        if estimated_calls <= 0:
+            return False
+        return self.remaining_capacity() >= estimated_calls + reserve
+
     def status(self) -> dict:
         try:
             now = asyncio.get_event_loop().time()
@@ -182,14 +206,6 @@ class TradierProvider:
         if _enforce_budget and not _bgt.check_budget(_lane):
             _bgt.record_defer(_lane)
             print(f"[TRADIER_BUDGET] {_lane!r} lane over budget — deferring {path}")
-            return None
-        # Global saturation guard: background lanes yield to request-driven work
-        # when the 110-call sliding window is full.  This prevents maintenance/
-        # sector/canonical jobs from blocking quote/options calls during active
-        # trading sessions.
-        _BACKGROUND_LANES = frozenset({"maintenance", "sectors", "canonical_history_backfill"})
-        if _enforce_budget and _lane in _BACKGROUND_LANES and TRADIER_LIMITER.is_saturated():
-            _bgt.record_defer(_lane)
             return None
         await TRADIER_LIMITER.acquire()
         _bgt.record_call(_lane)

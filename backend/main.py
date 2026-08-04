@@ -13141,11 +13141,11 @@ async def _master_screener_loop():
         t_cycle = _time.time()
         _ld_ms.update_master_loop("active")
         try:
-            # Yield Tradier capacity to request-driven work when saturated
+            # Proactive reserve: defer cycle when capacity is insufficient
             from data.tradier_provider import TRADIER_LIMITER as _tl
-            if _tl.is_saturated():
-                print("[MASTER_SCREENER] limiter saturated — yielding for request traffic")
-                await asyncio.sleep(2.0)
+            if not _tl.can_start_background_batch(48, reserve=5):
+                print("[MASTER_SCREENER] insufficient capacity — deferring 15s")
+                await asyncio.sleep(15)
                 continue
 
             engine = UnifiedOptionsEngine(data_service)
@@ -13654,10 +13654,11 @@ async def _sectors_fast_backfill_loop():
                 print(f"[SECTORS_BF] Price map build failed (non-fatal): {_sbf_pm_e}")
 
             # ── Run chain summarizer for this batch ────────────────────────────
-            # Yield Tradier capacity to request-driven work when saturated
+            # Proactive reserve: defer batch when capacity insufficient
             from data.tradier_provider import TRADIER_LIMITER as _tl_sbf
-            if _tl_sbf.is_saturated():
-                print(f"[SECTORS_BF] limiter saturated — deferring batch, sleep {_sbf_sleep_s}s")
+            _sbf_batch_calls = _batch_size * 2  # ~2 chain calls per ticker
+            if not _tl_sbf.can_start_background_batch(_sbf_batch_calls, reserve=5):
+                print(f"[SECTORS_BF] insufficient capacity — deferring {_sbf_sleep_s}s")
                 await asyncio.sleep(_sbf_sleep_s)
                 continue
 
@@ -16064,6 +16065,13 @@ async def _macro_precompute_loop():
             continue
 
         try:
+            # Proactive reserve: defer when insufficient capacity for dashboard + risk fetch
+            from data.tradier_provider import TRADIER_LIMITER as _tl_mp
+            if not _tl_mp.can_start_background_batch(2, reserve=5):
+                print("[MACRO_PRECOMPUTE] insufficient capacity — deferring 60s")
+                await asyncio.sleep(60)
+                continue
+
             t0 = _time.time()
             # Hybrid async: FMP real-time + FRED economic releases
             dashboard = await mp.get_dashboard()
