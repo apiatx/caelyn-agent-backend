@@ -564,6 +564,12 @@ async def lifespan(app):
     import threading
     threading.Thread(target=_deferred_sync_startup, daemon=True, name="startup-sync").start()
     threading.Thread(target=_do_init, daemon=True).start()
+
+    # Begin Tradier startup pacing to prevent background-task storms from
+    # exhausting the 110-call sliding window.
+    from data.tradier_provider import TRADIER_LIMITER as _tl
+    _tl._begin_startup_pacing()
+
     asyncio.create_task(_briefing_precompute_loop())
     asyncio.create_task(_edgar_cache_loop())
     # Continuous background classification loop for ETF vs stock resolution.

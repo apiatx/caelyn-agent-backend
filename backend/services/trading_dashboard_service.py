@@ -742,6 +742,10 @@ def clear_dashboard_cache() -> list[str]:
     cleared = [k for k in list(_cache.keys()) if k.startswith("trading_dashboard_")]
     for k in cleared:
         del _cache[k]
+    # Clear failure state as well
+    _refresh_outcome.clear()
+    _refresh_failure_count.clear()
+    _refresh_last_attempt.clear()
     return cleared
 
 

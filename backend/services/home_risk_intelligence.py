@@ -289,11 +289,70 @@ def _is_us_event(ev: dict) -> bool:
 def _event_time_status(ev: dict) -> str:
     actual = ev.get("actual")
     if actual is not None:
-        return "released"
+        if isinstance(actual, str) and actual.strip() == "":
+            pass  # empty string → not released
+        elif isinstance(actual, (int, float)):
+            return "released"
+        elif isinstance(actual, str):
+            return "released"
+        else:
+            return "released"
+
     ev_time = ev.get("time") or ev.get("datetime") or ""
+    ev_date = ev.get("date") or ev.get("event_date") or ""
+
+    if not ev_time and not ev_date:
+        return "unknown"
+
+    now_utc = datetime.now(timezone.utc)
+
+    # If we have both date and time, try to parse a combined datetime
+    if ev_date and ev_time:
+        for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S",
+                     "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                combined = f"{ev_date}T{ev_time}" if "T" not in ev_time else f"{ev_date} {ev_time}"
+                dt = datetime.strptime(combined if "T" in combined else f"{ev_date} {ev_time}", fmt)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                if dt > now_utc:
+                    return "future"
+                else:
+                    return "past_unconfirmed"
+            except ValueError:
+                continue
+        # Try simpler combined format
+        for dt_fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            combined = f"{ev_date}T{ev_time}" if "T" not in ev_time and " " not in ev_time else f"{ev_date} {ev_time}"
+            try:
+                dt = datetime.strptime(combined, dt_fmt).replace(tzinfo=timezone.utc)
+                if dt > now_utc:
+                    return "future"
+                else:
+                    return "past_unconfirmed"
+            except ValueError:
+                continue
+
+    # Check date only
+    if ev_date:
+        try:
+            ev_dt = datetime.strptime(ev_date[:10], "%Y-%m-%d").date()
+            today = now_utc.date()
+            if ev_dt > today:
+                return "future"
+            elif ev_dt == today:
+                return "date_only"
+            else:
+                return "past_unconfirmed"
+        except ValueError:
+            pass
+
+    # Time-only with no date context → treat as "future"
+    # (the caller already filters by date window in _filter_upcoming_events)
     if ev_time:
         return "future"
-    return "date_only"
+
+    return "unknown"
 
 
 def _filter_upcoming_events(snapshot: dict, days_ahead: int = 7) -> list[dict]:
@@ -311,6 +370,7 @@ def _filter_upcoming_events(snapshot: dict, days_ahead: int = 7) -> list[dict]:
             continue
         if ev_date < today or ev_date > cutoff:
             continue
+        country_raw = ev.get("country") or ""
         out.append({
             "date":       date_str[:10],
             "time":       ev.get("time"),
@@ -319,8 +379,9 @@ def _filter_upcoming_events(snapshot: dict, days_ahead: int = 7) -> list[dict]:
             "actual":     ev.get("actual"),
             "estimate":   ev.get("estimate") or ev.get("estimated"),
             "previous":   ev.get("previous") or ev.get("prev"),
-            "country":    ev.get("country") or "",
+            "country":    country_raw,
             "source":     "calendar_reused",
+            "time_status": _event_time_status(ev),
         })
 
     out.sort(key=lambda e: e["date"])

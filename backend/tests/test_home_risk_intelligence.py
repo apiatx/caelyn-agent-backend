@@ -1663,12 +1663,14 @@ def test_country_normalization():
 
 
 def test_released_event_excluded():
-    """_event_time_status returns 'released' when actual value is present."""
+    """_event_time_status returns correct status for each scenario."""
     from services.home_risk_intelligence import _event_time_status
     assert _event_time_status({"actual": "4.0%"}) == "released"
     assert _event_time_status({"actual": 0}) == "released"
     assert _event_time_status({"time": "08:30"}) == "future"
-    assert _event_time_status({}) == "date_only"
+    assert _event_time_status({}) == "unknown"
+    assert _event_time_status({"date": "2099-01-01", "time": "08:30"}) == "future"
+    assert _event_time_status({"actual": "", "time": "08:30"}) == "future"
     print("test_released_event_excluded PASSED")
 
 
