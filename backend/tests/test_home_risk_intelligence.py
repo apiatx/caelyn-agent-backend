@@ -259,10 +259,9 @@ def test_why_market_is_moving_uses_swing_regime() -> None:
 
     bullets = _build_canonical_why_bullets(sr, True)
     assert len(bullets) <= 3
-    assert any("ELEVATED" in b and ("weakening" in b.lower()) for b in bullets), \
-        f"First bullet should describe regime, got: {bullets}"
+    # Market drivers only — should describe 10Y direction
     assert any("restrictive" in b or "fallen" in b or "easing" in b for b in bullets), \
-        f"Second bullet should describe 10Y direction, got: {bullets}"
+        f"Should describe 10Y direction, got: {bullets}"
     # Must NOT contain old absolute-only pressure language
     assert not any("persistent rate pressure" in b for b in bullets), \
         "Must not use legacy absolute-only rate language when 10Y is easing"
@@ -278,11 +277,10 @@ def test_why_market_is_moving_event_not_bearish() -> None:
         "contributes_to_directional_score": False,
     })
     bullets = _build_canonical_why_bullets(sr, True)
-    event_bullets = [b for b in bullets if "CPI" in b or "event" in b.lower()]
-    assert len(event_bullets) >= 1
-    evb = event_bullets[0]
-    assert "bearish" not in evb.lower() or "does not create a bearish" in evb.lower(), \
-        f"Event must not be described as bearish direction, got: {evb}"
+    # Event context moved to sizing explanation — why bullets are market drivers only
+    for b in bullets:
+        assert "bearish" not in b.lower(), \
+            f"No bullet should describe event as bearish direction, got: {b}"
     print("test_why_market_is_moving_event_not_bearish PASSED")
 
 
@@ -291,8 +289,10 @@ def test_why_market_is_moving_market_closed() -> None:
 
     sr = canonical_regime()
     bullets = _build_canonical_why_bullets(sr, False)
-    assert any("closed" in b.lower() for b in bullets), \
-        f"Should mention market closed, got: {bullets}"
+    # Market-closed context is in the market_context field, not why_market_is_moving
+    for b in bullets:
+        assert "closed" not in b.lower(), \
+            f"Market-closed context should be in market_context, not why bullets: {b}"
     print("test_why_market_is_moving_market_closed PASSED")
 
 

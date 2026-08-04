@@ -805,11 +805,11 @@ def _enrich_pillar_diagnostics(pillars: dict) -> None:
     if chg_5d_val is not None:
         if chg_5d_val >= 15:
             rd_risk.append({"key": "10y_spike_5d", "label": "10Y 5D", "value": round(chg_5d_val, 1), "unit": "bps", "message": f"10Y has surged {chg_5d_val:+.0f} bps over five sessions — increasing pressure on long-duration assets.", "strength": "STRONG"})
-            rd_wrs.append("10Y 5-session increase exceeds +15 bps — the canonical pressure threshold.")
             rd_imp.append("10Y 5-session increase falls below +5 bps.")
         elif chg_5d_val >= 5:
             rd_risk.append({"key": "10y_rising_5d", "label": "10Y 5D", "value": round(chg_5d_val, 1), "unit": "bps", "message": f"10Y has risen {chg_5d_val:+.0f} bps over five sessions.", "strength": "MODERATE"})
-            rd_wrs.append("10Y 5-session increase exceeds +5 bps.")
+            # Next unsatisfied worsen boundary (current is 5-14, so +15 is the next)
+            rd_wrs.append("10Y 5-session increase exceeds +15 bps — the canonical pressure threshold.")
             rd_imp.append("10Y 5-session change falls below 0 bps.")
         elif chg_5d_val <= -10:
             rd_sup.append({"key": "10y_falling_5d", "label": "10Y 5D", "value": round(chg_5d_val, 1), "unit": "bps", "message": f"10Y has fallen {abs(chg_5d_val):.0f} bps over five sessions — rate pressure easing.", "strength": "STRONG"})
@@ -829,7 +829,7 @@ def _enrich_pillar_diagnostics(pillars: dict) -> None:
     if dxy_chg_val is not None:
         if dxy_chg_val >= 0.5:
             rd_risk.append({"key": "dxy_strong", "label": "DXY 1D", "value": round(dxy_chg_val, 2), "unit": "%", "message": f"DXY gained {dxy_chg_val:+.2f}% — dollar strength headwind.", "strength": "STRONG"})
-            rd_wrs.append("DXY 1D increase exceeds +0.5% — the canonical pressure threshold.")
+            # Next worsen above 0.5 is no single defined threshold — omit
         elif dxy_chg_val <= -0.3:
             rd_sup.append({"key": "dxy_weak", "label": "DXY 1D", "value": round(dxy_chg_val, 2), "unit": "%", "message": f"DXY fell {abs(dxy_chg_val):.2f}% — dollar weakness is supportive.", "strength": "MODERATE"})
 
@@ -949,12 +949,17 @@ def _enrich_pillar_diagnostics(pillars: dict) -> None:
             lc_parts.append(f"(missing: {', '.join(lc_miss)}).")
     if cvd_val is not None and cvd_val > 0:
         lc_parts.append("Cyclicals are outperforming defensives — mildly supportive.")
+    elif cvd_val is not None and cvd_val <= -1.0:
+        lc_parts.append("Defensives have a clear edge — cautious rotation underway.")
     elif cvd_val is not None:
-        lc_parts.append("Defensives are leading — cautious posture.")
+        lc_parts.append("Defensives have a slight edge, but the difference is not strong enough to confirm broad risk-off rotation.")
     if posture_val:
-        lc_parts.append(f"Market posture is {posture_val}.")
+        if cvd_val is not None and cvd_val <= -1.0 and posture_val.lower() == "neutral":
+            lc_parts.append(f"Market posture is {posture_val} despite the defensive tilt — leadership is mixed.")
+        else:
+            lc_parts.append(f"Market posture is {posture_val}.")
     if btc_chg_val is None:
-        lc_parts.append("BTC confirmation is unavailable.")
+        lc_parts.append("BTC confirmation is unavailable — does not imply bearishness.")
 
     if not lc_parts:
         lc_parts.append("Leadership & Cross-Asset data is insufficient.")

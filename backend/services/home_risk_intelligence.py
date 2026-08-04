@@ -574,6 +574,34 @@ _EXPIRED_MAX_AGE = 3600  # 60 minutes — max age for usable expired snapshot
 
 _SIZE_CONSERVATISM = ["normal", "selective", "half-size", "preserve capital"]
 
+# ── Canonical human-readable labels for diagnostic field names ─────────────
+_MISSING_LABELS: dict[str, str] = {
+    "btc_change_24h":           "BTC 24-hour confirmation",
+    "spy_change_1d":            "SPY latest-session change",
+    "qqq_change_1d":            "QQQ latest-session change",
+    "vix_change_1d":            "VIX latest-session change",
+    "hyg_change_1d":            "High-yield credit latest-session change",
+    "us10y_change_1d_bps":      "10Y one-session change",
+    "us10y_change_5d_bps":      "10Y five-session change",
+    "us10y_change_20d_bps":     "10Y twenty-session change",
+    "dxy_change_1d":            "Dollar latest-session change",
+    "vix_current":              "VIX current level",
+    "spx_return_7d":            "SPX seven-session return",
+    "spx_return_63d":           "SPX three-month return",
+    "sector_breadth_1d":        "Sector breadth (1-day)",
+    "sector_breadth_7d":        "Sector breadth (7-day)",
+    "us10y_yield":              "10Y Treasury yield",
+    "dxy_price":                "US Dollar index",
+    "vix_return_7d":            "VIX seven-session return",
+    "cyclical_vs_defensive_spread": "Cyclical vs defensive rotation spread",
+    "market_posture":           "Market posture classification",
+}
+
+
+def _h_missing(key: str) -> str:
+    """Return a human-readable label for a diagnostic field key."""
+    return _MISSING_LABELS.get(key, key.replace("_", " ").title())
+
 
 # ── Narrative humanization helpers ────────────────────────────────────────────
 
@@ -620,6 +648,74 @@ def _most_conservative(a: str, b: str) -> str:
     return _SIZE_CONSERVATISM[max(ia, ib)]
 
 
+def _build_entry_guidance(action: str, pos_size: str) -> dict:
+    entry_permission = {
+        "PRESS": "normal_entry", "SELECTIVE": "selective_entry",
+        "WAIT": "no_new_entry", "REDUCE": "reduce_exposure",
+        "HEDGE": "reduce_exposure",
+    }.get(action, "no_new_entry")
+    conditional_size = pos_size if action in ("SELECTIVE",) else (
+        pos_size if action == "WAIT" else None
+    )
+    return {
+        "current_action":          action,
+        "current_entry_permission": entry_permission,
+        "conditional_size":        conditional_size,
+    }
+
+
+def _build_synthesized_explanation(pillars: dict, action: str, verdict: str) -> str:
+    support_msgs: list[str] = []
+    risk_msgs: list[str] = []
+    for name, p in pillars.items():
+        for s in p.get("supportive_signals", []):
+            m = s.get("message", "")
+            if m and m not in support_msgs:
+                support_msgs.append(m)
+        for s in p.get("risk_signals", []):
+            m = s.get("message", "")
+            if m and m not in risk_msgs:
+                risk_msgs.append(m)
+
+    parts: list[str] = []
+    if support_msgs:
+        parts.append(support_msgs[0].rstrip(".").lower())
+    if risk_msgs:
+        parts.append(risk_msgs[0].rstrip(".").lower())
+    if parts and action in ("WAIT",):
+        parts.append("arguing against chasing strength")
+    elif parts and action in ("REDUCE", "HEDGE"):
+        parts.append("favoring defensive positioning")
+    elif parts and verdict == "YES":
+        parts.append("supporting selective entries")
+    elif parts:
+        parts.append("favoring selective positioning")
+    if parts:
+        return "Short-term participation improved, but " + ", ".join(parts) + "."
+    return ""
+
+
+def _build_decision_completeness(
+    regime_assessment: str, regime_confidence: str,
+    exec_status: str, leadership_conf_status: str,
+) -> dict:
+    overall: str
+    if regime_assessment == "INSUFFICIENT_DATA":
+        overall = "INSUFFICIENT_DATA"
+    elif exec_status not in ("available", "expired") or leadership_conf_status in ("UNCONFIRMED", "MIXED"):
+        overall = "PARTIAL"
+    else:
+        overall = "COMPLETE"
+
+    return {
+        "regime_confidence":              regime_confidence,
+        "regime_data_status":             regime_assessment,
+        "execution_confirmation_status":  exec_status,
+        "leadership_confirmation_status": leadership_conf_status,
+        "overall_decision_status":        overall,
+    }
+
+
 def _build_sizing_explanation(
     matrix_size: str,
     regime_base: str,
@@ -629,9 +725,14 @@ def _build_sizing_explanation(
     event_pre: str,
     event_post: str,
     event_overlay: dict,
+    final_action: str = "",
 ) -> str:
     if event_active and event_adjustment:
         ev_title = event_overlay.get("next_event") or "upcoming event"
+        if final_action in ("WAIT",):
+            return f"{ev_title} is imminent, reinforcing the decision to wait. If confirmation improves after the event, cap any initial entry at {event_post.title()}."
+        if final_action in ("REDUCE", "HEDGE"):
+            return f"{ev_title} event risk reinforces the defensive posture."
         return f"Position size reduced from {event_pre.title()} to {event_post.title()} because {ev_title} is imminent."
     if matrix_size != regime_final:
         return f"Final size {regime_final} is the most conservative of matrix ({matrix_size}) and regime ({regime_final})."
@@ -683,7 +784,8 @@ def _build_signal_summary(
     lc = pillars.get("leadership_and_cross_asset", {})
     lc_miss = lc.get("missing_inputs", [])
     if lc_miss and len(missing_conf) < 3:
-        missing_conf.append({"source": "leadership_and_cross_asset", "message": f"Leadership confirmation is incomplete — missing {', '.join(lc_miss)}."})
+        humanized = ", ".join(_h_missing(m) for m in lc_miss)
+        missing_conf.append({"source": "leadership_and_cross_asset", "message": f"Leadership confirmation is incomplete — missing {humanized}."})
 
     if event_active and len(largest_risks) < 3:
         ev_title = event_overlay.get("next_event") or "upcoming event"
@@ -1412,8 +1514,20 @@ def _build_home_decision(
     sizing_explanation = _build_sizing_explanation(
         pos_size_raw, regime_base_size, regime_pos_size,
         event_active, event_adjustment_applied, event_pre_size, event_post_size,
-        event_overlay,
+        event_overlay, final_action=action,
     )
+
+    # ── Entry guidance ──────────────────────────────────────────────────
+    entry_guidance = _build_entry_guidance(action, pos_size)
+
+    # ── Decision completeness ───────────────────────────────────────────
+    lc_conf = pillars.get("leadership_and_cross_asset", {}).get("confirmation_status", "UNCONFIRMED")
+    completeness = _build_decision_completeness(
+        regime_assessment, confidence, exec_status, lc_conf,
+    )
+
+    # ── Synthesized explanation ─────────────────────────────────────────
+    synthesized = _build_synthesized_explanation(pillars, action, verdict)
 
     sizing = {
         "matrix_size":              pos_size_raw,
@@ -1451,6 +1565,9 @@ def _build_home_decision(
         "one_line":                   one_line,
         "position_size_hint":         pos_size,
         "sizing":                     sizing,
+        "entry_guidance":             entry_guidance,
+        "completeness":               completeness,
+        "synthesized_explanation":    synthesized,
         "signal_summary":             signal_summary,
         "confidence":                 confidence,
         "assessment_status":          assessment,
@@ -1496,23 +1613,15 @@ def _build_canonical_why_bullets(swing_regime: dict, market_open: bool) -> list[
 
     risk_level = swing_regime.get("risk_level", "UNKNOWN")
     direction = swing_regime.get("regime_direction", "UNKNOWN")
-    trade_bias = swing_regime.get("trade_bias", "UNKNOWN")
     assessment = swing_regime.get("assessment_status", "PARTIAL")
     driver = swing_regime.get("dominant_driver", "")
     pillars = swing_regime.get("pillars", {})
     ev = swing_regime.get("event_overlay", {})
 
-    if not market_open:
-        bullets.append("US cash market is closed; equity and breadth signals reflect the latest completed session.")
-
     if assessment == "INSUFFICIENT_DATA":
-        bullets.append("Insufficient data available — no directional conclusion should be drawn.")
-        return bullets[:3]
+        return []  # market context handled separately
 
-    bias_str = trade_bias.replace("_", " ").lower()
-    bullets.append(f"Swing risk is {risk_level} and {direction.lower()}; {bias_str} bias.")
-
-    # Dominant driver details
+    # Dominant driver details — only market-driver statements
     if driver == "rate_and_dollar_pressure":
         rd = pillars.get("rates_and_dollar", {}).get("components", {})
         us10y = rd.get("us10y")
@@ -1547,15 +1656,7 @@ def _build_canonical_why_bullets(swing_regime: dict, market_open: bool) -> list[
         if cvd_val is not None and cvd_val <= -1.0:
             bullets.append("Defensives are leading cyclicals — sector rotation toward safety.")
 
-    # Event overlay bullet
-    if ev.get("active"):
-        ev_title = ev.get("next_event") or "Event"
-        ev_days = ev.get("days_until_event")
-        if ev_days is not None:
-            bullets.append(f"{ev_title} is due in {ev_days} day{'s' if ev_days != 1 else ''}; event risk reduces position size but does not create a bearish directional signal.")
-
-    # Fallback
-    if len(bullets) < 2:
+    if not bullets:
         bullets.append("Markets trading within monitored parameters — no single dominant risk driver detected.")
 
     return bullets[:3]
