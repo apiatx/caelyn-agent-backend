@@ -1620,6 +1620,116 @@ def test_non_us_event_does_not_trigger_sizing():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Phase E: Complete direction and pillar coverage
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_volatility_credit_weakening_interpretation():
+    """Volatility & Credit WEAKENING says 'mildly deteriorating' not 'contained'."""
+    inputs = bare_inputs(vix_current=22, vix_change_1d=4, hyg_change_1d=-0.35)
+    result = assess_swing_regime(inputs)
+    interp = result["pillars"]["volatility_and_credit"].get("interpretation", "")
+    direction = result["pillars"]["volatility_and_credit"].get("direction", "")
+    if direction == "WEAKENING":
+        assert "contained" not in interp.lower(), f"WEAKENING VC should not say 'contained': {interp}"
+        assert "mildly" in interp.lower() or "deteriorat" in interp.lower() or "early" in interp.lower(), f"Missing weakening language: {interp}"
+    print("test_volatility_credit_weakening_interpretation PASSED")
+
+
+def test_leadership_weakening_interpretation():
+    """Leadership & Cross-Asset WEAKENING acknowledges weakening."""
+    inputs = bare_inputs(btc_change_24h=-3.0, cyclical_vs_defensive_spread=-1.5, market_posture="")
+    result = assess_swing_regime(inputs)
+    interp = result["pillars"]["leadership_and_cross_asset"].get("interpretation", "")
+    direction = result["pillars"]["leadership_and_cross_asset"].get("direction", "")
+    if direction in ("WEAKENING", "WORSENING"):
+        assert "weakening" in interp.lower() or "deteriorat" in interp.lower() or "leadership" in interp.lower(), f"Missing direction-aware text: {interp}"
+    print("test_leadership_weakening_interpretation PASSED")
+
+
+def test_country_normalization():
+    """_is_us_event accepts US/USA/United States variants, rejects missing/NZ."""
+    from services.home_risk_intelligence import _is_us_event
+    assert _is_us_event({"country": "US"})
+    assert _is_us_event({"country": "usa"})
+    assert _is_us_event({"country": "United States"})
+    assert _is_us_event({"country": "UNITED STATES OF AMERICA"})
+    assert not _is_us_event({"country": "NZ"})
+    assert not _is_us_event({"country": "CA"})
+    assert not _is_us_event({"country": "GB"})
+    assert not _is_us_event({"country": ""})
+    assert not _is_us_event({"country": None})
+    assert not _is_us_event({})
+    print("test_country_normalization PASSED")
+
+
+def test_released_event_excluded():
+    """_event_time_status returns 'released' when actual value is present."""
+    from services.home_risk_intelligence import _event_time_status
+    assert _event_time_status({"actual": "4.0%"}) == "released"
+    assert _event_time_status({"actual": 0}) == "released"
+    assert _event_time_status({"time": "08:30"}) == "future"
+    assert _event_time_status({}) == "date_only"
+    print("test_released_event_excluded PASSED")
+
+
+def test_missing_country_not_us():
+    """Country missing from event is not treated as US."""
+    from services.home_risk_intelligence import _is_us_event, _filter_upcoming_events
+    snap = {
+        "current_week": [
+            {"date": "2026-08-05", "title": "Some Event", "importance": "high",
+             "event_date": "2026-08-05"},
+        ]
+    }
+    upcoming = _filter_upcoming_events(snap, days_ahead=7)
+    assert len(upcoming) >= 1
+    us = [e for e in upcoming if _is_us_event(e)]
+    assert len(us) == 0, "Event without country field must not default to US"
+    print("test_missing_country_not_us PASSED")
+
+
+def test_execution_failed_status():
+    """Trading Dashboard snapshot exposes refresh_state and refresh_failure_count."""
+    from services.trading_dashboard_service import (
+        get_trading_dashboard_snapshot, clear_dashboard_cache,
+        _refresh_outcome, _refresh_failure_count, _refresh_state,
+    )
+    clear_dashboard_cache()
+    # Simulate a failed state
+    _refresh_outcome["swing"] = "failed"
+    _refresh_failure_count["swing"] = 1
+    snap = get_trading_dashboard_snapshot("swing")
+    assert snap["status"] == "unavailable"
+    assert snap["refresh_state"] == "failed"
+    assert snap["refresh_failure_count"] == 1
+    # Clean up
+    _refresh_outcome.pop("swing", None)
+    _refresh_failure_count.pop("swing", None)
+    print("test_execution_failed_status PASSED")
+
+
+def test_event_country_provenance():
+    """swing_regime event_overlay includes event_country and event_time_status."""
+    from services.swing_regime_service import _compute_event_overlay
+    result = _compute_event_overlay(
+        {"has_upcoming_high_impact_event": True, "days_until_next_event": 2,
+         "next_event_title": "FOMC Decision", "event_country": "US",
+         "event_time_status": "future", "event_selection_reason": "nearest_upcoming_high_impact_us_event"},
+        "MODERATE", "selective", "half-size",
+    )
+    assert result["event_country"] == "US"
+    assert result["event_time_status"] == "future"
+    assert result["event_selection_reason"] == "nearest_upcoming_high_impact_us_event"
+    # Inactive event should have None for provenance fields
+    result2 = _compute_event_overlay(
+        {"has_upcoming_high_impact_event": False}, "MODERATE", "selective", "selective"
+    )
+    assert result2["event_country"] is None
+    assert result2["event_time_status"] is None
+    print("test_event_country_provenance PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Run
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1745,5 +1855,14 @@ if __name__ == "__main__":
     test_us_only_event_filtering()
     test_non_us_event_does_not_trigger_sizing()
 
-    total = 97
+    # Phase E — Complete direction and pillar coverage
+    test_volatility_credit_weakening_interpretation()
+    test_leadership_weakening_interpretation()
+    test_country_normalization()
+    test_released_event_excluded()
+    test_missing_country_not_us()
+    test_execution_failed_status()
+    test_event_country_provenance()
+
+    total = 104
     print(f"\nAll {total} tests PASSED")

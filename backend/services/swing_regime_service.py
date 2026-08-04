@@ -767,7 +767,14 @@ def _enrich_pillar_diagnostics(pillars: dict) -> None:
 
     vc_pos = len(vc_sup)
     vc_neg = len(vc_risk)
-    if vc_pos > vc_neg:
+    vc_dir = pillars["volatility_and_credit"].get("direction", "STABLE")
+    if vc_dir == "WORSENING":
+        pillars["volatility_and_credit"]["interpretation"] = "Volatility and credit signals are deteriorating, indicating increasing stress."
+    elif vc_dir == "WEAKENING":
+        pillars["volatility_and_credit"]["interpretation"] = "Volatility and credit signals are mildly deteriorating, showing early stress."
+    elif vc_dir == "IMPROVING":
+        pillars["volatility_and_credit"]["interpretation"] = "Volatility is contained and credit is stable, indicating limited stress."
+    elif vc_pos > vc_neg:
         pillars["volatility_and_credit"]["interpretation"] = "Volatility is contained and credit is stable, indicating limited stress."
     elif vc_neg > vc_pos:
         pillars["volatility_and_credit"]["interpretation"] = "Volatility and credit signals are indicating elevated stress."
@@ -935,6 +942,7 @@ def _enrich_pillar_diagnostics(pillars: dict) -> None:
 
     # Interpretation
     lc_parts: list[str] = []
+    lc_dir = pillars["leadership_and_cross_asset"].get("direction", "STABLE")
     if data_status == "PARTIAL":
         lc_parts.append(f"Only {lc_n_avail} of {lc_n_exp} inputs available")
         if lc_miss:
@@ -950,6 +958,10 @@ def _enrich_pillar_diagnostics(pillars: dict) -> None:
 
     if not lc_parts:
         lc_parts.append("Leadership & Cross-Asset data is insufficient.")
+    elif lc_dir == "WORSENING":
+        lc_parts.append("Overall leadership is deteriorating.")
+    elif lc_dir == "WEAKENING":
+        lc_parts.append("Leadership signals are weakening.")
 
     pillars["leadership_and_cross_asset"]["interpretation"] = " ".join(lc_parts)
     pillars["leadership_and_cross_asset"]["supportive_signals"] = lc_sup
@@ -1197,6 +1209,9 @@ def _compute_event_overlay(inputs: dict, risk_level: str, base_size: str, final_
     has_event = inputs.get("has_upcoming_high_impact_event", False)
     days = inputs.get("days_until_next_event")
     next_title = inputs.get("next_event_title")
+    event_country = inputs.get("event_country", "US")
+    event_time_status = inputs.get("event_time_status", "unknown")
+    event_selection_reason = inputs.get("event_selection_reason", "nearest_upcoming_high_impact_us_event")
 
     if not has_event:
         return {
@@ -1204,6 +1219,9 @@ def _compute_event_overlay(inputs: dict, risk_level: str, base_size: str, final_
             "severity":                           "NONE",
             "next_event":                         None,
             "days_until_event":                   None,
+            "event_country":                      None,
+            "event_time_status":                  None,
+            "event_selection_reason":             None,
             "position_size_impact":               None,
             "contributes_to_directional_score":   False,
             "position_size_adjustment_applied":   False,
@@ -1225,6 +1243,9 @@ def _compute_event_overlay(inputs: dict, risk_level: str, base_size: str, final_
         "severity":                           severity,
         "next_event":                         next_title,
         "days_until_event":                   days,
+        "event_country":                      event_country,
+        "event_time_status":                  event_time_status,
+        "event_selection_reason":             event_selection_reason,
         "position_size_impact":               impact,
         "contributes_to_directional_score":   False,
         "position_size_adjustment_applied":   adjustment_applied,

@@ -912,6 +912,44 @@ def test_weakening_moderate_unavailable_waits():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Phase E: Complete direction matrix coverage
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_low_weakening_waits():
+    """LOW + WEAKENING → CAUTION / WAIT (cannot produce PRESS)"""
+    sr = _make_regime("LOW", "WEAKENING", "SELECTIVE_LONG", pos_size="normal")
+    es = _make_exec_snapshot(mqs=80.0, ews=85.0, decision="YES")
+    d = _hd(sr, es)
+    assert d["verdict"] == "CAUTION"
+    assert d["action"] == "WAIT", f"LOW+WEAKENING should WAIT, got {d['action']}"
+    assert d["action"] != "PRESS", "LOW+WEAKENING must not produce PRESS"
+    assert d["position_size_hint"] == "half-size"
+    print("test_low_weakening_waits PASSED")
+
+
+def test_high_weakening_not_improving():
+    """HIGH + WEAKENING → NO / REDUCE (not IMPROVING branch)"""
+    sr = _make_regime("HIGH", "WEAKENING", "SELECTIVE_SHORT", pos_size="half-size")
+    es = _make_exec_snapshot(mqs=75.0, ews=80.0, decision="YES")
+    d = _hd(sr, es)
+    assert d["verdict"] == "NO"
+    assert d["action"] == "REDUCE", f"HIGH+WEAKENING should REDUCE, got {d['action']}"
+    assert d["action"] not in ("SELECTIVE",), "HIGH+WEAKENING must not fall into IMPROVING branch"
+    print("test_high_weakening_not_improving PASSED")
+
+
+def test_extreme_weakening_reduce():
+    """EXTREME + WEAKENING → NO / REDUCE (not IMPROVING branch)"""
+    sr = _make_regime("EXTREME", "WEAKENING", "SHORT_HEDGE", pos_size="preserve capital")
+    es = _make_exec_snapshot(mqs=75.0, ews=80.0, decision="YES")
+    d = _hd(sr, es)
+    assert d["verdict"] == "NO"
+    assert d["action"] == "REDUCE", f"EXTREME+WEAKENING should REDUCE, got {d['action']}"
+    assert d["action"] != "WAIT", "EXTREME+WEAKENING should be REDUCE not WAIT"
+    print("test_extreme_weakening_reduce PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Run
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1009,5 +1047,10 @@ if __name__ == "__main__":
     test_weakening_h_dir_mapping()
     test_weakening_moderate_unavailable_waits()
 
-    total = 72
+    # Phase E — Complete direction matrix coverage
+    test_low_weakening_waits()
+    test_high_weakening_not_improving()
+    test_extreme_weakening_reduce()
+
+    total = 75
     print(f"\nAll {total} tests PASSED")

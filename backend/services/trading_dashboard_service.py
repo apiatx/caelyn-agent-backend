@@ -779,6 +779,8 @@ def get_trading_dashboard_snapshot(
             "age_seconds": None,
             "expired": None,
             "status": "unavailable",
+            "refresh_state": _refresh_state(mode),
+            "refresh_failure_count": _refresh_failure_count.get(mode, 0),
         }
 
     age = _time.time() - entry.get("_ts", _time.time())
@@ -797,6 +799,8 @@ def get_trading_dashboard_snapshot(
         "age_seconds": round(age, 1),
         "expired": expired,
         "status": "available" if not expired else "expired",
+        "refresh_state": _refresh_state(mode),
+        "refresh_failure_count": _refresh_failure_count.get(mode, 0),
     }
 
 
@@ -804,6 +808,24 @@ def get_trading_dashboard_snapshot(
 
 # In-flight registry per mode: True when a background task is active
 _inflight: dict[str, asyncio.Task | None] = {}
+# Last refresh outcome per mode
+_refresh_outcome: dict[str, str] = {}  # "succeeded" | "failed"
+_refresh_failure_count: dict[str, int] = {}
+_refresh_last_attempt: dict[str, float] = {}
+_FAILURE_BACKOFF = 30  # seconds before retrying after a failed refresh
+
+
+def _refresh_state(mode: str) -> str:
+    """Return the current refresh lifecycle state for *mode*: idle | running | succeeded | failed."""
+    task = _inflight.get(mode)
+    if task is not None and not task.done():
+        return "running"
+    outcome = _refresh_outcome.get(mode)
+    if outcome == "succeeded":
+        return "succeeded"
+    if outcome == "failed":
+        return "failed"
+    return "idle"
 
 
 def schedule_trading_dashboard_refresh(
@@ -823,7 +845,7 @@ def schedule_trading_dashboard_refresh(
     Returns
     -------
     dict
-        {"status": "not_needed" | "scheduled" | "already_running", "mode": str}
+        {"status": "not_needed" | "scheduled" | "already_running" | "backoff", "mode": str}
     """
     mode = mode.lower() if mode.lower() in ("swing", "day") else "swing"
 
@@ -841,6 +863,14 @@ def schedule_trading_dashboard_refresh(
     if fetch_fresh_data is None:
         return {"status": "not_needed", "mode": mode}
 
+    # Backoff guard after a failed refresh
+    if _refresh_outcome.get(mode) == "failed":
+        last_attempt = _refresh_last_attempt.get(mode, 0)
+        if _time.time() - last_attempt < _FAILURE_BACKOFF:
+            return {"status": "backoff", "mode": mode}
+        # Reset failure counter so next attempt can proceed
+        _refresh_outcome.pop(mode, None)
+
     # Create background task
     async def _refresh():
         try:
@@ -849,8 +879,12 @@ def schedule_trading_dashboard_refresh(
                 force=True,
                 fetch_fresh_data=fetch_fresh_data,
             )
+            _refresh_outcome[mode] = "succeeded"
+            _refresh_failure_count.pop(mode, None)
             return result
         except Exception as exc:
+            _refresh_outcome[mode] = "failed"
+            _refresh_failure_count[mode] = _refresh_failure_count.get(mode, 0) + 1
             _logger.warning(
                 "[TRADING_DASHBOARD] background refresh failed (mode=%s): %s",
                 mode, exc,
@@ -858,8 +892,10 @@ def schedule_trading_dashboard_refresh(
             raise
         finally:
             _inflight.pop(mode, None)
+            _refresh_last_attempt[mode] = _time.time()
 
     _inflight[mode] = asyncio.ensure_future(_refresh())
+    _refresh_outcome.pop(mode, None)  # clear previous outcome while running
     return {"status": "scheduled", "mode": mode}
 
 

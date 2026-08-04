@@ -278,6 +278,24 @@ def _compute_vix_7d_return(vixcls: list[dict]) -> float | None:
 # Economic events - normalize and filter upcoming
 # -----------------------------------------------------------------------------
 
+_US_COUNTRY_VARIANTS = frozenset({"us", "usa", "united states", "united states of america"})
+
+
+def _is_us_event(ev: dict) -> bool:
+    country = (ev.get("country") or "").strip().lower()
+    return country in _US_COUNTRY_VARIANTS
+
+
+def _event_time_status(ev: dict) -> str:
+    actual = ev.get("actual")
+    if actual is not None:
+        return "released"
+    ev_time = ev.get("time") or ev.get("datetime") or ""
+    if ev_time:
+        return "future"
+    return "date_only"
+
+
 def _filter_upcoming_events(snapshot: dict, days_ahead: int = 7) -> list[dict]:
     today   = datetime.now(timezone.utc).date()
     cutoff  = today + timedelta(days=days_ahead)
@@ -301,7 +319,7 @@ def _filter_upcoming_events(snapshot: dict, days_ahead: int = 7) -> list[dict]:
             "actual":     ev.get("actual"),
             "estimate":   ev.get("estimate") or ev.get("estimated"),
             "previous":   ev.get("previous") or ev.get("prev"),
-            "country":    ev.get("country") or "US",
+            "country":    ev.get("country") or "",
             "source":     "calendar_reused",
         })
 
@@ -531,7 +549,8 @@ def _h_quality(q: str) -> str:
 
 def _h_exec_status(s: str) -> str:
     return {"available": "available", "expired": "cached, awaiting refresh",
-            "warming": "warming", "unavailable": "unavailable"}.get(s, s)
+            "warming": "warming", "unavailable": "unavailable",
+            "failed": "unavailable"}.get(s, s)
 
 
 def _most_conservative(a: str, b: str) -> str:
@@ -659,6 +678,8 @@ def _build_one_line(
             exec_text = "weak execution"
     elif exec_status == "expired":
         exec_text = "cached execution data awaiting refresh"
+    elif exec_status == "failed":
+        exec_text = "execution data unavailable (last refresh failed)"
     else:
         exec_text = "execution data still warming"
 
@@ -778,6 +799,8 @@ def _build_why_now_bullets(
             bullets.append("Execution: Available — scores pending")
     elif exec_status == "expired":
         bullets.append("Execution: Cached, awaiting refresh")
+    elif exec_status == "failed":
+        bullets.append("Execution: Refresh failed — no current confirmation")
     else:
         bullets.append("Execution: Warming — no current confirmation available")
 
@@ -878,9 +901,12 @@ def _build_wait_reasons(
             if msg and msg not in out:
                 _add(msg)
 
-    # Execution concerns — warming/expired
-    if exec_status in ("expired", "warming", "unavailable") and len(out) < 3:
-        _add("Execution data is not fully current; wait for updated dashboard.")
+    # Execution concerns — warming/expired/failed
+    if exec_status in ("expired", "warming", "unavailable", "failed") and len(out) < 3:
+        if exec_status == "failed":
+            _add("Execution data is unavailable because the last refresh attempt failed.")
+        else:
+            _add("Execution data is not fully current; wait for updated dashboard.")
 
     # Execution quality concerns
     if exec_quality == "MIXED" and exec_status == "available" and len(out) < 3:
@@ -1090,18 +1116,27 @@ def _build_home_decision(
     else:
         snapshot_status = execution_snapshot.get("status", "unavailable")
         snapshot_age = execution_snapshot.get("age_seconds") or 0
+        snapshot_refresh_state = execution_snapshot.get("refresh_state", "idle")
+        snapshot_failures = execution_snapshot.get("refresh_failure_count", 0)
         dashboard = execution_snapshot.get("dashboard")
 
         if snapshot_status == "available":
             exec_status = "available"
         elif snapshot_status == "expired" and snapshot_age <= _EXPIRED_MAX_AGE:
-            exec_status = "expired"
+            if snapshot_refresh_state == "running":
+                exec_status = "warming"
+            else:
+                exec_status = "expired"
+        elif snapshot_refresh_state == "running":
+            exec_status = "warming"
+        elif snapshot_failures > 0 and snapshot_refresh_state == "failed":
+            exec_status = "failed"
         else:
             exec_status = "warming"
             if dashboard and snapshot_age <= _EXPIRED_MAX_AGE:
                 exec_status = "warming"
 
-        if dashboard and exec_status != "warming":
+        if dashboard and exec_status not in ("warming", "failed"):
             exec_mqs = dashboard.get("market_quality_score")
             exec_ews = dashboard.get("execution_window_score")
             exec_decision = dashboard.get("decision")
@@ -1132,13 +1167,13 @@ def _build_home_decision(
             verdict = "NO";       action = "HEDGE";   pos_size_raw = "preserve capital"
         elif direction == "IMPROVING":
             verdict = "CAUTION";  action = "WAIT";    pos_size_raw = "half-size"
-        else:  # STABLE or UNKNOWN
+        else:  # STABLE, WEAKENING, or UNKNOWN
             verdict = "NO";       action = "REDUCE";  pos_size_raw = "preserve capital"
 
     elif risk_level == "HIGH":
         if direction in ("WORSENING",):
             verdict = "NO";       action = "HEDGE";   pos_size_raw = "preserve capital"
-        elif direction in ("STABLE", "UNKNOWN"):
+        elif direction in ("STABLE", "UNKNOWN", "WEAKENING"):
             verdict = "NO";       action = "REDUCE";  pos_size_raw = "preserve capital"
         else:  # IMPROVING
             if exec_quality == "STRONG":
@@ -1172,7 +1207,7 @@ def _build_home_decision(
             verdict = "CAUTION";  action = "SELECTIVE"; pos_size_raw = "selective"
 
     elif risk_level == "LOW":
-        if direction == "WORSENING":
+        if direction in ("WORSENING", "WEAKENING"):
             verdict = "CAUTION";  action = "WAIT";    pos_size_raw = "half-size"
         elif exec_quality == "STRONG":
             verdict = "YES"
@@ -1343,6 +1378,9 @@ def _build_home_decision(
     elif execution_refresh_status in ("scheduled", "already_running"):
         exec_recommended_refetch = 5
         exec_refresh_in_progress = True
+    elif exec_status == "failed":
+        exec_recommended_refetch = None
+        exec_refresh_in_progress = False
 
     return {
         "version":                    "home_decision_v1",
@@ -1956,21 +1994,27 @@ async def build_home_risk_intelligence(macro_provider, trading_fetch=None) -> di
     has_hi_impact = any(
         ev.get("importance") in ("high", "critical", "HIGH", "CRITICAL")
         and (ev.get("date") or "9999") <= three_td_cutoff
-        and (ev.get("country") or "US") == "US"
+        and _is_us_event(ev)
+        and _event_time_status(ev) != "released"
         for ev in upcoming_events
     )
     next_hi_event = None
     next_hi_days = None
+    next_hi_country = None
+    next_hi_time_status = None
     if has_hi_impact:
         for ev in sorted(upcoming_events, key=lambda e: e.get("date", "9999")):
             if (ev.get("importance") in ("high", "critical", "HIGH", "CRITICAL")
-                    and (ev.get("country") or "US") == "US"):
+                    and _is_us_event(ev)
+                    and _event_time_status(ev) != "released"):
                 next_hi_event = ev.get("title") or ""
                 try:
                     ed = datetime.strptime((ev.get("date") or "")[:10], "%Y-%m-%d").date()
                     next_hi_days = (ed - now_utc.date()).days
                 except Exception:
                     pass
+                next_hi_country = (ev.get("country") or "").upper()
+                next_hi_time_status = _event_time_status(ev)
                 break
 
     # 7. Build normalized inputs for canonical swing-regime engine
@@ -1997,6 +2041,9 @@ async def build_home_risk_intelligence(macro_provider, trading_fetch=None) -> di
         "has_upcoming_high_impact_event": has_hi_impact,
         "days_until_next_event":          next_hi_days,
         "next_event_title":               next_hi_event,
+        "event_country":                  next_hi_country,
+        "event_time_status":              next_hi_time_status,
+        "event_selection_reason":         "nearest_upcoming_high_impact_us_event",
     }
 
     from services.swing_regime_service import assess_swing_regime
@@ -2076,18 +2123,21 @@ async def build_home_risk_intelligence(macro_provider, trading_fetch=None) -> di
 
             snap_status = execution_snapshot.get("status", "unavailable") if execution_snapshot else "unavailable"
             snap_age = (execution_snapshot.get("age_seconds") or 0) if execution_snapshot else 0
+            snap_refresh = execution_snapshot.get("refresh_state", "idle") if execution_snapshot else "idle"
 
             needs_refresh = (
-                snap_status in ("unavailable", "warming") or
-                (snap_status == "expired" and snap_age > _EXPIRED_MAX_AGE) or
-                snap_status == "expired"
-            )
+                snap_status in ("unavailable",) or
+                (snap_status == "expired" and snap_age > _EXPIRED_MAX_AGE and snap_refresh != "running") or
+                (snap_status == "expired" and snap_refresh not in ("running",))
+            ) and snap_refresh != "failed"
             if needs_refresh:
                 refresh_result = schedule_trading_dashboard_refresh(
                     mode="swing",
                     fetch_fresh_data=trading_fetch,
                 )
                 execution_refresh_status = refresh_result.get("status")
+            elif snap_refresh == "failed":
+                execution_refresh_status = "failed"
             else:
                 execution_refresh_status = "not_needed"
         except Exception:
@@ -2107,7 +2157,7 @@ async def build_home_risk_intelligence(macro_provider, trading_fetch=None) -> di
     use_short_ttl = (
         exec_dyn_status in ("warming", "unavailable") or
         (exec_dyn_status == "expired" and exec_dyn_refresh in ("scheduled", "already_running"))
-    )
+    ) and exec_dyn_status != "failed"
     effective_ttl = 5 if use_short_ttl else _RISK_INTEL_TTL
 
     # 16. Assemble result
