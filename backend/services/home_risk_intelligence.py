@@ -98,38 +98,44 @@ def _get_btc_from_hl() -> dict | None:
         return None
 
 
-async def _get_btc_snapshot() -> dict | None:
-    """Canonical BTC snapshot: HL (zero-call) → CMC (cached) → CoinGecko (cached)."""
+def _get_btc_snapshot() -> dict | None:
+    """Cache-only BTC snapshot: HL state (zero-call) → CMC cache → CoinGecko cache.
+    Never makes upstream HTTP requests. Returns None when no valid cached source exists."""
+    import time as _t
+
     # 1. Hyperliquid in-memory state — always zero API call
     hl = _get_btc_from_hl()
     if hl is not None:
-        return hl
+        return {**hl, "as_of": int(_t.time()), "freshness": "live"}
 
-    # 2. CMC cached quote (120s TTL in CMCProvider._get)
+    # 2. CMC cache — prefix scan, pure read
     try:
-        import main as _m
-        ds = getattr(_m, "data_service", None)
-        if ds and getattr(ds, "cmc", None):
-            data = await ds.cmc.get_quotes(["BTC"])
-            btc = (data or {}).get("BTC", {})
+        from data.cache import cache as _c
+        entry = _c.get_by_prefix("cmc:/v2/cryptocurrency/quotes/latest")
+        if entry is not None:
+            _key, data = entry
+            btc = (data or {}).get("data", {}).get("BTC", {})
             usd = (btc.get("quote") or {}).get("USD", {})
             price = _r(usd.get("price"))
             chg = _r(usd.get("percent_change_24h"))
             if price is not None and chg is not None:
-                return {"price": price, "change_pct": chg, "source": "coinmarketcap"}
+                return {"price": price, "change_pct": chg, "source": "coinmarketcap",
+                        "as_of": int(_t.time()), "freshness": "cached"}
     except Exception:
         pass
 
-    # 3. CoinGecko cached dashboard (top_coins[0] is BTC, sorted by market cap)
+    # 3. CoinGecko cache — prefix scan, pure read
     try:
-        if ds and getattr(ds, "coingecko", None):
-            coins = await ds.coingecko.get_top_coins(limit=1)
-            if coins and isinstance(coins, list) and len(coins) > 0:
+        entry = _c.get_by_prefix("coingecko:coins/markets")
+        if entry is not None:
+            _key, coins = entry
+            if isinstance(coins, list) and len(coins) > 0:
                 btc_data = coins[0]
                 price = _r(btc_data.get("current_price"))
                 chg = _r(btc_data.get("price_change_percentage_24h"))
                 if price is not None and chg is not None:
-                    return {"price": price, "change_pct": chg, "source": "coingecko"}
+                    return {"price": price, "change_pct": chg, "source": "coingecko",
+                            "as_of": int(_t.time()), "freshness": "cached"}
     except Exception:
         pass
 
@@ -745,65 +751,74 @@ def _build_synthesized_explanation(
     event_active: bool, event_title: str | None,
     pillars: dict,
 ) -> str:
-    """Polarity-aware one-sentence decision explanation."""
-    env_parts: list[str] = []
-    blocker_parts: list[str] = []
+    """Polarity-aware two-sentence decision explanation."""
+    supports: list[str] = []
+    blockers: list[str] = []
 
-    # Support: regime improving + healthy MQS + cyclicals leading
+    # Sentence 1: environment + directional support
     if direction == "IMPROVING":
-        env_parts.append("the market environment is improving")
+        supports.append("market conditions are improving")
     elif direction == "STABLE":
-        env_parts.append("the market environment is stable")
+        supports.append("market conditions are stable")
     else:
-        env_parts.append(f"conditions are {direction.lower()}")
+        supports.append(f"conditions are {direction.lower()}")
 
     if exec_mqs is not None and exec_mqs >= 40:
-        env_parts.append("market quality is healthy")
+        supports.append("healthy market quality")
 
     lc = pillars.get("leadership_and_cross_asset", {})
     cvd = (lc.get("components") or {}).get("cyclical_vs_defensive_spread")
     if cvd is not None and cvd > 0:
-        env_parts.append("cyclicals are leading")
+        supports.append("cyclicals are leading")
 
-    # Trade bias
-    bias_str = trade_bias.replace("_", " ").lower()
-    if "long" in bias_str:
-        env_parts.append("directional bias is selectively bullish")
+    env = ", supported by " + " and ".join(supports[1:]) if len(supports) > 1 else ""
+    sent1 = (supports[0] if supports else "Market conditions are mixed") + env + "."
 
-    # Blockers: weak EWS, event, rising rates
+    # Sentence 2: primary blocker + implication
     if exec_ews is not None and exec_ews < 50:
-        blocker_parts.append("entry timing is weak")
+        blockers.append("entry timing remains weak")
 
     if event_active and event_title:
-        blocker_parts.append(f"{event_title} is imminent")
+        blockers.append(f"{event_title} is imminent")
 
-    rd = pillars.get("rates_and_dollar", {})
-    rd_chg = (rd.get("components") or {}).get("us10y_change_5d_bps")
-    if rd_chg is not None and rd_chg > 5:
-        blocker_parts.append("rising yields are adding pressure")
+    if not blockers and action == "WAIT":
+        blockers.append("confirmation is still pending")
 
-    # Build
-    env_text = " and ".join(env_parts) if env_parts else "market conditions are mixed"
-    if blocker_parts:
-        block_text = " and ".join(blocker_parts)
-        implication = "do not chase" if action in ("WAIT",) else (
-            "favor selective entries" if action in ("SELECTIVE",) else "wait for stronger signals"
-        )
-        return f"{env_text.capitalize()}, but {block_text} — {implication}."
+    if blockers:
+        block_text = " and ".join(blockers[:2])
+        implication = "avoid chasing" if action in ("WAIT",) else "favor selective entries"
+        sent2 = f"{block_text.capitalize()}, so {implication}."
     else:
-        implication = "selective entries are appropriate" if action != "WAIT" else "wait for further confirmation"
-        return f"{env_text.capitalize()} — {implication}."
+        sent2 = "Selective entries are appropriate."
+        if verdict == "YES":
+            sent2 = "Conditions support pressing entries."
+
+    return f"{sent1} {sent2}"
 
 
 def _build_decision_completeness(
     regime_assessment: str, regime_confidence: str,
     exec_status: str, leadership_conf_status: str,
+    exec_quality: str,
 ) -> dict:
     overall: str
+    reasons: list[dict] = []
     if regime_assessment == "INSUFFICIENT_DATA":
         overall = "INSUFFICIENT_DATA"
-    elif exec_status not in ("available", "expired") or leadership_conf_status in ("UNCONFIRMED", "MIXED"):
+        reasons.append({"component": "regime", "status": regime_assessment,
+                        "explanation": "Regime data is insufficient to support a meaningful decision."})
+    elif exec_status not in ("available", "expired"):
         overall = "PARTIAL"
+        reasons.append({"component": "execution", "status": exec_status,
+                        "explanation": f"Execution confirmation is {exec_status}."})
+    elif leadership_conf_status in ("UNCONFIRMED",):
+        overall = "PARTIAL"
+        reasons.append({"component": "leadership", "status": leadership_conf_status,
+                        "explanation": "Leadership confirmation is incomplete."})
+    elif leadership_conf_status == "MIXED":
+        overall = "PARTIAL"
+        reasons.append({"component": "leadership", "status": "MIXED",
+                        "explanation": "Leadership signals are mixed."})
     else:
         overall = "COMPLETE"
 
@@ -813,6 +828,7 @@ def _build_decision_completeness(
         "execution_confirmation_status":  exec_status,
         "leadership_confirmation_status": leadership_conf_status,
         "overall_decision_status":        overall,
+        "reasons":                        reasons,
     }
 
 
@@ -1629,7 +1645,7 @@ def _build_home_decision(
 
     # ── Decision completeness ───────────────────────────────────────────
     completeness = _build_decision_completeness(
-        regime_assessment, confidence, exec_status, lc_conf,
+        regime_assessment, confidence, exec_status, lc_conf, exec_quality,
     )
 
     # ── Synthesized explanation ─────────────────────────────────────────
@@ -2226,7 +2242,7 @@ async def build_home_risk_intelligence(macro_provider, trading_fetch=None) -> di
     hyg_chg   = _r(hyg.get("change_pct"))
 
     # BTC
-    btc_data  = await _get_btc_snapshot()
+    btc_data  = _get_btc_snapshot()
     btc_price = (btc_data or {}).get("price")
     btc_chg   = (btc_data or {}).get("change_pct")
     btc_src   = (btc_data or {}).get("source", "unavailable")
