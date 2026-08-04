@@ -1,244 +1,133 @@
-# Home Decision Semantic Coherence
+# Backend Deployment Startup Failure
 
-## 1. Completion Status
+## 1. Status
 
-**COMPLETE.** All 9 semantic contradictions resolved. Entry guidance, decision completeness, event recomposition, future-condition correctness, condition deduplication, market-driver separation, synthesized explanation, leadership language coherence, and missing-input humanization all implemented and tested.
+**CONDITIONAL — STARTUP ISSUE REMAINS**
 
-## 2. Git and Baseline State
+No deployment logs were provided. The server starts and binds correctly in local testing. Root cause cannot be proven without the actual deployment traceback. The latest Home commits (8db8705e, d89428b5, 0a03046f) do not affect startup lifecycle.
+
+## 2. Deployment Log Failure
+
+**No deployment logs were pasted.** The task template contained `[PASTE LOGS HERE]` with no actual log content. Analysis was performed based on:
+- Local reproduction of the deployment command
+- Code inspection of startup path
+- Previous controlled runs
+
+## 3. Exact Start Command
+
+From `.replit` deployment section:
+```
+cd /home/runner/workspace/backend && python3.11 -m uvicorn main:app --host=0.0.0.0 --port=5000
+```
+
+Port: 5000 (hardcoded, not from `$PORT` env). Host: 0.0.0.0.
+
+## 4. Root Cause
+
+**Cannot be proven without deployment logs.** Local reproduction shows:
+
+1. `python3.11 -m uvicorn main:app` imports successfully
+2. Lifespan yields in 0.03s — server is HTTP-ready immediately
+3. `_do_init` completes in 30-45s — all providers initialize
+4. `/ping` returns 200 during startup
+5. `/health` returns 200 during startup (does not block on init)
+6. No fatal tracebacks during import or startup
+
+Possible deployment-specific causes (require logs to confirm):
+- Replit Promote step health check timing out before init completes
+- Port binding conflict with previous deployment instance
+- Environment variable mismatch between dev and deployment
+
+## 5. Whether Latest Home Commits Caused It
+
+**No.** The three most recent commits (8db8705e, d89428b5, 0a03046f) only changed:
+
+| Commit | Files | Scope |
+|--------|-------|-------|
+| 8db8705e | cache.py, coingecko_provider.py, home_risk_intelligence.py, tests | BTC reader, tests |
+| d89428b5 | home_risk_intelligence.py | BTC source selection, decision summaries |
+| 0a03046f | cache.py, home_risk_intelligence.py | Cache-only BTC, completeness reasons |
+
+None of these files are imported during startup's critical path. `home_risk_intelligence.py` is only imported when `/api/home/risk-intelligence` is called. `coingecko_provider.py` is imported via `market_data_service.py` which already existed before these commits. `cache.py` changes only added/removed a method — no import-time side effects.
+
+Pre-existing commits (ac9a4c0d, 2205449b, etc.) changed `main.py` startup timing and `tradier_provider.py` limiter behavior. These have been stable through multiple controlled runs.
+
+## 6. Exact Correction
+
+**No code correction is warranted without deployment logs.** The server:
+- Imports correctly
+- Binds correctly
+- Responds to health checks
+- All 193 tests pass
+- Home endpoint works (proven in prior controlled runs)
+
+If deployment logs reveal a specific error (e.g., missing environment variable, package import failure), a narrow fix would be applied to that specific cause.
+
+## 7. Files Changed
+
+**NONE.** No files were modified during this diagnosis.
+
+## 8. Local Startup Validation
 
 ```
-Branch: main
-HEAD:   e1e01835 (fix(home): align action sizing completeness and decision language)
-Parents: 3f452710 → e1e01835
-Commits ahead of origin/main: 18
+Command: cd /home/runner/workspace/backend && python3.11 -m uvicorn main:app --host=0.0.0.0 --port=5000
+Result: Started successfully. Lifespan yielded in 0.03s. All services initialized.
+Exit: Killed after 60s timeout wrapper (not a crash).
 ```
 
-## 3. Proven Semantic Contradictions
+## 9. Host and Port Validation
 
-| # | Contradiction | Root Cause | Fix |
-|---|--------------|-----------|-----|
-| 1 | WAIT + half-size = contradictory instruction | Action and size not separated | Added entry_guidance with current_action, entry_permission, conditional_size |
-| 2 | HIGH confidence + unavailable execution | Regime completeness conflated with overall | Added completeness struct with per-component status |
-| 3 | Event language says "reduced from Selective" when action is WAIT | Sizing explanation computed before final action | Recompose event guidance after final action |
-| 4 | Already-true +5bps condition in "what would worsen" | Conditions appended unconditionally | Next unsatisfied boundary only |
-| 5 | Duplicate rate-improvement conditions | Two statements describe same transition | Single measurable condition retained |
-| 6 | Status text in why_market_is_moving | Market drivers and context mixed | why_market_is_moving = drivers only; market_context separate |
-| 7 | "Defensives leading — cautious" + "Neutral" contradict | Magnitude not considered | Slight edge → "not strong enough to confirm" |
-| 8 | Raw btc_change_24h in user text | No humanization layer | _MISSING_LABELS dict + _h_missing() |
-| 9 | Individual repeated facts instead of synthesized explanation | No aggregation | _build_synthesized_explanation() |
+- Port 5000 bound successfully (confirmed via uvicorn startup message)
+- Host 0.0.0.0 — accessible from localhost
 
-## 4. Current Action and Conditional Size Contract
+## 10. Health Endpoint Validation
 
-Added `home_decision.entry_guidance`:
-
-| Action | current_entry_permission | conditional_size |
-|--------|-------------------------|------------------|
-| WAIT | no_new_entry | half-size (ceiling after confirmation) |
-| SELECTIVE | selective_entry | selective (current actionable) |
-| PRESS | normal_entry | null |
-| REDUCE | reduce_exposure | null |
-| HEDGE | reduce_exposure | null |
-
-Legacy `position_size_hint` preserved for backward compatibility.
-
-WAIT with half-size now correctly reads: "No new entry. If confirmation improves, cap at half-size."
-
-## 5. Decision Completeness Contract
-
-Added `home_decision.completeness`:
-
+`/health` returns immediately without `_wait_for_init()`:
 ```json
-{
-  "regime_confidence": "MEDIUM",
-  "regime_data_status": "COMPLETE",
-  "execution_confirmation_status": "warming",
-  "leadership_confirmation_status": "UNCONFIRMED",
-  "overall_decision_status": "PARTIAL"
-}
+{"status": "starting", "init_complete": false, ...}
 ```
 
-Overall status semantics:
-- **COMPLETE**: regime sufficient + execution available + leadership confirmed
-- **PARTIAL**: regime usable but one or more confirmations unavailable/partial
-- **INSUFFICIENT_DATA**: regime itself cannot support a decision
-
-Regime confidence is not overwritten — HIGH/COMPLETE regime with unavailable execution produces overall PARTIAL.
-
-## 6. Event Guidance Recomposition
-
-Event sizing explanation now varies by final action:
-
-| Final Action | Event Language |
-|-------------|---------------|
-| WAIT | "{Event} is imminent, reinforcing the decision to wait. If confirmation improves after the event, cap any initial entry at Half-Size." |
-| REDUCE / HEDGE | "{Event} event risk reinforces the defensive posture." |
-| SELECTIVE / PRESS | "Position size reduced from {pre} to {post} because {Event} is imminent." |
-
-No longer says "reduced from Selective" when current action is no entry.
-
-## 7. Future-Condition Threshold Correctness
-
-Fixed `conditions_to_worsen` in Rates & Dollar:
-
-**Before:** When 10Y 5D = +6 bps, worsen condition said "exceeds +5 bps" (already true).
-
-**After:** When 10Y 5D = +6 bps, next worsen boundary is "+15 bps." The +5 bps condition is excluded because it's already satisfied.
-
-DXY same fix: when DXY 1D ≥ +0.5% (already true), worsen condition omitted.
-
-## 8. Condition Deduplication
-
-Removed duplicate rate-improvement conditions:
-- "10Y five-session trend reverses" removed
-- "10Y five-session change falls below 0 bps" retained (more measurable)
-
-Only one improvement condition per metric per threshold level.
-
-## 9. Market Drivers and Market Context Separation
-
-**why_market_is_moving** now contains market drivers only:
-- "10Y is at 4.55% and has risen +7 bps over five sessions — rate pressure accelerating."
-- "Equities showing strength (SPY/QQQ avg +1.4% 1D)."
-- Not: "US cash market is closed" — that's in `market_context`
-- Not: "Swing risk is MODERATE" — that's in `regime`
-- Not: event language — that's in `sizing`
-
-## 10. Synthesized Decision Explanation
-
-Added `home_decision.synthesized_explanation`:
-
-```
-"Short-term participation improved, but {strongest_risk}, arguing against chasing strength."
+After init completes:
+```json
+{"status": "ok", "init_complete": true, ...}
 ```
 
-Combines strongest support + strongest risk + action-appropriate conclusion. One sentence. Grounded in existing signals. WAIT ends with restraint language. SELECTIVE/YES ends with entry-appropriate context.
+## 11. Home Endpoint Validation
 
-## 11. Leadership Language Correction
+Not validated in this diagnosis run. Previously proven in controlled run (commit 2205449b): HTTP 200 in 2-4 seconds with real SPY/QQQ/VIX data.
 
-Fixed Leadership interpretation to resolve magnitude/confirmation contradiction:
-
-| Cyclical vs Defensive Spread | Posture | Language |
-|------------------------------|---------|----------|
-| > 0 | Any | "Cyclicals outperforming — mildly supportive." |
-| ≤ -1.0 | Any | "Defensives have a clear edge — cautious rotation." |
-| -1.0 to 0 | Neutral | "Slight edge, not strong enough to confirm. Posture is Neutral — leadership is mixed." |
-| -1.0 to 0 | Other | "Slight edge… Market posture is {posture}." |
-| BTC None | Any | "…does not imply bearishness." |
-
-## 12. Missing-Input Humanization
-
-Humanized labels for diagnostic field keys:
-
-| Raw Key | Humanized Label |
-|---------|----------------|
-| btc_change_24h | BTC 24-hour confirmation |
-| spy_change_1d | SPY latest-session change |
-| hyg_change_1d | High-yield credit latest-session change |
-| us10y_change_5d_bps | 10Y five-session change |
-| dxy_change_1d | Dollar latest-session change |
-
-Raw keys preserved in internal `missing_inputs` arrays for machine consumers. User-facing messages use humanized labels via `_h_missing()`.
-
-## 13. Backward Compatibility
-
-All existing fields preserved:
-- `verdict`, `action`, `position_size_hint`, `sizing`
-- `confidence`, `assessment_status`, `market_context`
-- `execution`, `signal_summary`, `why_now`, `why_market_is_moving`
-- `buy_reasons`, `wait_reasons`, `reduce_reasons`
-- `what_would_improve`, `what_would_worsen`
-- `regime`, `pillars`, `event_overlay`
-
-New fields are additive: `entry_guidance`, `completeness`, `synthesized_explanation`.
-
-## 14. Exact Files Changed
-
-```
-backend/services/home_risk_intelligence.py   | 143 changes (+ entry guidance, completeness, synthesized explanation,
-                                                humanized labels, recomposed event sizing, separated market drivers)
-backend/services/swing_regime_service.py     | 17 changes (future-condition correctness, leadership language)
-backend/tests/test_home_risk_intelligence.py | 20 changes (updated to new contract)
-```
-
-3 files, +143/-37 lines.
-
-## 15. Tests and Results
+## 12. Tests
 
 ```
 $ python -m pytest -q tests/test_home_decision.py
 74 passed, 0 failed
 
 $ python -m pytest -q tests/test_home_risk_intelligence.py
-104 passed, 0 failed
+119 passed, 0 failed
 
-Total: 178 passed, 0 failed, 0 skipped
+Total: 193 passed, 0 failed, 0 skipped
 ```
 
-## 16. Live Response Before Correction
+## 13. Remaining Risks
 
-Not independently captured — contradictions documented from frontend evidence and code analysis.
+1. Without deployment logs, the specific Promote failure reason is unknown
+2. Server dies after ~120-180s from Replit SIGTERM in local testing — may also happen in deployment
+3. Tradier rate limit exhaustion during startup may delay provider availability
+4. Finviz timeouts during startup may slow background task completion
 
-## 17. Live Response After Correction
-
-Verified via functional test:
-
-```
-action=WAIT → entry_guidance: perm=no_new_entry, cond_size=half-size
-completeness: regime=MEDIUM, exec=warming, leadership=UNCONFIRMED, overall=PARTIAL
-synthesized: "Short-term participation improved, but breadth is narrow, arguing against chasing strength."
-missing: "BTC 24-hour confirmation" (humanized, not raw btc_change_24h)
-```
-
-## 18. Provider, Cache, Database and Runtime Effects
-
-- **No provider changes.** All data flows through existing paths.
-- **No cache changes.** Existing cache keys and TTLs preserved.
-- **No database changes.**
-- **Runtime overhead:** ~2 string lookups per request for humanized labels. Dict creation for new additive fields.
-
-## 19. Remaining Limitations
-
-1. `why_market_is_moving` may still show the fallback "no single dominant driver" when all drivers are mild — this is acceptable as an honest statement.
-2. Synthesized explanation uses simple concatenation of first support + first risk — future enhancement could use template selection by regime quadrant.
-3. Humanized label mapping is manual — new diagnostic keys must be added to `_MISSING_LABELS`.
-4. Entry guidance `conditional_size` for WAIT always returns `pos_size` (half-size for MODERATE+WEAKENING) — this is correct but may seem optimistic when execution is also failed.
-
-## 20. Readiness for Frontend Semantic Rendering
-
-**READY FOR FRONTEND SEMANTIC RENDERING**
-
-All 9 contradictions resolved:
-- WAIT action no longer paired with permission-to-enter size ✓
-- Confidence scoped to regime data separately from overall ✓
-- Event language recomposed after final action ✓
-- Already-true worsen conditions excluded ✓
-- Duplicate conditions deduplicated ✓
-- Market drivers separated from context ✓
-- Leadership contradictions resolved by magnitude ✓
-- Raw field names humanized ✓
-- Synthesized explanation provides one-sentence summary ✓
-
-## 21. Final Git Status
+## 14. Final Git Status
 
 ```
-## main...origin/main [ahead 18]
-e1e01835 (HEAD -> main) fix(home): align action sizing completeness and decision language
+## main...origin/main [ahead 23]
+8db8705e (HEAD -> main) fix(home): test exact BTC cache selection and freshness
 ```
 
-## 22. Local Commit
+No uncommitted production file changes.
 
-```
-commit e1e0183536347553be2d139ffd0985f28c0d1db9
-Author: apiatx <aidanpilon@gmail.com>
-Date:   Tue Aug 4 04:21:51 2026 +0000
+## 15. Local Commit
 
-fix(home): align action sizing completeness and decision language
-```
+**NOT APPLICABLE** — no files were modified during this diagnosis.
 
-## 23. Push Status
+## 16. Push Status
 
 **NOT PUSHED** — user must run `git push origin main`.
-
-## 24. Complete Task Commit Diff
-
-See `git show e1e01835` for the full 3-file, 143-insertion diff.
