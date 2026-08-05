@@ -1,0 +1,77 @@
+Do not change any code, configuration, cache, or data files. Do not commit or push anything.
+
+This is a read-only validation of the Watchlist 7D/30D correction you just completed.
+
+The user specifically expects the current 30-day results to be approximately:
+
+* MSFT: +28%
+* AAPL: +5%
+* NVDA: +7%
+
+Your previous report said all symbols matched your calculation, but it did not show the actual endpoint values or prove that they match these corrected real-world results.
+
+Using the currently running backend and the actual Watchlist endpoint consumed by the frontend, produce definitive evidence for:
+
+* MSFT
+* AAPL
+* NVDA
+
+For each symbol, report:
+
+| Field                                  | Required evidence       |
+| -------------------------------------- | ----------------------- |
+| Final Watchlist `price`                | Exact endpoint value    |
+| Price source                           | Exact source            |
+| Quote timestamp                        | Exact timestamp         |
+| Effective New York market date         | Exact date              |
+| Canonical newest bar date              | Exact date              |
+| 7D target calendar date                | Exact date              |
+| Selected 7D comparison session         | Exact date              |
+| Selected 7D comparison close           | Exact close             |
+| Manual 7D formula                      | Show numbers and result |
+| Endpoint `change_7d`                   | Exact value             |
+| 30D target calendar date               | Exact date              |
+| Selected 30D comparison session        | Exact date              |
+| Selected 30D comparison close          | Exact close             |
+| Manual 30D formula                     | Show numbers and result |
+| Endpoint `change_30d`                  | Exact value             |
+| Difference between manual and endpoint | Exact percentage points |
+
+The manual formulas must be:
+
+```text
+change_7d = ((endpoint displayed price / selected 7D close) - 1) * 100
+change_30d = ((endpoint displayed price / selected 30D close) - 1) * 100
+```
+
+Also independently validate each 30D result using FMP as a read-only benchmark:
+
+* Show the equivalent FMP current-price basis.
+* Show the FMP comparison date and close.
+* Calculate the FMP-equivalent 30D percentage.
+* Show the absolute difference versus the Watchlist endpoint.
+* Do not add FMP to production logic.
+
+Explicitly answer these three questions at the end:
+
+1. Is MSFT now approximately +28% over 30 calendar days?
+2. Is AAPL now approximately +5% over 30 calendar days?
+3. Is NVDA now approximately +7% over 30 calendar days?
+
+If any answer is no, do not make changes yet. Identify exactly whether the mismatch comes from:
+
+* the displayed current price
+* the selected historical date
+* the selected historical close
+* split adjustment
+* extended-hours versus regular-session basis
+* stale canonical history
+* stale quote data
+* endpoint merge precedence
+* another specific cause
+
+Call the real endpoint. Do not validate only an internal helper or cached metadata.
+
+Return the raw endpoint rows for these three symbols, the completed evidence table, and the direct yes/no answers.
+
+Do not modify files. Do not commit. Do not push.
