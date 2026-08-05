@@ -571,8 +571,12 @@ async def backfill_symbol(
     meta   = get_metadata(sym)
     status = (meta or {}).get("history_status", "not_yet_backfilled")
 
-    # ── Skip complete symbols unless explicit manual_rebuild ──────────────────
-    if mode not in ("manual_rebuild",):
+    # ── Skip complete symbols unless manual_rebuild or incremental_daily_append ─
+    # incremental_daily_append is allowed through so stale 10Y-complete symbols
+    # (e.g. AAPL/NVDA that have been frozen since their last full backfill) can
+    # receive new bars.  The append path's own days_behind <= 0 guard prevents
+    # any wasted call for symbols whose newest bar is already current.
+    if mode not in ("manual_rebuild", "incremental_daily_append"):
         if is_10y_complete(status):
             return {
                 "symbol":         sym,
@@ -721,8 +725,13 @@ def _priority_key(symbol: str) -> int:
 async def _build_symbol_list_tiered(
     tier_0_override: Optional[list[str]] = None,
 ) -> list[str]:
-    """Build prioritized eligible symbol list. Complete symbols are excluded."""
-    from services.canonical_history_service import get_metadata, is_10y_complete
+    """Build prioritized eligible symbol list.
+
+    10Y-complete symbols that need an incremental append (newest bar > 3 days old)
+    are placed in tier1 so the nightly incremental_daily_append job can update them.
+    Complete and fresh symbols (newest bar within 3 days) remain excluded.
+    """
+    from services.canonical_history_service import get_metadata, is_10y_complete, needs_append
 
     tier0:    set[str] = set()
     tier1:    set[str] = set()
@@ -734,7 +743,13 @@ async def _build_symbol_list_tiered(
         bc   = meta.get("bar_count", 0) if meta else 0
         hs   = meta.get("history_status", "not_yet_backfilled") if meta else "not_yet_backfilled"
         if is_10y_complete(hs):
-            complete.add(s)
+            # Include in tier1 when bars are stale (> 3 calendar days old) so
+            # incremental_daily_append can catch them up.  Fresh complete symbols
+            # (within 3 days) stay in the excluded complete set.
+            if needs_append(s):
+                tier1.add(s)
+            else:
+                complete.add(s)
             return
         if hs in ("not_yet_backfilled", "fetch_failed",
                   "cache_corrupt_needs_rebuild") or bc < 756:

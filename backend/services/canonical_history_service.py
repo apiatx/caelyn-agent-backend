@@ -436,25 +436,53 @@ def _compute_volume_metrics_from_completed(
 def _compute_price_metrics_from_completed(
     completed: list[tuple[str, float | None, float | None]],
 ) -> dict[str, object]:
-    """Compute completed-session close-to-close price returns for Watchlist rows."""
-    result = _null_price_metrics()
+    """Compute completed-session close-to-close price returns for Watchlist rows.
 
-    def _window_return_pct(sessions: int) -> float | None:
-        if len(completed) <= sessions:
-            return None
-        latest_close = completed[-1][1]
-        comparison_close = completed[-(sessions + 1)][1]
-        if (
-            latest_close is None
-            or latest_close < 0
-            or comparison_close is None
-            or comparison_close <= 0
-        ):
+    Semantics: calendar-day lookback.
+      change_7d  — (last_close / close_on_or_before(last_date − 7 calendar days)  − 1) × 100
+      change_30d — (last_close / close_on_or_before(last_date − 30 calendar days) − 1) × 100
+
+    The comparison bar is the most recent completed session whose date is ≤
+    (last completed bar date − calendar_days).  This preserves weekends, holidays,
+    and early-close sessions without inventing a fixed session-count offset.
+
+    Invariants enforced:
+      • comparison_close must be finite and strictly positive (no division by zero).
+      • latest_close must be finite and non-negative.
+      • If no eligible comparison bar exists (insufficient history), returns None.
+      • Bars must already be sorted chronologically (ensured by _completed_daily_bars).
+    """
+    result = _null_price_metrics()
+    if not completed:
+        return result
+
+    latest_close = completed[-1][1]
+    if latest_close is None or latest_close < 0:
+        return result
+
+    try:
+        as_of_date = date.fromisoformat(completed[-1][0])
+    except (ValueError, TypeError):
+        return result
+
+    def _calendar_day_return_pct(calendar_days: int) -> float | None:
+        """Return pct change vs the most-recent bar on/before as_of_date − calendar_days."""
+        target_date = as_of_date - timedelta(days=calendar_days)
+        comparison_close: float | None = None
+        # Walk backwards through completed[:-1] (skip the latest bar itself)
+        for bar_date_str, close, _ in reversed(completed[:-1]):
+            try:
+                if date.fromisoformat(bar_date_str) <= target_date:
+                    comparison_close = close
+                    break
+            except (ValueError, TypeError):
+                continue
+        if comparison_close is None or comparison_close <= 0:
             return None
         return round(((latest_close / comparison_close) - 1.0) * 100.0, 6)
 
-    result["change_7d"] = _window_return_pct(7)
-    result["change_30d"] = _window_return_pct(30)
+    result["change_7d"] = _calendar_day_return_pct(7)
+    result["change_30d"] = _calendar_day_return_pct(30)
     return result
 
 
