@@ -1843,6 +1843,62 @@ def _build_home_decision(
         exec_recommended_refetch = None
         exec_refresh_in_progress = False
 
+    # ── Execution conditions from dashboard ────────────────────────────────
+    exec_conditions = []
+    exec_cond_available = 0
+    exec_cond_expected = 0
+    exec_cond_status = "unavailable"
+    if execution_snapshot and execution_snapshot.get("dashboard"):
+        dashboard = execution_snapshot["dashboard"]
+        exec_conditions = dashboard.get("execution_conditions", [])
+        exec_cond_available = dashboard.get("execution_conditions_available_count", 0)
+        exec_cond_expected = dashboard.get("execution_conditions_expected_count", 4)
+        exec_cond_status = dashboard.get("execution_conditions_status", "unavailable")
+
+    # ── Data completeness from dashboard ───────────────────────────────────
+    exec_data_completeness = {}
+    if execution_snapshot and execution_snapshot.get("dashboard"):
+        exec_data_completeness = execution_snapshot["dashboard"].get("data_completeness", {})
+    exec_data_status = exec_data_completeness.get("data_status", "unavailable")
+    exec_completeness_pct = None
+    if exec_cond_expected > 0:
+        exec_completeness_pct = round(exec_cond_available / exec_cond_expected * 100)
+
+    # ── Primary execution blocker ──────────────────────────────────────────
+    primary_blocker = None
+    if exec_status == "unavailable":
+        primary_blocker = "Execution data unavailable — refresh has not yet completed"
+    elif exec_status == "warming":
+        primary_blocker = "Execution data is still warming — retry shortly"
+    elif exec_status == "failed":
+        err_msg = execution_snapshot.get("refresh_error", "Refresh failed") if execution_snapshot else "Refresh failed"
+        primary_blocker = f"Execution refresh failed: {err_msg}"
+    elif exec_quality == "WEAK" and exec_ews is not None and exec_ews < 50:
+        primary_blocker = "Weak entry timing — insufficient execution conditions confirming"
+    elif exec_quality == "MIXED":
+        cond_failing = [c["label"] for c in exec_conditions if not c.get("available") or not c.get("ok")]
+        primary_blocker = f"Mixed execution signals — {', '.join(cond_failing[:2])}" if cond_failing else "Mixed execution signals"
+    if not primary_blocker and exec_quality == "STRONG":
+        primary_blocker = "Execution conditions are confirming — no blocker"
+
+    # ── Decision effect ────────────────────────────────────────────────────
+    decision_effect = None
+    if exec_status not in ("available", "expired"):
+        if exec_refresh_in_progress:
+            decision_effect = "Execution data is warming — wait briefly and retry."
+        else:
+            decision_effect = "Execution data is unavailable — use regime-only guidance with cautious sizing."
+    elif exec_quality == "STRONG" and (verdict == "YES" or action == "PRESS"):
+        decision_effect = f"The environment is constructive and entries are confirming — {action.lower()} entries at {pos_size} size."
+    elif exec_quality == "STRONG" and action == "SELECTIVE":
+        decision_effect = f"Market quality is healthy and execution is strong, but regime guardrails limit to {action.lower()} entries."
+    elif exec_quality == "MIXED":
+        decision_effect = "Execution is mixed — favor selective entries and confirmed setups over aggressive buying."
+    elif exec_quality == "WEAK":
+        decision_effect = "The tape may be healthy but entry timing is weak. Do not chase."
+    else:
+        decision_effect = "Execution data is insufficient — defer to regime-only guidance."
+
     return {
         "version":                    "home_decision_v1",
         "calibration_status":         "deterministic_uncalibrated",
@@ -1872,7 +1928,9 @@ def _build_home_decision(
             "refresh_status":              execution_refresh_status,
             "quality":                     exec_quality,
             "market_quality_score":        exec_mqs,
+            "market_quality_label":        execution_snapshot["dashboard"].get("market_quality_label") if execution_snapshot and execution_snapshot.get("dashboard") else None,
             "execution_window_score":      exec_ews,
+            "execution_window_label":      execution_snapshot["dashboard"].get("execution_window_label") if execution_snapshot and execution_snapshot.get("dashboard") else None,
             "decision":                    exec_decision,
             "mode":                        "swing",
             "as_of":                       exec_as_of,
@@ -1881,6 +1939,15 @@ def _build_home_decision(
             "expired":                     exec_expired,
             "recommended_refetch_seconds": exec_recommended_refetch,
             "refresh_in_progress":         exec_refresh_in_progress,
+            "refresh_error":               execution_snapshot.get("refresh_error") if execution_snapshot else None,
+            "data_status":                 exec_data_status,
+            "available_condition_count":   exec_cond_available,
+            "expected_condition_count":    exec_cond_expected,
+            "condition_status":            exec_cond_status,
+            "completeness_pct":            exec_completeness_pct,
+            "execution_conditions":        exec_conditions,
+            "primary_blocker":             primary_blocker,
+            "decision_effect":             decision_effect,
         },
         "why_now":                   why_now,
         "buy_reasons":               buy_reasons,

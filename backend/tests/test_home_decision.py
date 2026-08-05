@@ -950,6 +950,131 @@ def test_extreme_weakening_reduce():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Phase F: Execution contract completeness
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_execution_has_mqs_label():
+    dash = _make_exec_snapshot(mqs=72, ews=55)
+    dash["dashboard"]["market_quality_label"] = "HEALTHY"
+    d = _hd(es=dash)
+    assert d["execution"].get("market_quality_label") == "HEALTHY"
+    print("test_execution_has_mqs_label PASSED")
+
+
+def test_execution_has_ews_label():
+    dash = _make_exec_snapshot(mqs=72, ews=55)
+    dash["dashboard"]["execution_window_label"] = "MIXED"
+    d = _hd(es=dash)
+    assert d["execution"].get("execution_window_label") == "MIXED"
+    print("test_execution_has_ews_label PASSED")
+
+
+def test_execution_has_condition_counts():
+    dash = _make_exec_snapshot(mqs=72, ews=55)
+    dash["dashboard"]["execution_conditions_available_count"] = 3
+    dash["dashboard"]["execution_conditions_expected_count"] = 4
+    dash["dashboard"]["execution_conditions_status"] = "partial"
+    d = _hd(es=dash)
+    assert d["execution"].get("available_condition_count") == 3
+    assert d["execution"].get("expected_condition_count") == 4
+    assert d["execution"].get("condition_status") == "partial"
+    print("test_execution_has_condition_counts PASSED")
+
+
+def test_execution_has_execution_conditions():
+    dash = _make_exec_snapshot(mqs=72, ews=55)
+    dash["dashboard"]["execution_conditions"] = [
+        {"id": "breakouts", "label": "Breakouts working", "state": "pass", "available": True, "ok": True, "evidence": "75/100 breadth"},
+        {"id": "leaders", "label": "Leaders holding", "state": "pass", "available": True, "ok": True, "evidence": "Leaders +1.2%"},
+        {"id": "pullbacks", "label": "Pullbacks bought", "state": "fail", "available": True, "ok": False, "evidence": "2/5 days"},
+        {"id": "follow_through", "label": "Follow-through", "state": "unavailable", "available": False, "ok": False, "evidence": "No data"},
+    ]
+    d = _hd(es=dash)
+    assert len(d["execution"].get("execution_conditions", [])) == 4
+    print("test_execution_has_execution_conditions PASSED")
+
+
+def test_execution_has_primary_blocker():
+    d = _hd(es=_make_exec_snapshot(mqs=72, ews=55))
+    assert d["execution"].get("primary_blocker") is not None
+    assert isinstance(d["execution"]["primary_blocker"], str)
+    print("test_execution_has_primary_blocker PASSED")
+
+
+def test_execution_has_decision_effect():
+    d = _hd(es=_make_exec_snapshot(mqs=72, ews=55))
+    assert d["execution"].get("decision_effect") is not None
+    assert isinstance(d["execution"]["decision_effect"], str)
+    print("test_execution_has_decision_effect PASSED")
+
+
+def test_execution_has_data_status():
+    dash = _make_exec_snapshot(mqs=72, ews=55)
+    dash["dashboard"]["data_completeness"] = {"data_status": "available"}
+    d = _hd(es=dash)
+    assert d["execution"].get("data_status") == "available"
+    print("test_execution_has_data_status PASSED")
+
+
+def test_execution_has_refresh_error():
+    snap = _make_exec_snapshot(status="failed", mqs=None, ews=None)
+    snap["refresh_error"] = "Connection refused"
+    snap["dashboard"] = None
+    d = _hd(es=snap)
+    assert d["execution"].get("refresh_error") == "Connection refused"
+    print("test_execution_has_refresh_error PASSED")
+
+
+def test_execution_has_completeness_pct():
+    dash = _make_exec_snapshot(mqs=72, ews=55)
+    dash["dashboard"]["execution_conditions_available_count"] = 3
+    dash["dashboard"]["execution_conditions_expected_count"] = 4
+    d = _hd(es=dash)
+    assert d["execution"].get("completeness_pct") == 75
+    print("test_execution_has_completeness_pct PASSED")
+
+
+def test_available_strong_execution_reaches_matrix():
+    d = _hd(sr=_make_regime(risk_level="LOW", direction="IMPROVING"),
+            es=_make_exec_snapshot(mqs=80, ews=80))
+    assert d["execution"]["status"] == "available"
+    assert d["execution"]["quality"] == "STRONG"
+    assert d["verdict"] in ("YES", "CAUTION")
+    print("test_available_strong_execution_reaches_matrix PASSED")
+
+
+def test_available_mixed_execution_reaches_matrix():
+    d = _hd(sr=_make_regime(risk_level="MODERATE", direction="STABLE"),
+            es=_make_exec_snapshot(mqs=55, ews=55))
+    assert d["execution"]["quality"] == "MIXED"
+    assert d["verdict"] in ("CAUTION", "YES")
+    print("test_available_mixed_execution_reaches_matrix PASSED")
+
+
+def test_available_weak_execution_reaches_matrix():
+    d = _hd(sr=_make_regime(risk_level="LOW", direction="STABLE"),
+            es=_make_exec_snapshot(mqs=30, ews=25))
+    assert d["execution"]["quality"] == "WEAK"
+    assert d["verdict"] == "CAUTION"
+    assert d["action"] == "WAIT"
+    print("test_available_weak_execution_reaches_matrix PASSED")
+
+
+def test_unavailable_execution_produces_regime_only():
+    d = _hd(es=_make_exec_snapshot(status="unavailable", mqs=None, ews=None))
+    assert d["execution"]["status"] in ("unavailable", "warming", "failed")
+    print("test_unavailable_execution_produces_regime_only PASSED")
+
+
+def test_expired_execution_no_yes_or_press():
+    d = _hd(sr=_make_regime(risk_level="LOW", direction="IMPROVING"),
+            es=_make_exec_snapshot(status="expired", mqs=80, ews=80, age=4000))
+    assert d["verdict"] != "YES"
+    assert d["action"] != "PRESS"
+    print("test_expired_execution_no_yes_or_press PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Run
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1052,5 +1177,21 @@ if __name__ == "__main__":
     test_high_weakening_not_improving()
     test_extreme_weakening_reduce()
 
-    total = 75
+    # Phase F — Execution contract completeness
+    test_execution_has_mqs_label()
+    test_execution_has_ews_label()
+    test_execution_has_condition_counts()
+    test_execution_has_execution_conditions()
+    test_execution_has_primary_blocker()
+    test_execution_has_decision_effect()
+    test_execution_has_data_status()
+    test_execution_has_refresh_error()
+    test_execution_has_completeness_pct()
+    test_available_strong_execution_reaches_matrix()
+    test_available_mixed_execution_reaches_matrix()
+    test_available_weak_execution_reaches_matrix()
+    test_unavailable_execution_produces_regime_only()
+    test_expired_execution_no_yes_or_press()
+
+    total = 89
     print(f"\nAll {total} tests PASSED")

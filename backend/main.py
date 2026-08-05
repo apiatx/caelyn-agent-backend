@@ -1207,6 +1207,26 @@ async def lifespan(app):
     # dashboard is ready before the first user request arrives.
     asyncio.create_task(_terminal_prewarm())
 
+    # ── Trading Dashboard cold-start hydration + scheduled refresh ──────────
+    async def _trading_dashboard_startup():
+        await asyncio.sleep(25)
+        try:
+            from services.trading_dashboard_service import hydrate_from_persisted_lkg, schedule_trading_dashboard_refresh
+            hydration = hydrate_from_persisted_lkg()
+            if hydration.get("hydrated"):
+                print(f"[TD_STARTUP] LKG hydrated mode={hydration['mode']} age={hydration['age_seconds']:.0f}s")
+            else:
+                print("[TD_STARTUP] no persisted LKG found — will build fresh on next schedule")
+            mp2 = _get_macro_provider()
+            if mp2:
+                fetch = _build_trading_fetch_fresh(mp2)
+                result = schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=fetch)
+                print(f"[TD_STARTUP] initial refresh scheduled: {result.get('status')}")
+        except Exception as e:
+            print(f"[TD_STARTUP] hydration/refresh error (non-fatal): {e}")
+
+    asyncio.create_task(_trading_dashboard_startup())
+
     # Watchlist RSS sweeper — continuous ~2-min full-universe RSS archive sweep.
     # Table creation (_rss_ensure_table) moved to _deferred_sync_startup() —
     # cold Neon was adding 5-8s here.  The sweeper loop starts at ≥ 120s delay
@@ -16095,6 +16115,16 @@ async def _macro_precompute_loop():
 
             elapsed = _time.time() - t0
             print(f"[MACRO_PRECOMPUTE] Refreshed dashboard + indicators + calendar + tabs in {elapsed:.1f}s")
+
+            # Schedule canonical Trading Dashboard refresh when capacity available
+            try:
+                from services.trading_dashboard_service import schedule_trading_dashboard_refresh
+                fetch = _build_trading_fetch_fresh(mp)
+                td_result = schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=fetch)
+                if td_result.get("status") not in ("not_needed", "already_running"):
+                    print(f"[MACRO_PRECOMPUTE] Trading Dashboard refresh: {td_result.get('status')}")
+            except Exception as td_err:
+                print(f"[MACRO_PRECOMPUTE] Trading Dashboard refresh error (non-fatal): {td_err}")
 
         except Exception as e:
             import traceback

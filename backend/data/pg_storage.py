@@ -2920,3 +2920,158 @@ def volmc_snapshot_load(watchlist_id: str) -> tuple:
         return (None, None)
     finally:
         _put_conn(conn)
+
+
+# ── Trading Dashboard LKG (Neon backing for in-memory canonical cache) ─────────
+
+_TRADING_DASHBOARD_LKG_KEY = "trading_dashboard_lkg"
+
+
+def _ensure_trading_dashboard_lkg_table(cur) -> None:
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS public.trading_dashboard_lkg (
+            key          TEXT PRIMARY KEY,
+            mode         TEXT NOT NULL DEFAULT 'swing',
+            as_of        TIMESTAMPTZ NULL,
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            expires_at   TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours'),
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            payload      JSONB NOT NULL DEFAULT '{}'::jsonb
+        )
+    """)
+
+
+def trading_dashboard_lkg_write(mode: str, payload: dict) -> bool:
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        from psycopg2.extras import Json
+        as_of_str = payload.get("as_of")
+        as_of_val = None
+        if as_of_str:
+            try:
+                from datetime import datetime as _dt, timezone as _tz
+                as_of_val = _dt.fromisoformat(as_of_str)
+            except Exception:
+                pass
+
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                INSERT INTO public.trading_dashboard_lkg
+                    (key, mode, as_of, created_at, expires_at, schema_version, payload)
+                VALUES (%s, %s, %s, NOW(), NOW() + INTERVAL '24 hours', %s, %s)
+                ON CONFLICT (key) DO UPDATE SET
+                    mode           = EXCLUDED.mode,
+                    as_of          = EXCLUDED.as_of,
+                    created_at     = NOW(),
+                    expires_at     = NOW() + INTERVAL '24 hours',
+                    schema_version = EXCLUDED.schema_version,
+                    payload        = EXCLUDED.payload
+                """,
+                (_TRADING_DASHBOARD_LKG_KEY, mode, as_of_val, 1, Json(payload)),
+            )
+            conn.commit()
+            return True
+        except Exception as inner_e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            _ensure_trading_dashboard_lkg_table(cur)
+            conn.commit()
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO public.trading_dashboard_lkg
+                        (key, mode, as_of, created_at, expires_at, schema_version, payload)
+                    VALUES (%s, %s, %s, NOW(), NOW() + INTERVAL '24 hours', %s, %s)
+                    """,
+                    (_TRADING_DASHBOARD_LKG_KEY, mode, as_of_val, 1, Json(payload)),
+                )
+                conn.commit()
+                return True
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                return False
+        cur.close()
+    except Exception as e:
+        print(f"[PG_STORAGE] trading_dashboard_lkg_write error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def trading_dashboard_lkg_read(max_age_seconds: int | None = 86400) -> dict | None:
+    conn = _get_conn()
+    if conn is None:
+        return None
+    try:
+        cur = conn.cursor()
+        try:
+            if max_age_seconds is not None:
+                cur.execute(
+                    """
+                    SELECT payload, mode, as_of, created_at, schema_version
+                    FROM public.trading_dashboard_lkg
+                    WHERE key = %s
+                      AND created_at >= NOW() - (%s * INTERVAL '1 second')
+                    """,
+                    (_TRADING_DASHBOARD_LKG_KEY, max_age_seconds),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT payload, mode, as_of, created_at, schema_version
+                    FROM public.trading_dashboard_lkg
+                    WHERE key = %s
+                    """,
+                    (_TRADING_DASHBOARD_LKG_KEY,),
+                )
+            row = cur.fetchone()
+        except Exception as inner_e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            _ensure_trading_dashboard_lkg_table(cur)
+            conn.commit()
+            return None
+        cur.close()
+        if row is None:
+            return None
+        payload = row[0]
+        if isinstance(payload, str):
+            import json as _json
+            payload = _json.loads(payload)
+        if not isinstance(payload, dict):
+            return None
+        created_at_str = row[3].isoformat() if hasattr(row[3], "isoformat") else str(row[3])
+        print(
+            f"[TRADING_DASHBOARD_LKG] read key={_TRADING_DASHBOARD_LKG_KEY} "
+            f"mode={row[1]} as_of={row[2]} created_at={created_at_str}"
+        )
+        return {
+            "payload": payload,
+            "mode": row[1],
+            "as_of": row[2],
+            "created_at": row[3],
+        }
+    except Exception as e:
+        print(f"[PG_STORAGE] trading_dashboard_lkg_read error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return None
+    finally:
+        _put_conn(conn)

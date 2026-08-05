@@ -58,6 +58,37 @@ def _defensive_copy(data: dict) -> dict:
 
 # ── Score helpers ─────────────────────────────────────────────────────────────
 
+_MQS_LABELS = {
+    (80, 101): "EXCELLENT",
+    (65, 80):   "HEALTHY",
+    (50, 65):   "FAIR",
+    (35, 50):   "WEAK",
+    (0, 35):    "POOR",
+}
+
+
+def _mqs_label(score: float) -> str:
+    for (lo, hi), label in _MQS_LABELS.items():
+        if lo <= score < hi:
+            return label
+    return "POOR"
+
+
+_EWS_LABELS = {
+    (75, 101): "STRONG",
+    (50, 75):  "MIXED",
+    (25, 50):  "WEAK",
+    (0, 25):   "ABSENT",
+}
+
+
+def _ews_label(score: float) -> str:
+    for (lo, hi), label in _EWS_LABELS.items():
+        if lo <= score < hi:
+            return label
+    return "ABSENT"
+
+
 def _vix_score(vix: float | None) -> float:
     if vix is None:
         return 50.0
@@ -611,12 +642,71 @@ def compute_trading_dashboard(
             _ft_val = "No"
             _ft_status = "Reversing"
 
+    _breakout_available = breadth_fg is not None
+    _leaders_available = _leaders_vs_spy is not None
+    _pullback_available = bool(_spy_bars)
+    _ft_available = len(_spy_bars10) >= 4
+
+    _breakout_state = "pass" if _breakout_ok else ("fail" if _breakout_available else "unavailable")
+    _leaders_state = "pass" if _leaders_ok else ("fail" if _leaders_available else "unavailable")
+    _pullback_state = "pass" if _pullback_ok else ("fail" if _pullback_available else "unavailable")
+    _ft_state = "pass" if _ft_ok else ("fail" if _ft_available else "unavailable")
+
     exec_conditions = [
-        {"label": "Breakouts working?", "value": _breakout_val, "status": _breakout_status, "ok": _breakout_ok},
-        {"label": "Leaders holding?", "value": _leaders_val, "status": _leaders_status, "ok": _leaders_ok},
-        {"label": "Pullbacks bought?", "value": _pullback_val, "status": _pullback_status, "ok": _pullback_ok},
-        {"label": "Follow-through?", "value": _ft_val, "status": _ft_status, "ok": _ft_ok},
+        {
+            "id": "breakouts",
+            "label": "Breakouts working",
+            "value": _breakout_val,
+            "status": _breakout_status,
+            "state": _breakout_state,
+            "available": _breakout_available,
+            "ok": _breakout_ok,
+            "evidence": f"Price breadth: {breadth_fg:.0f}/100" if _breakout_available else "No breadth data",
+            "source": "fear_greed_stock_price_breadth",
+        },
+        {
+            "id": "leaders",
+            "label": "Leaders holding",
+            "value": _leaders_val,
+            "status": _leaders_status,
+            "state": _leaders_state,
+            "available": _leaders_available,
+            "ok": _leaders_ok,
+            "evidence": f"Leaders vs SPY: {_leaders_vs_spy:+.1f}%" if _leaders_available else "No leader data",
+            "source": "sector_performance_vs_spy",
+        },
+        {
+            "id": "pullbacks",
+            "label": "Pullbacks bought",
+            "value": _pullback_val,
+            "status": _pullback_status,
+            "state": _pullback_state,
+            "available": _pullback_available,
+            "ok": _pullback_ok,
+            "evidence": f"{_recovered_days}/5 days recovered >50%" if _pullback_available else "No SPY bar data",
+            "source": "spy_extended_recent_bars",
+        },
+        {
+            "id": "follow_through",
+            "label": "Follow-through",
+            "value": _ft_val,
+            "status": _ft_status,
+            "state": _ft_state,
+            "available": _ft_available,
+            "ok": _ft_ok,
+            "evidence": f"Follow-through rate: {_ft_rate:.0%}, vol ratio: {_vol_ratio:.1f}" if _ft_available else "No SPY bar data",
+            "source": "spy_extended_recent_bars",
+        },
     ]
+
+    _cond_available = sum(1 for c in exec_conditions if c["available"])
+    _cond_expected = 4
+    if _cond_available == _cond_expected:
+        _ews_status = "complete"
+    elif _cond_available > 0:
+        _ews_status = "partial"
+    else:
+        _ews_status = "unavailable"
 
     ews = float(sum(25 for c in exec_conditions if c["ok"]))
 
@@ -647,14 +737,35 @@ def compute_trading_dashboard(
     if alert_events:
         terminal.append({"type": "yellow", "text": f"ALERT: {alert_events[0]}"})
 
+    _pillar_count = 5
+    _available_pillar_count = _pillar_count  # pillars always computed from available inputs
+    _critical_missing: list[str] = []
+    if vix is None:
+        _critical_missing.append("vix")
+    if fg_score_raw is None:
+        _critical_missing.append("fear_greed")
+    if spread_2s10s is None:
+        _critical_missing.append("yield_curve")
+
+    _data_status = "available"
+    if _critical_missing:
+        _data_status = "partial"
+    if not _critical_missing and vix is None and fg_score_raw is None and spread_2s10s is None:
+        _data_status = "unavailable"
+
     return {
         "decision": decision,
         "market_quality_score": mqs,
+        "market_quality_label": _mqs_label(mqs),
         "execution_window_score": ews,
+        "execution_window_label": _ews_label(ews),
         "mode": mode,
         "pillars": pillars,
         "summary": decision_text,
         "execution_conditions": exec_conditions,
+        "execution_conditions_available_count": _cond_available,
+        "execution_conditions_expected_count": _cond_expected,
+        "execution_conditions_status": _ews_status,
         "terminal_analysis": terminal,
         "alert": {
             "show": bool(alert_events),
@@ -663,6 +774,12 @@ def compute_trading_dashboard(
         "sector_performance": sector_list,
         "as_of": _dt.now(_tz.utc).isoformat(),
         "from_cache": False,
+        "data_completeness": {
+            "pillar_count": _pillar_count,
+            "available_pillar_count": _available_pillar_count,
+            "critical_missing_inputs": _critical_missing,
+            "data_status": _data_status,
+        },
     }
 
 
@@ -732,20 +849,90 @@ async def get_trading_dashboard(
     _cache[key] = {**result, "_ts": _time.time()}
     result_copy = _defensive_copy(result)
     result_copy["from_cache"] = False
+
+    _persist_lkg_later(mode, result)
+
     return result_copy
 
 
 # ── Cache management ─────────────────────────────────────────────────────────
+
+_LKG_PERSIST_SCHEDULED: dict[str, bool] = {}
+
+
+def _persist_lkg_later(mode: str, result: dict) -> None:
+    """Fire-and-forget Neon persistence of the LKG snapshot."""
+    key = f"lkg_{mode}"
+    if _LKG_PERSIST_SCHEDULED.get(key):
+        return
+    _LKG_PERSIST_SCHEDULED[key] = True
+    try:
+        import threading
+        def _write():
+            try:
+                from data.pg_storage import trading_dashboard_lkg_write
+                ok = trading_dashboard_lkg_write(mode, result)
+                if ok:
+                    _logger.debug("[TRADING_DASHBOARD] persisted LKG to Neon (mode=%s)", mode)
+            except Exception:
+                pass
+            finally:
+                _LKG_PERSIST_SCHEDULED[key] = False
+        threading.Thread(target=_write, daemon=True, name=f"td-lkg-{mode}").start()
+    except Exception:
+        _LKG_PERSIST_SCHEDULED[key] = False
+
+
+def hydrate_from_persisted_lkg() -> dict:
+    """Read persisted LKG from Neon and warm the in-memory cache.
+
+    Returns a status dict: {"hydrated": bool, "mode": str, "age_seconds": float|None}.
+    Zero provider calls.
+    """
+    try:
+        import time as _t
+        from data.pg_storage import trading_dashboard_lkg_read
+        lkg = trading_dashboard_lkg_read(max_age_seconds=None)
+        if lkg is None or not isinstance(lkg.get("payload"), dict):
+            return {"hydrated": False, "mode": None, "age_seconds": None}
+
+        payload = lkg["payload"]
+        mode = lkg.get("mode", "swing")
+        created_at = lkg.get("created_at")
+        age_seconds = None
+        if created_at is not None:
+            if hasattr(created_at, "timestamp"):
+                age_seconds = _t.time() - created_at.timestamp()
+            elif isinstance(created_at, str):
+                try:
+                    from datetime import datetime as _dt
+                    dt = _dt.fromisoformat(created_at.replace("Z", "+00:00"))
+                    age_seconds = _t.time() - dt.timestamp()
+                except Exception:
+                    pass
+
+        key = _cache_key(mode)
+        _cache[key] = {**payload, "_ts": _t.time() - (age_seconds or 0)}
+
+        _logger.info(
+            "[TRADING_DASHBOARD] hydrated LKG from Neon (mode=%s, age=%.0fs)",
+            mode, age_seconds or 0,
+        )
+        return {"hydrated": True, "mode": mode, "age_seconds": age_seconds}
+    except Exception as e:
+        _logger.warning("[TRADING_DASHBOARD] LKG hydration skipped: %s", e)
+        return {"hydrated": False, "mode": None, "age_seconds": None}
+
 
 def clear_dashboard_cache() -> list[str]:
     """Clear all trading dashboard cache entries. Returns list of cleared keys."""
     cleared = [k for k in list(_cache.keys()) if k.startswith("trading_dashboard_")]
     for k in cleared:
         del _cache[k]
-    # Clear failure state as well
     _refresh_outcome.clear()
     _refresh_failure_count.clear()
     _refresh_last_attempt.clear()
+    _refresh_error.clear()
     return cleared
 
 
@@ -785,6 +972,7 @@ def get_trading_dashboard_snapshot(
             "status": "unavailable",
             "refresh_state": _refresh_state(mode),
             "refresh_failure_count": _refresh_failure_count.get(mode, 0),
+            "refresh_error": _refresh_error.get(mode),
         }
 
     age = _time.time() - entry.get("_ts", _time.time())
@@ -805,19 +993,20 @@ def get_trading_dashboard_snapshot(
         "status": "available" if not expired else "expired",
         "refresh_state": _refresh_state(mode),
         "refresh_failure_count": _refresh_failure_count.get(mode, 0),
+        "refresh_error": _refresh_error.get(mode),
     }
 
 
 # ── Singleflight background refresh ───────────────────────────────────────────
 
-# In-flight registry per mode: True when a background task is active
 _inflight: dict[str, asyncio.Task | None] = {}
-# Last refresh outcome per mode
-_refresh_outcome: dict[str, str] = {}  # "succeeded" | "failed"
+_refresh_outcome: dict[str, str] = {}
 _refresh_failure_count: dict[str, int] = {}
 _refresh_last_attempt: dict[str, float] = {}
-_FAILURE_BACKOFF = 30  # seconds before retrying after a failed refresh
-_REFRESH_DEADLINE = 25  # seconds — bounded build deadline for execution refresh
+_refresh_error: dict[str, str] = {}
+_FAILURE_BACKOFF = 30
+_REFRESH_DEADLINE = 25
+_MAX_FAILURES_BEFORE_SUPPRESS = 5
 
 
 def _refresh_state(mode: str) -> str:
@@ -838,29 +1027,14 @@ def schedule_trading_dashboard_refresh(
     mode: str,
     fetch_fresh_data=None,
 ) -> dict:
-    """Schedule a nonblocking canonical refresh of the Trading Dashboard.
-
-    Parameters
-    ----------
-    mode : str
-        "swing" or "day".
-    fetch_fresh_data : async callable
-        Same callback used by get_trading_dashboard().
-
-    Returns
-    -------
-    dict
-        {"status": "not_needed" | "scheduled" | "already_running" | "backoff", "mode": str}
-    """
+    """Schedule a nonblocking canonical refresh of the Trading Dashboard."""
     mode = mode.lower() if mode.lower() in ("swing", "day") else "swing"
 
-    # Check if cache is already fresh
     key = _cache_key(mode)
     entry = _cache.get(key)
     if entry and (_time.time() - entry.get("_ts", 0)) < _DASHBOARD_TTL:
         return {"status": "not_needed", "mode": mode}
 
-    # Check if already in flight
     task = _inflight.get(mode)
     if task is not None and not task.done():
         return {"status": "already_running", "mode": mode}
@@ -868,15 +1042,16 @@ def schedule_trading_dashboard_refresh(
     if fetch_fresh_data is None:
         return {"status": "not_needed", "mode": mode}
 
-    # Backoff guard after a failed refresh
     if _refresh_outcome.get(mode) == "failed":
         last_attempt = _refresh_last_attempt.get(mode, 0)
-        if _time.time() - last_attempt < _FAILURE_BACKOFF:
+        failures = _refresh_failure_count.get(mode, 0)
+        if failures >= _MAX_FAILURES_BEFORE_SUPPRESS:
+            if _time.time() - last_attempt < _FAILURE_BACKOFF * 3:
+                return {"status": "backoff", "mode": mode, "consecutive_failures": failures}
+        elif _time.time() - last_attempt < _FAILURE_BACKOFF:
             return {"status": "backoff", "mode": mode}
-        # Reset failure counter so next attempt can proceed
         _refresh_outcome.pop(mode, None)
 
-    # Create background task
     async def _refresh():
         try:
             result = await asyncio.wait_for(
@@ -889,10 +1064,21 @@ def schedule_trading_dashboard_refresh(
             )
             _refresh_outcome[mode] = "succeeded"
             _refresh_failure_count.pop(mode, None)
+            _refresh_error.pop(mode, None)
             return result
+        except asyncio.TimeoutError:
+            _refresh_outcome[mode] = "failed"
+            _refresh_failure_count[mode] = _refresh_failure_count.get(mode, 0) + 1
+            _refresh_error[mode] = "Refresh timed out after 25s"
+            _logger.warning(
+                "[TRADING_DASHBOARD] background refresh timed out (mode=%s)",
+                mode,
+            )
+            raise
         except Exception as exc:
             _refresh_outcome[mode] = "failed"
             _refresh_failure_count[mode] = _refresh_failure_count.get(mode, 0) + 1
+            _refresh_error[mode] = str(exc)[:200]
             _logger.warning(
                 "[TRADING_DASHBOARD] background refresh failed (mode=%s): %s",
                 mode, exc,
@@ -903,7 +1089,7 @@ def schedule_trading_dashboard_refresh(
             _refresh_last_attempt[mode] = _time.time()
 
     _inflight[mode] = asyncio.ensure_future(_refresh())
-    _refresh_outcome.pop(mode, None)  # clear previous outcome while running
+    _refresh_outcome.pop(mode, None)
     return {"status": "scheduled", "mode": mode}
 
 

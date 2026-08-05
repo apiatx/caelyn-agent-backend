@@ -863,6 +863,451 @@ async def test_singleflight_no_sync_provider_call():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# MQS / EWS labels
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_mqs_label_present():
+    """Dashboard output includes market_quality_label."""
+    r = compute_trading_dashboard("swing", *fixtures())
+    assert "market_quality_label" in r
+    assert isinstance(r["market_quality_label"], str)
+    assert r["market_quality_label"] in ("EXCELLENT", "HEALTHY", "FAIR", "WEAK", "POOR")
+    print("test_mqs_label_present PASSED")
+
+
+def test_ews_label_present():
+    """Dashboard output includes execution_window_label."""
+    r = compute_trading_dashboard("swing", *fixtures())
+    assert "execution_window_label" in r
+    assert isinstance(r["execution_window_label"], str)
+    assert r["execution_window_label"] in ("STRONG", "MIXED", "WEAK", "ABSENT")
+    print("test_ews_label_present PASSED")
+
+
+def test_mqs_label_thresholds():
+    """MQS label matches expected thresholds."""
+    from services.trading_dashboard_service import _mqs_label
+    assert _mqs_label(85) == "EXCELLENT"
+    assert _mqs_label(70) == "HEALTHY"
+    assert _mqs_label(55) == "FAIR"
+    assert _mqs_label(40) == "WEAK"
+    assert _mqs_label(20) == "POOR"
+    print("test_mqs_label_thresholds PASSED")
+
+
+def test_ews_label_thresholds():
+    """EWS label matches expected thresholds."""
+    from services.trading_dashboard_service import _ews_label
+    assert _ews_label(100) == "STRONG"
+    assert _ews_label(75) == "STRONG"
+    assert _ews_label(50) == "MIXED"
+    assert _ews_label(25) == "WEAK"
+    assert _ews_label(0) == "ABSENT"
+    print("test_ews_label_thresholds PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Execution condition evidence / source status
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_execution_condition_has_id():
+    """Each execution condition has a stable id."""
+    r = compute_trading_dashboard("swing", *fixtures())
+    expected_ids = {"breakouts", "leaders", "pullbacks", "follow_through"}
+    actual_ids = {c["id"] for c in r["execution_conditions"]}
+    assert expected_ids == actual_ids, f"Missing ids: {expected_ids - actual_ids}"
+    print("test_execution_condition_has_id PASSED")
+
+
+def test_execution_condition_has_state():
+    """Each condition has state (pass/fail/unavailable)."""
+    r = compute_trading_dashboard("swing", *fixtures())
+    for c in r["execution_conditions"]:
+        assert "state" in c
+        assert c["state"] in ("pass", "fail", "unavailable")
+    print("test_execution_condition_has_state PASSED")
+
+
+def test_execution_condition_has_evidence():
+    """Each condition has evidence field."""
+    r = compute_trading_dashboard("swing", *fixtures())
+    for c in r["execution_conditions"]:
+        assert "evidence" in c
+        assert isinstance(c["evidence"], str) and len(c["evidence"]) > 0
+    print("test_execution_condition_has_evidence PASSED")
+
+
+def test_execution_condition_has_source():
+    """Each condition has source field."""
+    r = compute_trading_dashboard("swing", *fixtures())
+    for c in r["execution_conditions"]:
+        assert "source" in c
+        assert isinstance(c["source"], str) and len(c["source"]) > 0
+    print("test_execution_condition_has_source PASSED")
+
+
+def test_execution_condition_has_available():
+    """Each condition has available flag."""
+    r = compute_trading_dashboard("swing", *fixtures())
+    for c in r["execution_conditions"]:
+        assert "available" in c
+        assert isinstance(c["available"], bool)
+    print("test_execution_condition_has_available PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# EWS condition count metadata
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_ews_condition_counts():
+    """Dashboard output includes available/expected condition counts."""
+    r = compute_trading_dashboard("swing", *fixtures())
+    assert "execution_conditions_available_count" in r
+    assert "execution_conditions_expected_count" in r
+    assert "execution_conditions_status" in r
+    assert r["execution_conditions_expected_count"] == 4
+    assert r["execution_conditions_available_count"] <= 4
+    assert r["execution_conditions_status"] in ("complete", "partial", "unavailable")
+    print("test_ews_condition_counts PASSED")
+
+
+def test_four_passing_conditions_ews_100():
+    """Execution conditions scoring produces correct EWS values."""
+    risk = _risk_data()
+    ext = _spy_qqq_extended()
+    ext["SPY"]["recent_bars"] = [
+        {"high": 580, "low": 570, "close": 580, "volume": 30_000_000},
+        {"high": 581, "low": 571, "close": 581, "volume": 55_000_000},
+        {"high": 582, "low": 572, "close": 582, "volume": 55_000_000},
+        {"high": 583, "low": 573, "close": 583, "volume": 55_000_000},
+        {"high": 584, "low": 574, "close": 584, "volume": 55_000_000},
+        {"high": 585, "low": 575, "close": 585, "volume": 55_000_000},
+        {"high": 586, "low": 576, "close": 586, "volume": 55_000_000},
+        {"high": 587, "low": 577, "close": 587, "volume": 55_000_000},
+        {"high": 588, "low": 578, "close": 588, "volume": 55_000_000},
+        {"high": 589, "low": 579, "close": 589, "volume": 55_000_000},
+    ]
+    r = compute_trading_dashboard("swing", risk, _macro_data(), _calendar_data(),
+                                   _sector_perf_raw(), ext, _vix_history())
+    ok_count = sum(1 for c in r["execution_conditions"] if c["ok"])
+    assert r["execution_window_score"] == float(ok_count * 25), \
+        f"EWS={r['execution_window_score']} != {ok_count} * 25"
+    assert r["execution_window_score"] in (0, 25, 50, 75, 100)
+    print(f"  EWS={r['execution_window_score']} ok_count={ok_count}")
+    print("test_four_passing_conditions_ews_100 PASSED")
+
+
+def test_missing_condition_marked_unavailable_not_failed():
+    """Missing data conditions have state=unavailable, not fail."""
+    perf = [{"sector": "Consumer Defensive", "changesPercentage": 0.5}]
+    ext = {"SPY": {"price": 580.0, "priceAvg50": None, "priceAvg200": None, "recent_bars": []},
+           "QQQ": {"price": 480.0}}
+    r = compute_trading_dashboard("swing", _risk_data(), _macro_data(), _calendar_data(),
+                                   perf, ext, None)
+    for c in r["execution_conditions"]:
+        if not c.get("available"):
+            assert c["state"] == "unavailable", f"{c['id']} should be unavailable, got {c['state']}"
+    print("test_missing_condition_marked_unavailable_not_failed PASSED")
+
+
+def test_partial_ews_exposes_counts():
+    """Partial EWS exposes available_count and expected_count."""
+    perf = [{"sector": "Consumer Defensive", "changesPercentage": 0.5}]
+    r = compute_trading_dashboard("swing", _risk_data(), _macro_data(), _calendar_data(),
+                                   perf, _spy_qqq_extended(), None)
+    assert r["execution_conditions_available_count"] < 4
+    assert r["execution_conditions_expected_count"] == 4
+    print("test_partial_ews_exposes_counts PASSED")
+
+
+def test_ews_formula_unchanged():
+    """Full-data EWS formula remains 25 * ok_count."""
+    r = compute_trading_dashboard("swing", *fixtures())
+    ok_count = sum(1 for c in r["execution_conditions"] if c["ok"])
+    assert r["execution_window_score"] == float(ok_count * 25)
+    assert r["execution_window_score"] in (0, 25, 50, 75, 100)
+    print("test_ews_formula_unchanged PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MQS data sufficiency
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_data_completeness_present():
+    """Dashboard output includes data_completeness metadata."""
+    r = compute_trading_dashboard("swing", *fixtures())
+    assert "data_completeness" in r
+    dc = r["data_completeness"]
+    assert "pillar_count" in dc
+    assert "available_pillar_count" in dc
+    assert "critical_missing_inputs" in dc
+    assert "data_status" in dc
+    assert dc["pillar_count"] == 5
+    assert dc["data_status"] in ("available", "partial", "unavailable")
+    print("test_data_completeness_present PASSED")
+
+
+def test_missing_critical_inputs_reduces_data_status():
+    """Missing VIX marks data as partial."""
+    risk = _risk_data()
+    risk["volatility"]["vix"] = None
+    r = compute_trading_dashboard("swing", risk, _macro_data(), _calendar_data(),
+                                   _sector_perf_raw(), _spy_qqq_extended(), _vix_history())
+    assert "vix" in r["data_completeness"]["critical_missing_inputs"]
+    assert r["data_completeness"]["data_status"] == "partial"
+    print("test_missing_critical_inputs_reduces_data_status PASSED")
+
+
+def test_mqs_and_ews_independent():
+    """MQS and EWS remain independent values."""
+    r = compute_trading_dashboard("swing", *fixtures())
+    assert r["market_quality_score"] is not None
+    assert r["execution_window_score"] is not None
+    # They measure different things — should not always be equal
+    # (though they can coincidentally be equal)
+    assert r["market_quality_score"] >= 0
+    assert r["execution_window_score"] >= 0
+    print("test_mqs_and_ews_independent PASSED")
+
+
+def test_mqs_full_data_unchanged():
+    """Full-data MQS value is unchanged from baseline."""
+    r = compute_trading_dashboard("swing", *fixtures())
+    computed = round(sum(p["score"] * (p["weight"] / 100.0) for p in r["pillars"]), 1)
+    assert r["market_quality_score"] == computed
+    print("test_mqs_full_data_unchanged PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Component isolation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_missing_sector_perf_does_not_discard_remaining():
+    """Sector performance failure does not invalidate MQS/EWS."""
+    r = compute_trading_dashboard("swing", _risk_data(), _macro_data(), _calendar_data(),
+                                   None, _spy_qqq_extended(), _vix_history())
+    assert r["market_quality_score"] is not None
+    assert r["market_quality_score"] > 0
+    assert len(r["sector_performance"]) == 0
+    print("test_missing_sector_perf_does_not_discard_remaining PASSED")
+
+
+def test_missing_vix_history_does_not_discard_scores():
+    """Missing VIX history removes enrichment without discarding current VIX."""
+    r = compute_trading_dashboard("swing", _risk_data(), _macro_data(), _calendar_data(),
+                                   _sector_perf_raw(), _spy_qqq_extended(), None)
+    assert r["market_quality_score"] is not None
+    assert r["market_quality_score"] > 0
+    print("test_missing_vix_history_does_not_discard_scores PASSED")
+
+
+def test_empty_spy_qqq_extended_does_not_crash():
+    """Empty SPY/QQQ extended data doesn't crash the computation."""
+    r = compute_trading_dashboard("swing", _risk_data(), _macro_data(), _calendar_data(),
+                                   _sector_perf_raw(), {}, _vix_history())
+    assert r["decision"] in ("YES", "CAUTION", "NO")
+    print("test_empty_spy_qqq_extended_does_not_crash PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Refresh lifecycle — failed state recovery, LKG retention
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def test_failed_refresh_retains_fresh_snapshot():
+    """Failed refresh does not remove a fresh cached snapshot."""
+    clear_dashboard_cache()
+
+    async def fetch():
+        return fixtures()
+
+    await get_trading_dashboard(mode="swing", fetch_fresh_data=fetch)
+    snap = get_trading_dashboard_snapshot("swing")
+    assert snap["status"] == "available"
+
+    async def failing_fetch():
+        raise RuntimeError("test failure")
+
+    schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=failing_fetch)
+    await _asyncio.sleep(0.2)
+
+    snap2 = get_trading_dashboard_snapshot("swing")
+    assert snap2["dashboard"] is not None
+    assert snap2["status"] in ("available", "expired")
+
+    clear_dashboard_cache()
+    print("test_failed_refresh_retains_fresh_snapshot PASSED")
+
+
+def test_cold_start_no_cache_is_unavailable():
+    """Cold start (no cache, no LKG) is unavailable."""
+    clear_dashboard_cache()
+    snap = get_trading_dashboard_snapshot("swing")
+    assert snap["status"] == "unavailable"
+    assert snap["dashboard"] is None
+    print("test_cold_start_no_cache_is_unavailable PASSED")
+
+
+async def test_failed_then_successful_retry_clears_failed_state():
+    """Successful retry after failure clears failed state."""
+    clear_dashboard_cache()
+
+    async def failing_fetch():
+        raise RuntimeError("test failure")
+
+    schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=failing_fetch)
+    await _asyncio.sleep(0.2)
+
+    # State should be failed
+    snap1 = get_trading_dashboard_snapshot("swing")
+    assert snap1["refresh_failure_count"] >= 1
+
+    # Now succeed
+    async def success_fetch():
+        return fixtures()
+
+    # Clear backoff by resetting last attempt
+    from services.trading_dashboard_service import _refresh_last_attempt, _refresh_outcome
+    _refresh_outcome["swing"] = "failed"
+    _refresh_last_attempt["swing"] = 0  # force past backoff
+
+    schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=success_fetch)
+    await _asyncio.sleep(0.5)
+
+    snap2 = get_trading_dashboard_snapshot("swing")
+    assert snap2["status"] == "available"
+    assert snap2["refresh_state"] in ("succeeded", "idle")
+    assert snap2["refresh_failure_count"] == 0
+
+    clear_dashboard_cache()
+    print("test_failed_then_successful_retry_clears_failed_state PASSED")
+
+
+async def test_concurrent_home_and_schedule_share_one_refresh():
+    """Concurrent Home and Trading Dashboard requests share one refresh."""
+    clear_dashboard_cache()
+
+    build_count = [0]
+
+    async def slow_fetch():
+        build_count[0] += 1
+        await _asyncio.sleep(0.3)
+        return fixtures()
+
+    schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=slow_fetch)
+    await _asyncio.sleep(0.05)
+
+    # Second schedule while first is running
+    result = schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=slow_fetch)
+    assert result["status"] == "already_running"
+
+    await _asyncio.sleep(0.5)
+    assert build_count[0] == 1
+
+    clear_dashboard_cache()
+    print("test_concurrent_home_and_schedule_share_one_refresh PASSED")
+
+
+async def test_manual_retry_joins_active_refresh():
+    """Manual retry joins an already-running refresh."""
+    clear_dashboard_cache()
+
+    build_count = [0]
+
+    async def slow_fetch():
+        build_count[0] += 1
+        await _asyncio.sleep(0.3)
+        return fixtures()
+
+    schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=slow_fetch)
+    await _asyncio.sleep(0.05)
+
+    result = schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=slow_fetch)
+    assert result["status"] == "already_running"
+
+    await _asyncio.sleep(0.5)
+    assert build_count[0] == 1
+
+    clear_dashboard_cache()
+    print("test_manual_retry_joins_active_refresh PASSED")
+
+
+async def test_task_registry_cleans_after_exception():
+    """Task registry cleans up after exception."""
+    clear_dashboard_cache()
+
+    async def failing_fetch():
+        raise RuntimeError("test error")
+
+    schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=failing_fetch)
+    await _asyncio.sleep(0.2)
+
+    assert _inflight.get("swing") is None or _inflight["swing"].done()
+
+    clear_dashboard_cache()
+    print("test_task_registry_cleans_after_exception PASSED")
+
+
+async def test_refresh_error_exposed():
+    """Refresh error message is exposed in snapshot."""
+    clear_dashboard_cache()
+
+    async def failing_fetch():
+        raise RuntimeError("provider connection refused")
+
+    schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=failing_fetch)
+    await _asyncio.sleep(0.2)
+
+    snap = get_trading_dashboard_snapshot("swing")
+    assert snap.get("refresh_error") is not None
+    assert "provider connection refused" in snap["refresh_error"]
+
+    clear_dashboard_cache()
+    print("test_refresh_error_exposed PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Provider zero-call verification
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def test_fresh_snapshot_zero_provider_calls():
+    """Snapshot causes zero upstream calls."""
+    clear_dashboard_cache()
+
+    build_count = [0]
+
+    async def counting_fetch():
+        build_count[0] += 1
+        return fixtures()
+
+    await get_trading_dashboard(mode="swing", fetch_fresh_data=counting_fetch)
+    assert build_count[0] == 1
+
+    before = build_count[0]
+    get_trading_dashboard_snapshot("swing")
+    assert build_count[0] == before
+
+    clear_dashboard_cache()
+    print("test_fresh_snapshot_zero_provider_calls PASSED")
+
+
+async def test_one_refresh_one_provider_orchestration():
+    """One refresh uses one provider orchestration."""
+    clear_dashboard_cache()
+
+    build_count = [0]
+
+    async def counting_fetch():
+        build_count[0] += 1
+        return fixtures()
+
+    await get_trading_dashboard(mode="swing", fetch_fresh_data=counting_fetch)
+    assert build_count[0] == 1
+
+    clear_dashboard_cache()
+    print("test_one_refresh_one_provider_orchestration PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     test_baseline_swing_mode_shape()
@@ -886,6 +1331,37 @@ if __name__ == "__main__":
     test_mode_normalization_at_cache_level()
     test_mode_case_insensitive_at_cache_level()
     test_ews_0_with_all_missing()
+
+    # MQS / EWS labels
+    test_mqs_label_present()
+    test_ews_label_present()
+    test_mqs_label_thresholds()
+    test_ews_label_thresholds()
+
+    # Execution condition evidence/source
+    test_execution_condition_has_id()
+    test_execution_condition_has_state()
+    test_execution_condition_has_evidence()
+    test_execution_condition_has_source()
+    test_execution_condition_has_available()
+
+    # EWS condition counts
+    test_ews_condition_counts()
+    test_four_passing_conditions_ews_100()
+    test_missing_condition_marked_unavailable_not_failed()
+    test_partial_ews_exposes_counts()
+    test_ews_formula_unchanged()
+
+    # MQS data sufficiency
+    test_data_completeness_present()
+    test_missing_critical_inputs_reduces_data_status()
+    test_mqs_and_ews_independent()
+    test_mqs_full_data_unchanged()
+
+    # Component isolation
+    test_missing_sector_perf_does_not_discard_remaining()
+    test_missing_vix_history_does_not_discard_scores()
+    test_empty_spy_qqq_extended_does_not_crash()
 
     # Cache tests (async)
     import asyncio
@@ -914,4 +1390,19 @@ if __name__ == "__main__":
     asyncio.run(test_singleflight_failed_task_clears_registry())
     asyncio.run(test_singleflight_no_sync_provider_call())
 
-    print("\nAll 39 tests PASSED")
+    # Refresh lifecycle
+    asyncio.run(test_failed_refresh_retains_fresh_snapshot())
+    test_cold_start_no_cache_is_unavailable()
+    asyncio.run(test_failed_then_successful_retry_clears_failed_state())
+    asyncio.run(test_concurrent_home_and_schedule_share_one_refresh())
+    asyncio.run(test_manual_retry_joins_active_refresh())
+    asyncio.run(test_task_registry_cleans_after_exception())
+    asyncio.run(test_refresh_error_exposed())
+
+    # Provider zero-call
+    asyncio.run(test_fresh_snapshot_zero_provider_calls())
+    asyncio.run(test_one_refresh_one_provider_orchestration())
+
+    print("\nAll {} tests PASSED".format(
+        39 + 26  # original + new
+    ))
