@@ -1207,23 +1207,26 @@ async def lifespan(app):
     # dashboard is ready before the first user request arrives.
     asyncio.create_task(_terminal_prewarm())
 
-    # ── Trading Dashboard cold-start hydration + scheduled refresh ──────────
+    # ── Trading Dashboard background refresh scheduling ─────────────────────
+    # Lazy hydration from persisted LKG happens on first snapshot read
+    # (zero provider calls, zero delay).  The macro precompute loop
+    # (720s cadence) handles the provider-heavy fresh refresh.
+    # This task ensures a refresh is scheduled shortly after startup
+    # when the macro provider is ready, without blocking Home reads.
+
     async def _trading_dashboard_startup():
-        await asyncio.sleep(25)
+        await asyncio.sleep(60)
         try:
-            from services.trading_dashboard_service import hydrate_from_persisted_lkg, schedule_trading_dashboard_refresh
-            hydration = hydrate_from_persisted_lkg()
-            if hydration.get("hydrated"):
-                print(f"[TD_STARTUP] LKG hydrated mode={hydration['mode']} age={hydration['age_seconds']:.0f}s")
-            else:
-                print("[TD_STARTUP] no persisted LKG found — will build fresh on next schedule")
+            from services.trading_dashboard_service import schedule_trading_dashboard_refresh
             mp2 = _get_macro_provider()
             if mp2:
                 fetch = _build_trading_fetch_fresh(mp2)
                 result = schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=fetch)
                 print(f"[TD_STARTUP] initial refresh scheduled: {result.get('status')}")
+            else:
+                print("[TD_STARTUP] macro provider not ready — deferring to precompute loop")
         except Exception as e:
-            print(f"[TD_STARTUP] hydration/refresh error (non-fatal): {e}")
+            print(f"[TD_STARTUP] refresh scheduling error (non-fatal): {e}")
 
     asyncio.create_task(_trading_dashboard_startup())
 

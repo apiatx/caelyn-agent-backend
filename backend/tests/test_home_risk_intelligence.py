@@ -1574,13 +1574,15 @@ def test_weakening_rates_flat_text_not_contradict_direction():
 def test_us_only_event_filtering():
     """US high-importance events are preferred over non-US events."""
     from services.home_risk_intelligence import _filter_upcoming_events
-    # Mock snapshot with NZ first, US second
+    from datetime import datetime, timezone, timedelta
+    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+    # Mock snapshot with NZ first, US second — both in the future
     snap = {
         "current_week": [
-            {"date": "2026-08-04", "time": "12:00", "title": "Unemployment Rate (Q2)",
-             "importance": "high", "country": "NZ", "event_date": "2026-08-04"},
-            {"date": "2026-08-04", "time": "14:00", "title": "JOLTs Job Openings",
-             "importance": "high", "country": "US", "event_date": "2026-08-04"},
+            {"date": tomorrow, "time": "12:00", "title": "Unemployment Rate (Q2)",
+             "importance": "high", "country": "NZ", "event_date": tomorrow},
+            {"date": tomorrow, "time": "14:00", "title": "JOLTs Job Openings",
+             "importance": "high", "country": "US", "event_date": tomorrow},
         ]
     }
     upcoming = _filter_upcoming_events(snap, days_ahead=7)

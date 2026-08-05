@@ -858,10 +858,10 @@ async def get_trading_dashboard(
 # ── Cache management ─────────────────────────────────────────────────────────
 
 _LKG_PERSIST_SCHEDULED: dict[str, bool] = {}
+_TD_HIST_KEY = "trading_dashboard:swing"
 
 
 def _persist_lkg_later(mode: str, result: dict) -> None:
-    """Fire-and-forget Neon persistence of the LKG snapshot."""
     key = f"lkg_{mode}"
     if _LKG_PERSIST_SCHEDULED.get(key):
         return
@@ -870,8 +870,8 @@ def _persist_lkg_later(mode: str, result: dict) -> None:
         import threading
         def _write():
             try:
-                from data.pg_storage import trading_dashboard_lkg_write
-                ok = trading_dashboard_lkg_write(mode, result)
+                from data.pg_storage import strategy_hist_write
+                ok = strategy_hist_write(_TD_HIST_KEY, [result], "trading_dashboard_service", 1)
                 if ok:
                     _logger.debug("[TRADING_DASHBOARD] persisted LKG to Neon (mode=%s)", mode)
             except Exception:
@@ -883,42 +883,27 @@ def _persist_lkg_later(mode: str, result: dict) -> None:
         _LKG_PERSIST_SCHEDULED[key] = False
 
 
-def hydrate_from_persisted_lkg() -> dict:
-    """Read persisted LKG from Neon and warm the in-memory cache.
-
-    Returns a status dict: {"hydrated": bool, "mode": str, "age_seconds": float|None}.
-    Zero provider calls.
-    """
+def _try_hydrate_from_lkg() -> dict:
     try:
         import time as _t
-        from data.pg_storage import trading_dashboard_lkg_read
-        lkg = trading_dashboard_lkg_read(max_age_seconds=None)
-        if lkg is None or not isinstance(lkg.get("payload"), dict):
+        from data.pg_storage import strategy_hist_read
+        hist = strategy_hist_read(_TD_HIST_KEY, max_age_seconds=None)
+        if not hist or not isinstance(hist, list) or len(hist) == 0:
             return {"hydrated": False, "mode": None, "age_seconds": None}
 
-        payload = lkg["payload"]
-        mode = lkg.get("mode", "swing")
-        created_at = lkg.get("created_at")
-        age_seconds = None
-        if created_at is not None:
-            if hasattr(created_at, "timestamp"):
-                age_seconds = _t.time() - created_at.timestamp()
-            elif isinstance(created_at, str):
-                try:
-                    from datetime import datetime as _dt
-                    dt = _dt.fromisoformat(created_at.replace("Z", "+00:00"))
-                    age_seconds = _t.time() - dt.timestamp()
-                except Exception:
-                    pass
+        payload = hist[-1]
+        if not isinstance(payload, dict):
+            return {"hydrated": False, "mode": None, "age_seconds": None}
 
+        mode = payload.get("mode", "swing")
         key = _cache_key(mode)
-        _cache[key] = {**payload, "_ts": _t.time() - (age_seconds or 0)}
+        _cache[key] = {**payload, "_ts": _cache.get(key, {}).get("_ts", 0) if _cache.get(key) else _t.time() - 720}
 
         _logger.info(
-            "[TRADING_DASHBOARD] hydrated LKG from Neon (mode=%s, age=%.0fs)",
-            mode, age_seconds or 0,
+            "[TRADING_DASHBOARD] hydrated LKG from strategy_hist_snapshots (mode=%s)",
+            mode,
         )
-        return {"hydrated": True, "mode": mode, "age_seconds": age_seconds}
+        return {"hydrated": True, "mode": mode, "age_seconds": None}
     except Exception as e:
         _logger.warning("[TRADING_DASHBOARD] LKG hydration skipped: %s", e)
         return {"hydrated": False, "mode": None, "age_seconds": None}
@@ -926,6 +911,7 @@ def hydrate_from_persisted_lkg() -> dict:
 
 def clear_dashboard_cache() -> list[str]:
     """Clear all trading dashboard cache entries. Returns list of cleared keys."""
+    global _LKG_HYDRATION_DONE
     cleared = [k for k in list(_cache.keys()) if k.startswith("trading_dashboard_")]
     for k in cleared:
         del _cache[k]
@@ -933,10 +919,14 @@ def clear_dashboard_cache() -> list[str]:
     _refresh_failure_count.clear()
     _refresh_last_attempt.clear()
     _refresh_error.clear()
+    _LKG_HYDRATION_DONE = True
     return cleared
 
 
-# ── Snapshot API (read-only, zero I/O) ───────────────────────────────────────
+# ── Snapshot API (read-only, zero I/O — except lazy hydration) ────────────────
+
+_LKG_HYDRATION_DONE = False
+
 
 def get_trading_dashboard_snapshot(
     mode: str = "swing",
@@ -946,22 +936,24 @@ def get_trading_dashboard_snapshot(
 
     Zero provider calls. Zero cache refresh. Zero mutation.
 
-    Returns
-    -------
-    dict or None
-        Snapshot wrapper:
-        {
-          "dashboard": dict | None,
-          "mode": str,
-          "age_seconds": float | None,
-          "expired": bool | None,
-          "status": "available" | "expired" | "unavailable"
-        }
-        Returns None when allow_expired=False and the cached entry is expired.
+    On the very first call when cache is empty, lazily hydrates the
+    in-memory cache from the persisted strategy_hist_snapshots LKG.
+    This hydration happens at most once per process lifetime and costs
+    one Neon read — zero provider calls.
     """
+    global _LKG_HYDRATION_DONE
     mode = mode.lower() if mode.lower() in ("swing", "day") else "swing"
     key = _cache_key(mode)
     entry = _cache.get(key)
+
+    if entry is None and not _LKG_HYDRATION_DONE:
+        _LKG_HYDRATION_DONE = True
+        try:
+            hydrated = _try_hydrate_from_lkg()
+            if hydrated.get("hydrated"):
+                entry = _cache.get(key)
+        except Exception:
+            pass
 
     if entry is None:
         return {
