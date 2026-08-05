@@ -1,0 +1,319 @@
+You are working inside the CaelynAI BACKEND Replit project.
+
+Complete this investigation and repair in one pass. Do not merely audit the issue or give me theories. Reproduce the incorrect 7-day and 30-day Watchlist price-change values, prove the exact root cause, apply the smallest correct backend fix, add focused regression tests, and validate the corrected endpoint output against independently calculated market data.
+
+## Problem
+
+The Watchlist’s `7D %` and `30D %` price-history values are frequently stale, inaccurate, or otherwise inconsistent with the stock’s true 7-calendar-day and 30-calendar-day price change.
+
+The current system appears to receive refreshed Tradier `1d` bars approximately every 10 minutes. Something may be wrong with one or more of the following:
+
+* assigning a market date to the current daily bar
+* replacing versus appending the current session’s developing daily bar
+* duplicate bars for the same trading session
+* UTC versus US Eastern date handling
+* stale cache or persistence reads
+* sorting the bars
+* selecting the 7-day and 30-day comparison bars
+* mixing current quotes with historical closes
+* adjusted versus unadjusted close prices
+* failing to roll forward when a new trading session begins
+
+These are hypotheses only. Do not assume any of them is the cause. Prove the cause from the actual workspace, data, API responses, persistence, caches, and endpoint output.
+
+## Operating rules
+
+1. Treat `/home/runner/workspace` and its actual Replit files and runtime data as the primary source of truth.
+2. Read the backend’s existing `AGENTS.md` and relevant project instructions before editing.
+3. Work only in the existing backend workspace and existing architecture.
+4. Do not create a branch, clone, worktree, replacement repository, parallel service, or alternate implementation.
+5. Do not push to GitHub.
+6. Preserve all pre-existing user or agent changes.
+7. Do not refactor, rename, reorganize, or clean up unrelated code.
+8. Default scope is:
+
+   * one existing price-history path
+   * no architecture change
+   * no more than two production files unless direct repository evidence proves an additional focused file is unavoidable
+9. Do not add:
+
+   * a new endpoint
+   * a new table or database column
+   * a new cache
+   * a new scheduler or worker
+   * a new provider integration
+   * a new request-time provider call
+   * a new source of truth
+   * a broad backfill
+   * a new dependency
+   * a duplicate price-history pipeline
+10. Do not touch the frontend. Identify the frontend-consumed backend response contract only so it can be preserved.
+11. Do not start or restart the full application merely for inspection if startup jobs can mutate databases, caches, or scheduled state. Prefer focused tests, isolated functions, existing logs, read-only endpoint requests, provider calls already supported by the project, and narrowly targeted runtime validation.
+12. Do not state a suspected cause as the root cause. Find the first exact divergence between correct source data and incorrect Watchlist output.
+
+## Required product semantics
+
+First inspect existing tests, labels, comments, serializers, endpoint contracts, and prior implementation intent.
+
+Unless repository evidence explicitly proves that `7D` and `30D` are intended to mean trading-session counts, treat the labels literally as calendar-day returns:
+
+* `7D %` compares the current accepted price with the official close from the latest valid regular trading session on or before `as_of_market_date - 7 calendar days`.
+* `30D %` compares the current accepted price with the official close from the latest valid regular trading session on or before `as_of_market_date - 30 calendar days`.
+
+The formula is:
+
+`((current_price / comparison_close) - 1) * 100`
+
+If existing authoritative repository tests or contracts prove that these fields intentionally mean seven and thirty completed trading sessions instead, preserve that contract and document the evidence. Under trading-session semantics, the calculation must use seven or thirty unique completed market sessions rather than a raw list index polluted by duplicate or partial bars.
+
+Do not silently choose whichever interpretation makes existing tests pass. Establish and report the intended contract.
+
+## Price and bar invariants
+
+The corrected implementation must satisfy all of these invariants using the existing data model and storage path:
+
+1. US equity session identity must be based on the applicable exchange date in `America/New_York`, not an unqualified UTC date.
+2. A symbol may have at most one canonical daily bar for a given market-session date after normalization.
+3. Repeated 10-minute refreshes during the same market session must update or replace that same session’s developing `1d` bar. They must not create multiple logical daily bars simply because timestamps differ.
+4. When the next valid trading session begins, the new session must receive a new market date and must not overwrite the prior session.
+5. Normalize, deduplicate, and sort daily bars chronologically before selecting comparison prices.
+6. Reject or safely ignore malformed, impossible, future-dated, and unusable bars according to the project’s existing conventions.
+7. Preserve valid numeric zero handling while never dividing by zero.
+8. Insufficient history must produce the existing missing/null/unavailable contract. It must not silently become `0%`.
+9. Use the same price basis for the current value and the historical comparison value.
+10. Never mix adjusted and unadjusted prices across the numerator and denominator.
+11. Explicitly inspect behavior across stock splits and other corporate actions. Determine whether the existing product intends total-return/dividend-adjusted, split-adjusted, or raw price return, and use one consistent basis.
+12. Do not round intermediate prices or returns. Round only at the existing final serialization/display boundary.
+13. Do not blindly use `bars[-7]`, `bars[-30]`, an array length offset, or a timestamp difference without proving that the normalized list contains exactly one valid bar per market session and that the chosen logic matches the product contract.
+14. Preserve existing market-hours, holiday, early-close, provider-rate-limit, and cache behavior unless that exact behavior is proven to cause the bug.
+
+## Trace the complete existing path
+
+Before editing, trace and document the current path end to end:
+
+1. The scheduler, refresh loop, or job that runs the `1d` refresh approximately every 10 minutes.
+2. Its market-hours, holiday, and early-close gates.
+3. The exact Tradier endpoint, request parameters, date range, interval, and response shape.
+4. At least one raw Tradier response for a currently affected Watchlist ticker.
+5. Provider-response normalization, including timestamps, dates, timezone conversion, adjusted fields, and close selection.
+6. The existing persistence writer and its update/upsert/merge key.
+7. Any Neon/database, file-store, memory-cache, or last-known-good layer involved.
+8. Cache keys, freshness checks, invalidation behavior, and reader priority.
+9. The function that calculates `change_7d` and `change_30d` or their actual equivalent field names.
+10. The Watchlist row serializer and exact API endpoint consumed by the frontend.
+11. Any merge step that can overwrite corrected values with stale values later in the request path.
+
+Compare:
+
+* one demonstrably wrong Watchlist ticker
+* one normal, liquid ticker whose result is already correct or close to correct
+
+Identify the first point where the two paths diverge.
+
+Do not conclude that Tradier is wrong until you inspect the actual response. Do not conclude that persistence is wrong from schemas alone. Do not conclude that the calculation is wrong without examining the normalized input bars it receives.
+
+## Required diagnostic evidence
+
+For every inspected sample, capture:
+
+* symbol
+* current time in Eastern Time
+* effective as-of market date
+* raw latest Tradier bar timestamp/date
+* normalized latest session date
+* newest stored session date
+* count of raw bars
+* count of normalized unique session dates
+* any duplicated dates
+* whether the current session appears more than once
+* current price actually used by the Watchlist calculation
+* current price source
+* 7-day target calendar date
+* selected 7-day comparison session date
+* selected 7-day comparison close
+* calculated 7-day percentage
+* current endpoint 7-day value before the fix
+* 30-day target calendar date
+* selected 30-day comparison session date
+* selected 30-day comparison close
+* calculated 30-day percentage
+* current endpoint 30-day value before the fix
+* cache/persistence source that supplied the calculation inputs
+
+Inspect read-only stored data for:
+
+* stale maximum dates
+* duplicate session dates
+* timestamps crossing UTC midnight
+* bars stored out of chronological order
+* current-day bars repeatedly appended
+* missing trading sessions
+* partial current-session bars incorrectly treated as prior completed sessions
+* inconsistent adjusted-price fields
+* old cached calculations surviving newer bar writes
+
+## Independent accuracy benchmark
+
+Tradier is the current production source unless the existing repository proves otherwise.
+
+For validation only, use an independent historical-data source already available to this project, preferably the existing paid FMP historical stock-price endpoint. This is a read-only benchmark.
+
+Do not:
+
+* add FMP to the production calculation
+* add an FMP fallback
+* add another scheduled FMP job
+* create another cache
+* change provider priority
+* add provider calls to the Watchlist request path
+* average discrepancies between providers
+
+When Tradier and FMP differ, reconcile the reason:
+
+* adjusted versus unadjusted prices
+* live developing daily close versus official completed close
+* regular-session versus extended-hours value
+* dividend adjustment
+* split adjustment
+* timezone/session-date mismatch
+* provider timestamp convention
+
+Compare equivalent price bases only.
+
+## Required validation symbols
+
+Validate at least three actual Watchlist symbols:
+
+1. One symbol currently showing a clearly incorrect 7D or 30D value.
+2. One highly liquid normal US stock with clean daily history.
+3. One boundary case involving at least one of:
+
+   * a recent split or corporate action
+   * a weekend-crossing target date
+   * an exchange holiday
+   * an early-close session
+   * a ticker with limited history
+
+For each symbol, provide a final table containing:
+
+* as-of time in ET
+* current price and source
+* 7D baseline date
+* 7D baseline close
+* corrected 7D %
+* independent benchmark 7D %
+* absolute difference
+* 30D baseline date
+* 30D baseline close
+* corrected 30D %
+* independent benchmark 30D %
+* absolute difference
+
+The corrected result must match the independently calculated equivalent-basis result within `0.01 percentage points`, except where a documented provider convention prevents exact equivalence. Any larger difference must be explained and resolved before considering the task complete.
+
+## Required regression tests
+
+Add or update focused tests around the existing path. Cover all applicable cases:
+
+1. Two refreshes for the same symbol during the same Eastern trading date produce one logical daily bar, with the later refresh replacing/updating the earlier developing bar.
+2. Two provider timestamps on opposite UTC dates but the same US Eastern market session do not create a phantom additional daily session.
+3. A refresh on the next valid market session creates a new daily bar.
+4. Bars returned newest-first and oldest-first calculate identically.
+5. Duplicate same-date bars do not alter the lookback result.
+6. Weekend-crossing 7-calendar-day and 30-calendar-day targets select the correct previous valid session.
+7. Exchange-holiday targets select the correct previous valid session using the project’s existing market-calendar behavior.
+8. Early-close sessions remain valid trading sessions.
+9. Exactly sufficient history calculates correctly.
+10. One observation short returns the existing unavailable/null result.
+11. Missing, malformed, null, and zero comparison closes are handled safely.
+12. Adjusted and unadjusted values cannot be accidentally mixed.
+13. A split-crossing example uses the intended consistent basis.
+14. The originally reported broken ticker now matches the manual calculation.
+15. At least one previously correct ticker remains correct.
+16. The Watchlist endpoint preserves the current response field names, types, row count, payload shape, and frontend contract.
+17. Corrected persisted data is not overwritten by an older cache layer.
+18. No new provider call occurs from the Watchlist request path.
+19. No unrelated database writes or background-job changes occur.
+
+Use deterministic fixtures for regression tests. Do not make the permanent automated test suite depend on live Tradier or FMP availability.
+
+## Fix requirements
+
+After proving the root cause, modify only the first incorrect layer or smallest necessary combination of layers.
+
+Examples of acceptable narrow fixes include:
+
+* correcting session-date normalization in the existing normalizer
+* changing the existing same-date merge from append to replacement
+* correcting the existing upsert key
+* deduplicating normalized daily bars before calculation
+* correcting comparison-date selection
+* ensuring the calculation reads the newest accepted store/cache version
+* preventing stale values from overwriting newly calculated values
+
+Do not paper over bad stored bars by adding arbitrary index offsets.
+
+Do not hardcode today’s date, ticker-specific exceptions, fixed holiday lists, or magic offsets.
+
+Do not perform a broad production database repair, deletion, reset, historical rewrite, or cache invalidation. If old duplicate rows or stale records require a one-time cleanup beyond the ordinary existing write path:
+
+1. make the ongoing code path safe first
+2. identify the exact affected store/table and predicate
+3. report the number of affected symbols/rows
+4. provide the proposed cleanup separately
+5. do not execute the broad cleanup without approval
+
+`public.watchlist.tickers` remains authoritative for Watchlist membership. Do not use CSV files or cached symbol lists as replacement membership sources.
+
+## Execution sequence
+
+Complete this sequence without stopping after the audit:
+
+1. Inspect workspace and existing instructions.
+2. Record current Git/working-tree state without destroying or hiding existing changes.
+3. Locate the exact Watchlist 7D/30D fields and endpoint.
+4. Reproduce at least one incorrect ticker.
+5. Trace the full provider-to-endpoint path.
+6. Identify and prove the first exact divergence.
+7. Establish the intended calendar-day versus trading-session contract from repository evidence.
+8. Apply the smallest architecture-preserving fix.
+9. Add focused deterministic tests.
+10. Run the focused tests.
+11. Run the relevant existing Watchlist/market-data regression suite.
+12. Run `git diff --check`.
+13. Re-run the actual endpoint or the safest equivalent isolated request.
+14. Validate the three required symbols against independently calculated equivalent-basis data.
+15. Inspect the final diff and confirm that only task-related files changed.
+16. Do not push.
+
+Do not claim completion merely because tests pass. The actual corrected sample values must also match independent calculations.
+
+If direct evidence proves that no code bug exists and the problem is entirely provider data, environment configuration, or stale runtime state, do not force a fake code change. Prove that conclusion with the same sample table, identify the exact remediation, and show why the existing code is correct.
+
+## Final response
+
+Return a complete report containing:
+
+1. Completion status.
+2. Proven root cause—not a hypothesis.
+3. The first exact incorrect hop in the pipeline.
+4. The intended definition of `7D` and `30D`.
+5. The old behavior.
+6. The corrected behavior.
+7. Exact production files changed.
+8. Exact test files changed.
+9. Exact formulas and market-date rules now enforced.
+10. The three-symbol before/after/benchmark table.
+11. Validation commands and complete results.
+12. Watchlist endpoint field names and contract confirmation.
+13. Database effects.
+14. Cache effects.
+15. Tradier/provider effects.
+16. Scheduler and rate-limit effects.
+17. Confirmation that no frontend files were changed.
+18. Confirmation that no new endpoint, provider pipeline, table, cache, worker, dependency, or source of truth was created.
+19. Any remaining risks or separately discovered unrelated issues.
+20. Final `git status -sb`.
+21. The complete task diff.
+
+Do not give me generic recommendations. Finish the diagnosis, repair, tests, and factual validation.
