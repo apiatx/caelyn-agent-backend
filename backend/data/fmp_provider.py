@@ -3,6 +3,14 @@ import httpx
 from data.cache import cache, FMP_TTL
 
 
+class FMPSearchProviderError(RuntimeError):
+    """
+    Raised by FMPProvider.search_securities() when every search endpoint
+    fails (timeout, non-2xx, or unreadable JSON).  A genuine zero-result
+    search (at least one endpoint returned a valid response but matched
+    nothing) does NOT raise this — it returns an empty list.
+    """
+
 
 class FMPProvider:
     """
@@ -998,7 +1006,10 @@ class FMPProvider:
         if cached is not None:
             return cached
 
+        import time as _time
         params = {"apikey": self.api_key, "query": q, "limit": limit}
+        _t0 = _time.monotonic()
+        sym_resp = name_resp = None
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 sym_resp, name_resp = await _aio.gather(
@@ -1007,30 +1018,53 @@ class FMPProvider:
                     return_exceptions=True,
                 )
         except Exception as exc:
-            print(f"[FMP] search_securities gather failed: {exc}")
-            return []
+            _elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+            print(f"[FMP][search] client-level failure elapsed_ms={_elapsed_ms}: "
+                  f"{type(exc).__name__}: {exc}")
+            raise FMPSearchProviderError(f"search client failed: {exc}") from exc
 
+        # ── Parse each endpoint response independently ────────────────────────
         raw_items: list = []
-        for resp in (sym_resp, name_resp):
+        n_ok = 0  # number of endpoints that returned a usable response
+        for resp, label in ((sym_resp, "search-symbol"), (name_resp, "search-name")):
             if isinstance(resp, Exception):
-                _label = "search-symbol" if resp is sym_resp else "search-name"
-                print(f"[FMP] security_search {_label} exception: {type(resp).__name__}: {resp}")
+                _kind = ("timeout" if isinstance(resp, httpx.TimeoutException)
+                         else type(resp).__name__)
+                print(f"[FMP][search] {label} FAIL kind={_kind}: {resp}")
                 continue
             sc = getattr(resp, "status_code", None)
             if sc not in (200, 201):
-                _label = "search-symbol" if resp is sym_resp else "search-name"
                 _body = (resp.text or "")[:120] if hasattr(resp, "text") else ""
-                print(f"[FMP] security_search {_label} status={sc} body={_body!r}")
+                print(f"[FMP][search] {label} FAIL status={sc} body={_body!r}")
                 continue
             try:
                 data = resp.json()
-                if isinstance(data, list):
-                    raw_items.extend(data)
-            except Exception:
-                pass
+            except Exception as _je:
+                print(f"[FMP][search] {label} FAIL json_parse: {_je}")
+                continue
+            if not isinstance(data, list):
+                print(f"[FMP][search] {label} FAIL unexpected_shape={type(data).__name__}")
+                continue
+            raw_items.extend(data)
+            n_ok += 1
+            print(f"[FMP][search] {label} OK rows={len(data)}")
+
+        _elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+
+        # ── Distinguish total failure from genuine empty result ────────────────
+        if n_ok == 0:
+            print(f"[FMP][search] TOTAL_FAILURE query={q!r} elapsed_ms={_elapsed_ms} "
+                  f"— both endpoints failed; raising FMPSearchProviderError")
+            raise FMPSearchProviderError("all search endpoints failed")
 
         if not raw_items:
+            print(f"[FMP][search] EMPTY query={q!r} n_ok={n_ok} elapsed_ms={_elapsed_ms} "
+                  f"— valid zero result")
+            cache.set(cache_key, [], 300)
             return []
+
+        print(f"[FMP][search] query={q!r} raw={len(raw_items)} n_ok={n_ok} "
+              f"elapsed_ms={_elapsed_ms}")
 
         from services.canonical_security_adapter import (
             build_canonical_registry,

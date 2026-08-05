@@ -5559,21 +5559,23 @@ async def security_search_endpoint(request: Request, q: str = "", limit: int = 2
       exchange_short_name, country, currency, security_type,
       is_actively_trading, display_symbol
 
-    Always returns HTTP 200 — empty results array on no match or provider error.
+    HTTP 200  — valid response (results may be empty for a genuine zero-match query)
+    HTTP 503  — both FMP search endpoints failed (provider_error); client should retry
     """
     q = q.strip()
     if len(q) < 1:
         return {"query": q, "results": [], "count": 0, "error": "query_too_short"}
 
-    print(f"[WATCHLIST-SEARCH] query={q!r} limit={min(limit, 50)}")
+    _effective_limit = min(limit, 50)
+    print(f"[WATCHLIST-SEARCH] query={q!r} limit={_effective_limit}")
     try:
         from config import FMP_API_KEY as _fmp_key
-        from data.fmp_provider import FMPProvider
+        from data.fmp_provider import FMPProvider, FMPSearchProviderError
         if not _fmp_key:
             print("[WATCHLIST-SEARCH] FMP_API_KEY not configured — returning empty")
             return {"query": q, "results": [], "count": 0, "error": "provider_not_configured"}
         provider = FMPProvider(_fmp_key)
-        results = await provider.search_securities(q, limit=min(limit, 50))
+        results = await provider.search_securities(q, limit=_effective_limit)
         print(f"[WATCHLIST-SEARCH] query={q!r} → {len(results)} results "
               f"(top: {[r['canonical_ticker'] for r in results[:5]]})")
         return {
@@ -5582,6 +5584,14 @@ async def security_search_endpoint(request: Request, q: str = "", limit: int = 2
             "count":   len(results),
         }
     except Exception as exc:
+        from data.fmp_provider import FMPSearchProviderError as _FMPSearchProviderError
+        if isinstance(exc, _FMPSearchProviderError):
+            print(f"[WATCHLIST-SEARCH] PROVIDER_FAILURE query={q!r}: {exc}")
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=503,
+                content={"query": q, "results": [], "count": 0, "error": "provider_error"},
+            )
         print(f"[WATCHLIST-SEARCH] ERROR query={q!r} exc={type(exc).__name__}: {exc}")
         return {"query": q, "results": [], "count": 0, "error": "provider_error"}
 
