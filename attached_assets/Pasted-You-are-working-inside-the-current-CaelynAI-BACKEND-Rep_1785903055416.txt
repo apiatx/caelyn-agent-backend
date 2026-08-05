@@ -1,0 +1,408 @@
+You are working inside the current CaelynAI BACKEND Replit workspace at `/home/runner/workspace`.
+
+This is a correction of commit `c1ec71031d4aabecf1f0f2cee59dd9ba298433b2`.
+
+The previous task was incorrectly declared complete. The resulting `change_7d` and `change_30d` values are still materially wrong because the production calculation uses the newest completed canonical-history close as the numerator instead of the current price displayed in the Watchlist.
+
+Complete the investigation, correction, real regression testing, runtime catch-up, and endpoint validation in one pass.
+
+Do not stop after another audit. Do not claim completion based only on unit tests.
+
+## Critical Git and workspace preservation rules
+
+1. Treat the current Replit workspace as the primary source of truth.
+2. Read `AGENTS.md` before editing.
+3. Work on the existing `main` branch.
+4. Do not reset, rebase, force-push, checkout an older commit, create a branch, create a worktree, or clone another repository.
+5. Preserve all existing DeepSeek/OpenCode work, including commit ancestry through at least:
+
+   * `4035e1543334718fb8ee197c4b450a1624e5b855`
+   * `722e26026dff156d774fc0279d1022b9aac0fbe0`
+   * `e6b78e75920caf2a63aef9186bba3167883810d1`
+6. Preserve the existing Replit history commit `c1ec71031d4aabecf1f0f2cee59dd9ba298433b2` as history. Correct it with a new commit; do not rewrite it.
+7. Before editing, prove the required commits are ancestors of HEAD using `git merge-base --is-ancestor`.
+8. Record the current working-tree state. Do not discard pre-existing source changes.
+9. Do not stage or commit runtime-generated cache files, compressed canonical-history files, logs, report state, OpenCode state, or pasted prompt assets.
+10. Stage exact task-related source and test files explicitly. Never use `git add -A`, `git add .`, Replit’s commit-everything behavior, or an equivalent broad staging command.
+11. Do not push. Finish with a clean focused commit and provide the exact push command for the user.
+
+## Confirmed failure in the previous correction
+
+The present implementation in `canonical_history_service.py` does the following:
+
+* `_completed_daily_bars()` excludes every bar dated on the current New York calendar date.
+* `_compute_price_metrics_from_completed()` sets `latest_close = completed[-1][1]`.
+* It calculates `change_7d` and `change_30d` using that historical `latest_close`.
+* The percentages are persisted into canonical-history metadata and subsequently consumed by the Watchlist path.
+
+That means the calculation is effectively:
+
+`stale_or_previous_completed_canonical_close / older_canonical_close`
+
+It is not necessarily:
+
+`current_watchlist_price / correct_historical_comparison_close`
+
+The previous report itself proved this failure:
+
+* AAPL was calculated only through 2026-07-14.
+* NVDA was calculated only through 2026-07-14.
+* MSFT was calculated only through 2026-07-29.
+* The user’s actual current-price-based 30-day figures are materially different.
+
+The previous validation table did not contain the required independent benchmark values or absolute differences. It therefore did not satisfy the prior task.
+
+## Required product contract
+
+The Watchlist fields must mean:
+
+### `change_7d`
+
+`((current displayed Watchlist price / comparison close) - 1) * 100`
+
+The comparison close is the close from the most recent valid regular US trading session on or before:
+
+`current Watchlist price's effective New York market date - 7 calendar days`
+
+### `change_30d`
+
+`((current displayed Watchlist price / comparison close) - 1) * 100`
+
+The comparison close is the close from the most recent valid regular US trading session on or before:
+
+`current Watchlist price's effective New York market date - 30 calendar days`
+
+The numerator must be the same accepted current price that the final Watchlist row displays in its `price` field.
+
+Therefore, for every final Watchlist row:
+
+`change_30d == ((row.price / selected_30d_comparison_close) - 1) * 100`
+
+subject only to the existing final rounding convention.
+
+The same must be true for `change_7d`.
+
+Do not use one price in the percentage and display a different price in the row.
+
+## Current-price rules
+
+Trace the existing Watchlist row construction and establish the authoritative current price already used by the final row.
+
+Use that existing price. Do not create another quote path.
+
+Rules:
+
+1. During the regular session, use the same current regular-session price displayed in the Watchlist.
+2. After the regular session, use the same accepted price displayed in the Watchlist according to the existing product contract.
+3. Do not silently use extended-hours price if the Watchlist’s displayed `price` is regular-session price.
+4. Do not make a new provider call for each row.
+5. Do not call Tradier, FMP, Yahoo, or any other provider from the final Watchlist row calculation.
+6. Reuse the quote data already fetched by the existing Watchlist refresh pipeline.
+7. Preserve the current Watchlist response field names and types.
+
+## Historical-baseline rules
+
+Canonical history remains the historical source unless repository evidence proves a different existing canonical path.
+
+Use canonical history only to select the historical comparison close.
+
+1. Normalize bars by valid New York market-session date.
+2. Deduplicate by market-session date.
+3. Sort chronologically.
+4. Select the latest valid session date less than or equal to the calendar-day target.
+5. Do not use a fixed 7-session or 30-session list index.
+6. Do not use a stale last canonical bar as the current-price numerator.
+7. Do not allow a stale persisted `change_7d` or `change_30d` value to overwrite the dynamically calculated final row value.
+8. Current-day partial daily bars must not be used as the historical denominator.
+9. A completed prior session must be available through canonical history before its close is used as a historical denominator.
+10. If the required historical baseline is unavailable or canonical history is materially stale, return the existing missing/unavailable contract rather than publishing a confidently wrong percentage.
+
+## New York market-date correctness
+
+Audit and correct all directly involved uses of:
+
+* `date.today()`
+* server-local date
+* UTC date
+* provider end dates
+* append freshness dates
+* comparison target dates
+
+The effective market date must be derived consistently in `America/New_York`.
+
+At approximately 03:58 UTC on 2026-08-05, it was still 2026-08-04 in New York. The previous task nevertheless described data as of August 5.
+
+Do not permit UTC midnight to roll the US market date forward early.
+
+Use one existing or narrowly added helper for the New York market date rather than scattered date logic.
+
+## Trace the full production data path
+
+Before editing, document the exact path:
+
+1. Watchlist quote refresh and its approximate cadence.
+2. The function that supplies the final row’s `price`.
+3. Quote source and merge precedence.
+4. Canonical-history read path.
+5. Canonical-history metadata read path.
+6. Existing persisted `change_7d` and `change_30d` fields.
+7. Final Watchlist row construction.
+8. Any merge that can overwrite dynamic values with stale metadata.
+9. Final endpoint consumed by the frontend.
+10. Frontend field names, without modifying frontend code.
+
+Identify exactly where the final current price becomes available and calculate the return only after that point, or pass that existing price into the existing canonical metric function in an architecture-preserving way.
+
+Do not create a second Watchlist row-building pipeline.
+
+## Architectural requirement
+
+Use the smallest coherent correction.
+
+A likely valid approach is one of the following, but choose based on the actual repository:
+
+### Preferred pattern
+
+* Canonical history supplies the selected 7D and 30D comparison dates/closes.
+* The existing Watchlist row assembly uses its already-resolved `price` as the numerator.
+* Final `change_7d` and `change_30d` are calculated after the authoritative row price is known.
+
+### Acceptable alternative
+
+* Extend the existing canonical metric helper to accept the already-fetched current Watchlist price and effective New York market date.
+* Call that helper from the existing row construction after quote resolution.
+
+Do not:
+
+* add a new endpoint
+* add a new scheduled service
+* add a request-time provider call
+* add a new database table
+* add a new cache
+* introduce a second quote source
+* duplicate the historical-selection algorithm in multiple unrelated files
+* rely on stale persisted percentages as the final answer
+* calculate from `completed[-1]` unless that exact close is also the final displayed row price
+
+## Canonical-history catch-up
+
+The prior fix may correctly allow 10-year-complete symbols into incremental append, but the runtime data remains stale.
+
+After correcting the code:
+
+1. Inspect the current canonical-history status for the full authoritative Watchlist universe.
+2. Count:
+
+   * total Watchlist symbols
+   * symbols whose newest canonical bar is current through the latest expected completed session
+   * symbols one session stale
+   * symbols more than one session stale
+   * symbols missing usable history
+3. Use the existing incremental append mechanism only.
+4. Run a safe targeted append for AAPL, NVDA, and MSFT first.
+5. Validate their stored newest-bar dates.
+6. During off-hours, run the existing bounded incremental append for the Watchlist universe, respecting the existing Tradier limiter and background-lane protections.
+7. Do not perform a destructive rebuild.
+8. Do not delete canonical history.
+9. Do not use FMP as a new production fallback.
+10. Do not commit generated `.json.gz`, `_index.json`, or runtime cache changes.
+
+If an existing runtime flag prevents append, report the exact flag and correct environment/runtime configuration only if it is clearly part of the existing intended design.
+
+## Independent benchmark
+
+Use FMP only as a read-only independent benchmark.
+
+For each required symbol, independently retrieve:
+
+* current price equivalent to the Watchlist price basis
+* 7-day historical comparison date and close
+* 30-day historical comparison date and close
+
+Compare equivalent bases:
+
+* regular-session current price versus regular-session historical close
+* split-adjusted versus split-adjusted
+* raw versus raw
+
+Do not compare a current raw price with an unadjusted pre-split historical close.
+
+Do not put FMP into production logic.
+
+## Required live validation symbols
+
+Validate:
+
+* AAPL
+* NVDA
+* MSFT
+* PLTR
+* one recent split/corporate-action symbol already in the Watchlist
+* one symbol with fewer than 30 calendar days of history, if present
+
+For AAPL, NVDA, MSFT, and PLTR, the final report must include:
+
+| Field                               | Required value          |
+| ----------------------------------- | ----------------------- |
+| Watchlist displayed current price   | Exact value             |
+| Current-price source                | Exact existing source   |
+| Current-price timestamp             | Exact timestamp         |
+| Effective New York market date      | Exact date              |
+| Canonical newest completed bar date | Exact date              |
+| 7D target date                      | Exact date              |
+| 7D selected baseline session        | Exact date              |
+| 7D selected baseline close          | Exact close             |
+| Manual 7D calculation               | Exact percentage        |
+| Endpoint `change_7d`                | Exact percentage        |
+| FMP-equivalent 7D benchmark         | Exact percentage        |
+| Absolute 7D difference              | Exact percentage points |
+| 30D target date                     | Exact date              |
+| 30D selected baseline session       | Exact date              |
+| 30D selected baseline close         | Exact close             |
+| Manual 30D calculation              | Exact percentage        |
+| Endpoint `change_30d`               | Exact percentage        |
+| FMP-equivalent 30D benchmark        | Exact percentage        |
+| Absolute 30D difference             | Exact percentage points |
+
+The endpoint calculation must match the manual calculation using the endpoint’s displayed price within `0.01 percentage points`.
+
+The independently benchmarked equivalent-basis result must also match within `0.01 percentage points`, unless a specific provider adjustment convention is proven and quantified.
+
+Do not call the task complete with stale as-of dates.
+
+## Replace the inadequate regression tests
+
+Review the 13 tests added in commit `c1ec7103`.
+
+Several appear to test locally recreated dictionaries rather than production functions. Replace or rewrite inadequate tests so they exercise the real implementation.
+
+Requirements:
+
+1. A same-session refresh test must call the actual canonical merge/append function using an isolated temporary canonical store or correct monkeypatching. It must not simply recreate `{date: bar}` logic inside the test.
+2. A UTC/New York boundary test must pass realistic timestamps or date-normalization inputs through the real normalizer. It must not start with two already-identical date strings and then claim timezone handling was tested.
+3. A holiday test must not fabricate a trading bar for New Year’s Day or another closed exchange date.
+4. A row-calculation test must exercise the real Watchlist row path with:
+
+   * canonical historical close
+   * current quote price
+   * final serialized `change_7d`
+   * final serialized `change_30d`
+5. At least one regression fixture must recreate the previous failure:
+
+   * canonical latest completed close is materially different from the current quote
+   * old implementation produces the wrong percentage
+   * corrected implementation uses the current quote and produces the expected result
+6. Verify stale persisted `change_7d` and `change_30d` cannot overwrite newly calculated values.
+7. Verify changing only the current quote changes 7D and 30D percentages without requiring a historical-provider request.
+8. Verify no new Tradier or FMP call occurs from the final Watchlist request path.
+9. Verify New York market date at 23:30 ET while UTC is already the next date.
+10. Verify after-market behavior according to the existing displayed-price contract.
+11. Verify weekend and exchange-holiday target dates.
+12. Verify insufficient history returns the existing missing/null value.
+13. Verify split-consistent price basis.
+14. Verify row count, field names, field types, and frontend contract remain unchanged.
+15. Tests must fail against the old production implementation for the specific current-price numerator bug.
+
+Use deterministic permanent tests. Live provider calls are allowed only for one-time validation, never in the permanent test suite.
+
+## Real endpoint validation
+
+After focused tests pass:
+
+1. Start or use the backend through the safest existing method.
+2. Call the real Watchlist endpoint.
+3. Capture final rows for AAPL, NVDA, MSFT, and PLTR.
+4. Prove the row’s `price`, `change_7d`, and `change_30d` satisfy the formula.
+5. Prove endpoint values are no longer taken from stale canonical metadata.
+6. Re-fetch after changing or refreshing the quote source and show that percentages follow the current displayed price.
+7. Do not declare success from an internal helper alone.
+
+## Git cleanup and commit discipline
+
+Remote `main` currently contains commit `a9e38eb97cc8f2b3f3e8010dfd78a476e2f6fb17`, which followed the source fix and included unrelated runtime/cache/configuration artifacts.
+
+Do not rewrite or force-remove that commit during this task.
+
+However:
+
+1. Identify every currently modified/untracked runtime artifact.
+2. Do not stage any of them.
+3. Do not stage:
+
+   * `backend/data/**/*.json`
+   * `backend/data/**/*.json.gz`
+   * runtime LKG files
+   * OpenCode state/history
+   * attached pasted prompts
+   * agent reports
+   * logs
+4. If the pasted prior-task file remains as an unneeded tracked source artifact, report it separately. Do not mix a broad repository cleanup into the price fix without clear necessity.
+5. Stage only the exact source/test files required for this correction.
+6. Show `git diff --cached --name-only` before committing.
+7. Commit with a focused message.
+8. Do not allow Replit to create a second automatic commit containing generated runtime data.
+9. Do not push.
+
+## Required commands and validation
+
+At minimum, run:
+
+* focused price-history/Watchlist tests
+* existing Watchlist market-data tests
+* relevant canonical-history tests
+* relevant Watchlist router/serialization tests
+* `git diff --check`
+* final endpoint validation
+* `git status -sb`
+* `git diff --cached --name-only` before commit
+* `git show --stat --oneline HEAD` after commit
+* ancestry checks for DeepSeek and prior Replit commits
+
+## Completion standard
+
+The task is complete only when all of the following are true:
+
+1. AAPL, NVDA, MSFT, and PLTR canonical histories have current expected completed-session data.
+2. The final Watchlist row uses its displayed current price as the numerator.
+3. Calendar-day historical comparison dates are selected correctly.
+4. New York market date is used consistently.
+5. Final endpoint values match manual calculations.
+6. Independent FMP-equivalent values match within tolerance.
+7. Tests exercise real production functions and fail on the previous implementation.
+8. No new request-time provider calls were added.
+9. No frontend change was required.
+10. DeepSeek work remains in ancestry.
+11. Only focused source/test files are in the new commit.
+12. No runtime cache files are committed.
+13. No push occurs.
+
+## Final report
+
+Return:
+
+1. Completion status.
+2. Why commit `c1ec7103` was insufficient.
+3. Exact first incorrect production hop.
+4. Exact authoritative current-price source.
+5. Exact historical-baseline source.
+6. Old formula.
+7. Corrected formula.
+8. New York market-date correction.
+9. Canonical-history stale-symbol counts before and after catch-up.
+10. AAPL/NVDA/MSFT/PLTR full validation table.
+11. Independent FMP benchmark table with absolute differences.
+12. Exact source files changed.
+13. Exact test files changed.
+14. Tests removed or rewritten from the previous inadequate set.
+15. Complete validation commands and results.
+16. Endpoint contract confirmation.
+17. Provider-call impact.
+18. Scheduler impact.
+19. Cache and persistence impact.
+20. Confirmation that DeepSeek commits remain ancestors of HEAD.
+21. `git diff --cached --name-only` used for the commit.
+22. New commit SHA.
+23. Final `git status -sb`.
+24. Exact safe command the user should run to push the focused commit.
+
+Do not say “it will become correct after the next nightly run.” Make the current runtime correct, validate it, and prove the actual endpoint values before claiming completion.
