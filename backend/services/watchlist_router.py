@@ -1040,10 +1040,33 @@ def _ticker_detail_earnings_intelligence(fields: dict[str, Any]) -> dict | None:
 
 
 def _load_cached_watchlist_market_data(tickers: list[str]) -> dict[str, dict[str, Any]]:
-    """Bulk-load cache-only market-data enrichments used by canonical rows."""
+    """Bulk-load cache-only market-data enrichments used by canonical rows.
+
+    Returns volume metrics (volume_change_*, volume_metrics_status, etc.) plus
+    internal comparison-close keys used by _enrich_store_with_quotes to compute
+    change_7d / change_30d from the live displayed price:
+
+      _comparison_close_7d  — historical close for 7-calendar-day lookback
+      _comparison_date_7d   — that session's date string
+      _comparison_close_30d — historical close for 30-calendar-day lookback
+      _comparison_date_30d  — that session's date string
+
+    No provider calls are made.  Both functions are cache-only disk reads.
+    """
     try:
-        from services.canonical_history_service import get_volume_metrics_bulk as _get_hist_metrics_bulk
-        return _get_hist_metrics_bulk(tickers)
+        from services.canonical_history_service import (
+            get_volume_metrics_bulk as _get_hist_metrics_bulk,
+            get_comparison_closes_bulk as _get_comp_closes_bulk,
+        )
+        vol_metrics = _get_hist_metrics_bulk(tickers)
+        comp_closes = _get_comp_closes_bulk(tickers)
+        for sym in vol_metrics:
+            comp = comp_closes.get(sym) or {}
+            vol_metrics[sym]["_comparison_close_7d"]  = comp.get("comparison_close_7d")
+            vol_metrics[sym]["_comparison_date_7d"]   = comp.get("comparison_date_7d")
+            vol_metrics[sym]["_comparison_close_30d"] = comp.get("comparison_close_30d")
+            vol_metrics[sym]["_comparison_date_30d"]  = comp.get("comparison_date_30d")
+        return vol_metrics
     except Exception as exc:
         print(f"[WATCHLIST_ENRICH] bulk volume metrics load failed (non-fatal): {exc}")
         return {}
@@ -1323,6 +1346,48 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
 
         enriched["beta"] = _beta
         enriched.update(_volume_metrics)
+
+        # ── Live-price change_7d / change_30d override ─────────────────────────
+        # _volume_metrics contains pre-computed change_7d/change_30d that use
+        # the last canonical bar close as numerator.  That value predates the
+        # live quote already in enriched["price"] and produces the wrong %.
+        #
+        # Correct formula:  (displayed_price / historical_comparison_close − 1) × 100
+        #
+        # The comparison closes (historical denominators) were loaded from disk
+        # bar files by _load_cached_watchlist_market_data without any provider
+        # call.  They are passed as internal keys _comparison_close_7d / _30d.
+        # We only compute the percentage here, after the authoritative price
+        # is known.  Stale pre-computed values from _volume_metrics are always
+        # overridden — they must never reach the frontend as the final answer.
+        try:
+            _live_px_f = float(_price_f) if _price_f is not None else None
+        except Exception:
+            _live_px_f = None
+        if _live_px_f is not None and _live_px_f > 0:
+            _c7  = _volume_metrics.get("_comparison_close_7d")
+            _c30 = _volume_metrics.get("_comparison_close_30d")
+            try:
+                _c7f = float(_c7) if _c7 is not None else None
+                enriched["change_7d"] = (
+                    round((_live_px_f / _c7f - 1) * 100.0, 6)
+                    if _c7f is not None and _c7f > 0 else None
+                )
+            except Exception:
+                enriched["change_7d"] = None
+            try:
+                _c30f = float(_c30) if _c30 is not None else None
+                enriched["change_30d"] = (
+                    round((_live_px_f / _c30f - 1) * 100.0, 6)
+                    if _c30f is not None and _c30f > 0 else None
+                )
+            except Exception:
+                enriched["change_30d"] = None
+        else:
+            # No valid live price — return None rather than a stale cached value
+            enriched["change_7d"]  = None
+            enriched["change_30d"] = None
+
         enriched.update(_vol_mc_fields(_price_f, _vol_f, _mc))
 
         # ── More-specific unavail reasons ──────────────────────────────────

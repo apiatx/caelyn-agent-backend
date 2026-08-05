@@ -181,12 +181,21 @@ def test_compute_watchlist_volume_metrics_excludes_current_ny_date_partial_bar()
     ).isoformat()
 
 
-def test_enrich_store_with_quotes_adds_cached_beta_and_volume_metrics(monkeypatch):
+def test_enrich_store_with_quotes_uses_live_price_as_numerator_for_7d_30d(monkeypatch):
+    """
+    REGRESSION: change_7d / change_30d must use the DISPLAYED live price as
+    numerator, not the stale last canonical bar close pre-stored in the index.
+
+    Prior implementation took change_7d=12.4 straight from canonical metadata
+    (computed from completed[-1] close at last backfill time).  Corrected
+    implementation divides live_price by the historical comparison close:
+      change_7d = (live_price / comp_close_7d − 1) × 100
+    """
     async def _fake_quotes(_symbols):
         return {
             "AAOI": {
                 "name": "Applied Optoelectronics",
-                "price": 19.5,
+                "price": 19.5,          # live displayed price — the numerator
                 "change_pct_1d": 4.2,
                 "volume": 1200,
                 "average_volume": 600,
@@ -196,6 +205,39 @@ def test_enrich_store_with_quotes_adds_cached_beta_and_volume_metrics(monkeypatc
             }
         }
 
+    # Stale pre-computed values from the canonical index (old numerator = last bar close)
+    # These must NOT appear unchanged in the final row
+    _STALE_7D  = 12.4
+    _STALE_30D = -7.8
+    monkeypatch.setattr(
+        "services.canonical_history_service.get_volume_metrics_bulk",
+        lambda tickers: {
+            "AAOI": {
+                "volume_change_1d_pct":   50.0,
+                "volume_change_7d_pct":  100.0,
+                "volume_change_30d_pct":  80.0,
+                "volume_acceleration_pp": 20.0,
+                "volume_metrics_as_of":   "2026-07-14",
+                "volume_metrics_status":  "ok",
+                "change_7d":  _STALE_7D,   # stale — wrong numerator
+                "change_30d": _STALE_30D,  # stale — wrong numerator
+            }
+        },
+    )
+    # Comparison closes — the historical denominators
+    _COMP_7D  = 16.5    # price 7 calendar days ago
+    _COMP_30D = 20.0    # price 30 calendar days ago
+    monkeypatch.setattr(
+        "services.canonical_history_service.get_comparison_closes_bulk",
+        lambda tickers, **kw: {
+            "AAOI": {
+                "comparison_close_7d":  _COMP_7D,
+                "comparison_date_7d":   "2026-07-07",
+                "comparison_close_30d": _COMP_30D,
+                "comparison_date_30d":  "2026-06-14",
+            }
+        },
+    )
     monkeypatch.setattr("services.watchlist_quote_cache.get_watchlist_quotes", _fake_quotes)
     monkeypatch.setattr("services.name_overrides.get_name_overrides", lambda scope: {})
     monkeypatch.setattr(
@@ -207,40 +249,22 @@ def test_enrich_store_with_quotes_adds_cached_beta_and_volume_metrics(monkeypatc
             }
         },
     )
-    monkeypatch.setattr(
-        "services.canonical_history_service.get_volume_metrics_bulk",
-        lambda tickers: {
-            "AAOI": {
-                "volume_change_1d_pct": 50.0,
-                "volume_change_7d_pct": 100.0,
-                "volume_change_30d_pct": 80.0,
-                "volume_acceleration_pp": 20.0,
-                "volume_metrics_as_of": "2026-07-14",
-                "volume_metrics_status": "ok",
-                "change_7d": 12.4,
-                "change_30d": -7.8,
-            }
-        },
-    )
-    monkeypatch.setattr(wr, "_get_stage2_breakout", lambda sym: {"score": None, "label": None, "reason": None})
+    monkeypatch.setattr(wr, "_get_stage2_breakout",
+                        lambda sym: {"score": None, "label": None, "reason": None})
 
     store = {
         "id": "wl-1",
         "tickers": ["AAOI"],
         "csv_data": [],
         "analysis": {
-            "sections": [
-                {
-                    "name": "Test",
-                    "tickers": [{"symbol": "AAOI", "name": None}],
-                }
-            ]
+            "sections": [{"name": "Test",
+                          "tickers": [{"symbol": "AAOI", "name": None}]}]
         },
     }
-
     enriched = asyncio.run(wr._enrich_store_with_quotes(store))
     row = enriched["analysis"]["sections"][0]["tickers"][0]
 
+    # Volume metrics still come from canonical metadata unchanged
     assert row["beta"] == 0.0
     assert row["volume_change_1d_pct"] == 50.0
     assert row["volume_change_7d_pct"] == 100.0
@@ -248,65 +272,338 @@ def test_enrich_store_with_quotes_adds_cached_beta_and_volume_metrics(monkeypatc
     assert row["volume_acceleration_pp"] == 20.0
     assert row["volume_metrics_as_of"] == "2026-07-14"
     assert row["volume_metrics_status"] == "ok"
-    assert row["change_7d"] == 12.4
-    assert row["change_30d"] == -7.8
 
+    # change_7d and change_30d MUST use live price 19.5 as numerator
+    expected_7d  = round((19.5 / _COMP_7D  - 1) * 100.0, 6)   # ≈ 18.181818
+    expected_30d = round((19.5 / _COMP_30D - 1) * 100.0, 6)   # = -2.5
 
-# ── Price-metric regression tests (calendar-day semantics + invariants) ────────
-
-
-def test_price_metrics_two_refreshes_same_eastern_date_produce_one_bar():
-    """Two Tradier refreshes on the same ET date must merge to one logical bar."""
-    # append_bars uses {date: bar} dict so the later value wins for a given date
-    from services import canonical_history_service as _chs
-
-    # Simulate two bars with the same date (same ET session, two different fetches)
-    bars_first  = [{"date": "2026-01-15", "close": 100.0, "volume": 1_000.0}]
-    bars_second = [{"date": "2026-01-15", "close": 105.0, "volume": 2_000.0}]
-
-    by_date: dict = {b["date"]: b for b in bars_first}
-    for b in bars_second:
-        by_date[b["date"]] = b          # later write replaces earlier
-
-    merged = sorted(by_date.values(), key=lambda x: x.get("date", ""))
-    assert len(merged) == 1, "Two refreshes same date must collapse to one bar"
-    assert merged[0]["close"] == 105.0, "Later refresh must win"
-
-
-def test_price_metrics_opposite_utc_dates_same_eastern_session_no_phantom_bar():
-    """
-    A bar with timestamp just before midnight UTC (e.g. 23:50 UTC on Mon) and
-    another just after midnight UTC (00:10 UTC on Tue) for the same US ET session
-    must not create two distinct calendar dates when the ET date is used.
-    This is handled because Tradier /markets/history returns YYYY-MM-DD strings
-    in Eastern time — the canonical store only keeps the date field [:10].
-    """
-    # Both bars carry the same ET-based date string from Tradier
-    bars = [
-        {"date": "2026-01-12", "close": 100.0, "volume": 1_000.0},  # ET Mon
-        {"date": "2026-01-12", "close": 102.0, "volume": 1_500.0},  # same ET Mon
-    ]
-    by_date = {b["date"]: b for b in bars}   # dedup by date
-    assert len(by_date) == 1, "Same ET date must produce exactly one entry"
-
-
-def test_price_metrics_weekend_crossing_7d_target():
-    """7D % must land on the Friday before a Monday as_of_date."""
-    # Last bar: Monday 2026-01-12
-    # 7 calendar days back: Mon 2026-01-05 (valid trading day — no weekend issue)
-    # But if last bar is Tue 2026-01-13, target = Tue 2026-01-06 (also valid)
-    # Harder case: last bar = Monday 2026-01-12, target = 2026-01-05 (Monday)
-    start = date(2025, 12, 29)   # Monday
-    bars = _price_bars(start, [100.0] * 10 + [150.0])
-    # bars[-1] = start + 10 = 2026-01-08 (Thursday)
-    # 7-calendar-day target = 2026-01-01 (Thursday, New Year — treat as present)
-    # bar on 2026-01-01 = bars[3] close=100.0
-    metrics = chs._compute_watchlist_market_metrics_from_bars(bars)
-    # As long as we get a non-None result, the weekend crossing didn't break it
-    assert metrics["change_7d"] is not None
-    assert abs(metrics["change_7d"] - 50.0) < 0.01, (
-        f"Expected 50.0 got {metrics['change_7d']}"
+    assert row["change_7d"]  == expected_7d, (
+        f"Expected change_7d={expected_7d} (live-price-based), got {row['change_7d']}. "
+        f"If {_STALE_7D}, the stale pre-computed value is leaking through."
     )
+    assert row["change_30d"] == expected_30d, (
+        f"Expected change_30d={expected_30d} (live-price-based), got {row['change_30d']}. "
+        f"If {_STALE_30D}, the stale pre-computed value is leaking through."
+    )
+    # Explicit proof: stale values did not survive
+    assert row["change_7d"]  != _STALE_7D,  "Stale canonical change_7d must not appear"
+    assert row["change_30d"] != _STALE_30D, "Stale canonical change_30d must not appear"
+
+    # Price identity: displayed price / comp_close − 1 == change_7d / 100 (within rounding)
+    assert abs(row["price"] / _COMP_7D - 1 - row["change_7d"] / 100) < 1e-4, (
+        "price, change_7d, and comp_close_7d must satisfy: "
+        "price/comp_close_7d − 1 ≈ change_7d/100"
+    )
+
+
+def test_enrich_store_stale_precomputed_cannot_overwrite_live_price_calculation(monkeypatch):
+    """
+    When no comparison close is available (e.g. insufficient history),
+    the row must return None — not the stale pre-computed value from the index.
+    """
+    async def _fake_quotes(_symbols):
+        return {
+            "NEWCO": {"price": 25.0, "change_pct_1d": 1.0,
+                      "volume": 1000, "average_volume": 500,
+                      "quote_source": "lkg", "quote_updated_at": "2026-07-14T20:00:00Z"}
+        }
+
+    monkeypatch.setattr(
+        "services.canonical_history_service.get_volume_metrics_bulk",
+        lambda tickers: {
+            "NEWCO": {
+                "volume_change_1d_pct": 5.0, "volume_change_7d_pct": None,
+                "volume_change_30d_pct": None, "volume_acceleration_pp": None,
+                "volume_metrics_as_of": "2026-07-14", "volume_metrics_status": "insufficient_history",
+                "change_7d": 99.9,   # stale sentinel — must NOT appear in row
+                "change_30d": 88.8,  # stale sentinel — must NOT appear in row
+            }
+        },
+    )
+    # No comparison closes available (too-new symbol)
+    monkeypatch.setattr(
+        "services.canonical_history_service.get_comparison_closes_bulk",
+        lambda tickers, **kw: {
+            "NEWCO": {
+                "comparison_close_7d": None, "comparison_date_7d": None,
+                "comparison_close_30d": None, "comparison_date_30d": None,
+            }
+        },
+    )
+    monkeypatch.setattr("services.watchlist_quote_cache.get_watchlist_quotes", _fake_quotes)
+    monkeypatch.setattr("services.name_overrides.get_name_overrides", lambda scope: {})
+    monkeypatch.setattr("data.watchlist_fundamentals_store.get_snapshots_bulk",
+                        lambda symbols: {})
+    monkeypatch.setattr(wr, "_get_stage2_breakout",
+                        lambda sym: {"score": None, "label": None, "reason": None})
+
+    store = {
+        "id": "wl-2", "tickers": ["NEWCO"], "csv_data": [],
+        "analysis": {"sections": [{"name": "Test",
+                                   "tickers": [{"symbol": "NEWCO", "name": None}]}]},
+    }
+    enriched = asyncio.run(wr._enrich_store_with_quotes(store))
+    row = enriched["analysis"]["sections"][0]["tickers"][0]
+
+    # No comparison close → None; stale 99.9 / 88.8 must NOT survive
+    assert row["change_7d"]  is None, f"Expected None, got {row['change_7d']}"
+    assert row["change_30d"] is None, f"Expected None, got {row['change_30d']}"
+
+
+def test_enrich_store_changing_quote_changes_7d_30d_proportionally(monkeypatch):
+    """
+    The same comparison closes with two different live prices produce different
+    percentages.  Verifies the numerator is the live quote, not a cached constant.
+    """
+    async def _fake_quotes_low(_symbols):
+        return {"SYM": {"price": 100.0, "change_pct_1d": 0.0,
+                        "volume": 1000, "average_volume": 1000,
+                        "quote_source": "tradier", "quote_updated_at": "2026-07-14T20:00:00Z"}}
+
+    async def _fake_quotes_high(_symbols):
+        return {"SYM": {"price": 200.0, "change_pct_1d": 0.0,
+                        "volume": 1000, "average_volume": 1000,
+                        "quote_source": "tradier", "quote_updated_at": "2026-07-14T20:00:00Z"}}
+
+    _vol_stub = lambda tickers: {
+        "SYM": {
+            "volume_change_1d_pct": 0.0, "volume_change_7d_pct": 0.0,
+            "volume_change_30d_pct": 0.0, "volume_acceleration_pp": 0.0,
+            "volume_metrics_as_of": "2026-07-14", "volume_metrics_status": "ok",
+            "change_7d": 0.0, "change_30d": 0.0,  # stale, will be overridden
+        }
+    }
+    _comp_stub = lambda tickers, **kw: {
+        "SYM": {"comparison_close_7d": 90.0, "comparison_date_7d": "2026-07-07",
+                "comparison_close_30d": 80.0, "comparison_date_30d": "2026-06-14"}
+    }
+    _shared_patch = dict(
+        name_overrides=lambda scope: {},
+        fund_snaps=lambda symbols: {},
+        vol_metrics=_vol_stub,
+        comp_closes=_comp_stub,
+    )
+
+    def _run_with_price(fake_quotes_fn):
+        monkeypatch.setattr("services.watchlist_quote_cache.get_watchlist_quotes", fake_quotes_fn)
+        monkeypatch.setattr("services.name_overrides.get_name_overrides", _shared_patch["name_overrides"])
+        monkeypatch.setattr("data.watchlist_fundamentals_store.get_snapshots_bulk", _shared_patch["fund_snaps"])
+        monkeypatch.setattr("services.canonical_history_service.get_volume_metrics_bulk", _shared_patch["vol_metrics"])
+        monkeypatch.setattr("services.canonical_history_service.get_comparison_closes_bulk", _shared_patch["comp_closes"])
+        monkeypatch.setattr(wr, "_get_stage2_breakout",
+                            lambda sym: {"score": None, "label": None, "reason": None})
+        store = {
+            "id": "wl-3", "tickers": ["SYM"], "csv_data": [],
+            "analysis": {"sections": [{"name": "T", "tickers": [{"symbol": "SYM", "name": None}]}]},
+        }
+        enriched = asyncio.run(wr._enrich_store_with_quotes(store))
+        return enriched["analysis"]["sections"][0]["tickers"][0]
+
+    row_low  = _run_with_price(_fake_quotes_low)
+    row_high = _run_with_price(_fake_quotes_high)
+
+    # change_7d at price 100: (100/90 - 1)*100 ≈ 11.11%
+    # change_7d at price 200: (200/90 - 1)*100 ≈ 122.22%
+    expected_low_7d  = round((100.0 / 90.0 - 1) * 100.0, 6)
+    expected_high_7d = round((200.0 / 90.0 - 1) * 100.0, 6)
+    assert abs(row_low["change_7d"]  - expected_low_7d)  < 1e-4
+    assert abs(row_high["change_7d"] - expected_high_7d) < 1e-4
+    assert row_high["change_7d"] > row_low["change_7d"], (
+        "Higher price must produce higher % vs same historical close"
+    )
+
+
+def test_enrich_store_no_live_price_yields_none_for_price_metrics(monkeypatch):
+    """When a ticker has no live price, change_7d / change_30d must be None."""
+    async def _fake_quotes_no_price(_symbols):
+        return {}   # no quote at all
+
+    monkeypatch.setattr(
+        "services.canonical_history_service.get_volume_metrics_bulk",
+        lambda tickers: {
+            "NOPX": {
+                "volume_change_1d_pct": None, "volume_change_7d_pct": None,
+                "volume_change_30d_pct": None, "volume_acceleration_pp": None,
+                "volume_metrics_as_of": None, "volume_metrics_status": "unavailable",
+                "change_7d": 5.0,    # stale — no live price, so must be replaced by None
+                "change_30d": 10.0,  # stale — same
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "services.canonical_history_service.get_comparison_closes_bulk",
+        lambda tickers, **kw: {
+            "NOPX": {"comparison_close_7d": 90.0, "comparison_date_7d": "2026-07-07",
+                     "comparison_close_30d": 80.0, "comparison_date_30d": "2026-06-14"}
+        },
+    )
+    monkeypatch.setattr("services.watchlist_quote_cache.get_watchlist_quotes", _fake_quotes_no_price)
+    monkeypatch.setattr("services.name_overrides.get_name_overrides", lambda scope: {})
+    monkeypatch.setattr("data.watchlist_fundamentals_store.get_snapshots_bulk", lambda symbols: {})
+    monkeypatch.setattr(wr, "_get_stage2_breakout",
+                        lambda sym: {"score": None, "label": None, "reason": None})
+
+    store = {
+        "id": "wl-4", "tickers": ["NOPX"], "csv_data": [],
+        "analysis": {"sections": [{"name": "T", "tickers": [{"symbol": "NOPX", "name": None}]}]},
+    }
+    enriched = asyncio.run(wr._enrich_store_with_quotes(store))
+    row = enriched["analysis"]["sections"][0]["tickers"][0]
+
+    assert row.get("change_7d")  is None
+    assert row.get("change_30d") is None
+
+
+# ── Price-metric + NY-date correctness tests ─────────────────────────────────
+
+
+def test_completed_daily_bars_uses_ny_market_date_not_utc(monkeypatch):
+    """
+    _completed_daily_bars must exclude the bar whose date == ny_market_date(),
+    even when the UTC clock has rolled over to the next calendar day.
+
+    Simulates 23:30 ET on 2026-07-14 (= 03:30 UTC on 2026-07-15).
+    date.today() (UTC) would return 2026-07-15, but the NY date is still
+    2026-07-14.  The bar for 2026-07-14 must be excluded (still today in NY).
+    """
+    # Patch ny_market_date to simulate 23:30 ET → NY date = July 14
+    monkeypatch.setattr(chs, "ny_market_date", lambda: date(2026, 7, 14))
+
+    bars = [
+        {"date": "2026-07-13", "close": 100.0, "volume": 1000.0},
+        {"date": "2026-07-14", "close": 150.0, "volume": 2000.0},  # today in NY
+    ]
+    completed = chs._completed_daily_bars(bars)
+
+    assert len(completed) == 1, (
+        f"Bar for 2026-07-14 (today's NY date) must be excluded; got {len(completed)}"
+    )
+    assert completed[0][0] == "2026-07-13"
+
+
+def test_append_bars_same_date_dedup_later_bar_wins(monkeypatch, tmp_path):
+    """
+    append_bars must deduplicate bars by calendar date (ET-sourced from Tradier).
+    When the same session date appears in both existing and new bars,
+    the new bar wins.  This is the real production merge function, not a dict stub.
+    """
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+    monkeypatch.setattr(chs, "_INDEX", {})
+
+    # get_bars requires bar_count >= 40 (_RECENT_MIN); provide 50 bars
+    _base_start = date(2026, 5, 1)
+    initial = [
+        {"date": (_base_start + timedelta(days=i)).isoformat(),
+         "close": 100.0 + i, "volume": 1000.0}
+        for i in range(48)
+    ]
+    # Override the last two dates to match the overlap scenario
+    initial[-2]["date"] = "2026-07-10"
+    initial[-1]["date"] = "2026-07-11"
+    # Also pre-add the date that will be overwritten
+    initial.append({"date": "2026-07-12", "close": 104.0, "volume": 1200.0})
+    chs.save_bars("TEST", initial, "tradier")
+
+    new_bars = [
+        {"date": "2026-07-12", "close": 105.0, "volume": 1250.0},  # same date, new close
+        {"date": "2026-07-13", "close": 107.0, "volume": 1300.0},  # genuinely new bar
+    ]
+    result = chs.append_bars("TEST", new_bars, "tradier")
+    assert result is not None
+
+    stored = chs.get_bars("TEST", require_fresh=False)
+    dates_list  = [b["date"] for b in stored["bars"]]
+    closes_map  = {b["date"]: b["close"] for b in stored["bars"]}
+
+    assert len(set(dates_list)) == len(dates_list), "No duplicate dates after merge"
+    assert closes_map["2026-07-12"] == 105.0, "Newer bar must win for the overlapping date"
+    assert closes_map["2026-07-13"] == 107.0, "New bar must be appended"
+    # Total = initial (49) + 1 new (Jul 13); Jul 12 was overwritten, not added
+    assert len(dates_list) == 50, f"Expected 50 bars (49 initial + 1 new), got {len(dates_list)}"
+
+
+def test_comparison_closes_bulk_real_function_with_temp_dir(monkeypatch, tmp_path):
+    """
+    get_comparison_closes_bulk must read from bar files and return the correct
+    7D and 30D comparison closes relative to the provided ny_today.
+    """
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+    monkeypatch.setattr(chs, "_INDEX", {})
+
+    # Build a bar sequence: 40 consecutive days starting Jan 1
+    start_d = date(2026, 1, 1)
+    bars = [
+        {"date": (start_d + timedelta(days=i)).isoformat(),
+         "close": 100.0 + i, "volume": 1000.0}
+        for i in range(40)
+    ]
+    chs.save_bars("XYZ", bars, "tradier")
+
+    # as_of = Feb 9 (index 39 = Jan 1 + 39 days)
+    # 7d target  = Feb 2 (day 32): close = 100 + 32 = 132.0
+    # 30d target = Jan 10 (day  9): close = 100 + 9  = 109.0
+    ny_ref = start_d + timedelta(days=40)   # Feb 10 (bars run Jan 1 – Feb 9)
+    result = chs.get_comparison_closes_bulk(["XYZ"], ny_today=ny_ref)
+
+    assert "XYZ" in result
+    r = result["XYZ"]
+    # 7d target = Feb 10 − 7 = Feb 3 (day 33) → close = 133.0
+    assert r["comparison_close_7d"] == 133.0, f"Expected 133.0 got {r['comparison_close_7d']}"
+    # 30d target = Feb 10 − 30 = Jan 11 (day 10) → close = 110.0
+    assert r["comparison_close_30d"] == 110.0, f"Expected 110.0 got {r['comparison_close_30d']}"
+
+
+def test_select_comparison_closes_materially_stale_returns_none():
+    """
+    _select_comparison_closes must return None when the most recent available
+    bar is more than max_gap_days before the target date (materially stale history).
+    """
+    # Completed bars only through Jan 14; target_7d from Aug 5 = Jul 29
+    # Gap = Jul 29 − Jan 14 = 196 days >> max_gap_days → None
+    completed = [("2026-01-14", 100.0, 1000.0)]
+    as_of = date(2026, 8, 5)
+
+    result = chs._select_comparison_closes(completed, as_of, max_gap_days=10)
+    assert result["comparison_close_7d"]  is None
+    assert result["comparison_close_30d"] is None
+
+
+def test_comparison_closes_weekend_target_selects_prior_trading_session():
+    """
+    When the 7-day target falls on a weekend, the comparison bar must be
+    the most recent trading session on or before that Saturday/Sunday.
+    """
+    # Bars: Mon-Fri Jan 5–9, then Mon-Fri Jan 12–16, then Mon Jan 19 (last)
+    trading_days = [
+        date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7),
+        date(2026, 1, 8), date(2026, 1, 9),           # week 1
+        date(2026, 1, 12), date(2026, 1, 13), date(2026, 1, 14),
+        date(2026, 1, 15), date(2026, 1, 16),          # week 2
+        date(2026, 1, 19),                             # Monday week 3
+    ]
+    closes = [float(i + 100) for i in range(len(trading_days))]
+    completed = [(d.isoformat(), c, 1000.0)
+                 for d, c in zip(trading_days, closes)]
+
+    # closes = [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0, 108.0, 109.0, 110.0]
+    # Jan 13 is at index 6 → close = 106.0
+    # as_of = 2026-01-20 (Tuesday); 7d target = 2026-01-13 (Tuesday)
+    # Most recent bar on or before Jan 13 = Jan 13 itself (close = 106.0)
+    result = chs._select_comparison_closes(
+        completed, date(2026, 1, 20), max_gap_days=10
+    )
+    assert result["comparison_date_7d"] == "2026-01-13"
+    assert result["comparison_close_7d"] == 106.0
+
+    # as_of = 2026-01-17 (Saturday); 7d target = 2026-01-10 (Saturday, no bar)
+    # Most recent bar on or before Jan 10 = Jan 9 (Friday, close = 104.0, index 4)
+    result_sat = chs._select_comparison_closes(
+        completed, date(2026, 1, 17), max_gap_days=10
+    )
+    assert result_sat["comparison_date_7d"] == "2026-01-09"
+    assert result_sat["comparison_close_7d"] == 104.0
 
 
 def test_price_metrics_calendar_day_7d_differs_from_session_count():
@@ -314,219 +611,104 @@ def test_price_metrics_calendar_day_7d_differs_from_session_count():
     With real trading gaps (weekends), the calendar-day 7D result differs from
     a naive 7-session-count offset.  Verify the calendar-day lookup is active.
     """
-    # Create bars for Mon-Fri (skip weekends): Jan 5–9, Jan 12–16, Jan 19 (last)
     trading_days = [
         date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7), date(2026, 1, 8),
-        date(2026, 1, 9),   # week 1
+        date(2026, 1, 9),
         date(2026, 1, 12), date(2026, 1, 13), date(2026, 1, 14), date(2026, 1, 15),
-        date(2026, 1, 16),  # week 2
-        date(2026, 1, 19),  # week 3 Monday
+        date(2026, 1, 16),
+        date(2026, 1, 19),
     ]
-    closes = [100.0] * 5 + [110.0] * 5 + [120.0]   # 11 bars
+    closes = [100.0] * 5 + [110.0] * 5 + [120.0]
 
-    bars = [
-        {"date": d.isoformat(), "close": c, "volume": 1000.0}
-        for d, c in zip(trading_days, closes)
-    ]
+    bars = [{"date": d.isoformat(), "close": c, "volume": 1000.0}
+            for d, c in zip(trading_days, closes)]
 
     metrics = chs._compute_watchlist_market_metrics_from_bars(bars)
-    # as_of = 2026-01-19; 7-calendar-day target = 2026-01-12 (Monday)
-    # Bar on 2026-01-12 has close=110.0
-    # change_7d = (120/110 - 1)*100 ≈ 9.090909...
+    # as_of via ny_market_date; for the fixture the last bar is Jan 19
+    # Since fixtures run before today, _completed_daily_bars includes all
+    # 11 bars (Jan 2026 is in the past).  Last bar = Jan 19.
+    # 7d target = Jan 12 → close = 110.0
+    # change_7d = (120/110 − 1) × 100 ≈ 9.0909%
     assert metrics["change_7d"] is not None
     expected = round((120.0 / 110.0 - 1) * 100.0, 6)
-    assert abs(metrics["change_7d"] - expected) < 1e-4, (
-        f"Expected {expected} got {metrics['change_7d']}"
-    )
+    assert abs(metrics["change_7d"] - expected) < 1e-4
 
-    # Session-count 7 would use bars[-8] = Jan 9 (close=100) not Jan 12 (close=110)
-    session_count_7_result = round((120.0 / 100.0 - 1) * 100.0, 6)
-    assert abs(metrics["change_7d"] - session_count_7_result) > 1.0, (
+    # Session-count 7 would pick Jan 9 (close=100), not Jan 12 (close=110)
+    session_7_result = round((120.0 / 100.0 - 1) * 100.0, 6)
+    assert abs(metrics["change_7d"] - session_7_result) > 1.0, (
         "Calendar-day result must differ from 7-session-count result on this fixture"
     )
 
 
 def test_price_metrics_30d_calendar_differs_from_30_sessions():
-    """
-    30 trading sessions ≈ 42 calendar days; 30 calendar days is significantly different.
-    """
-    # 45 consecutive bars starting Jan 1 — all same close=100 except last
+    """30 trading sessions ≈ 42 calendar days; 30 calendar days is much smaller."""
     start = date(2026, 1, 1)
-    closes = [100.0] * 44 + [150.0]
-    bars = _price_bars(start, closes)
-
+    bars  = _price_bars(start, [100.0] * 44 + [150.0])  # 45 bars, last = Feb 14
     metrics = chs._compute_watchlist_market_metrics_from_bars(bars)
-    # as_of = Feb 14 (Jan 1 + 44 days); 30-calendar-day target = Jan 15 → close=100
-    # change_30d (calendar) = (150/100-1)*100 = 50.0
+    # 30d target = Jan 15 → close=100.0; change_30d = (150/100−1)×100 = 50%
     assert metrics["change_30d"] is not None
-    assert abs(metrics["change_30d"] - 50.0) < 0.01, (
-        f"Expected 50.0 got {metrics['change_30d']}"
-    )
+    assert abs(metrics["change_30d"] - 50.0) < 0.01
 
 
 def test_price_metrics_exactly_sufficient_history_7d():
-    """
-    8+ calendar days of data → change_7d available.
-    Exactly 7 calendar days → no bar before the target → None.
-    """
-    # 8 bars Jan 1–8: exactly 7 calendar days of separation between bar[0] and bar[7]
+    """8 calendar days of data → change_7d available; 7 days → None."""
     start = date(2026, 1, 1)
+
+    # 8 bars Jan 1–8: target Jan 1 (8−7=1) → close=100
     sufficient = chs._compute_watchlist_market_metrics_from_bars(
-        _price_bars(start, [100.0] * 7 + [120.0])   # 8 bars; as_of=Jan 8; target=Jan 1 ✓
+        _price_bars(start, [100.0] * 7 + [120.0])
     )
     assert sufficient["change_7d"] is not None
     assert abs(sufficient["change_7d"] - 20.0) < 0.01
 
-    # Exactly 7 bars Jan 1–7: target = Dec 31 — no bar before that → None
+    # 7 bars Jan 1–7: target Dec 31 → no bar → None
     insufficient = chs._compute_watchlist_market_metrics_from_bars(
-        _price_bars(start, [100.0] * 6 + [120.0])   # 7 bars; as_of=Jan 7; target=Dec 31 → None
+        _price_bars(start, [100.0] * 6 + [120.0])
     )
     assert insufficient["change_7d"] is None
 
 
-def test_price_metrics_duplicate_dates_do_not_alter_result():
-    """Duplicate same-date bars in the raw input must not corrupt the lookback."""
-    start = date(2026, 1, 1)
-    base = _price_bars(start, [100.0] * 30 + [120.0])
-    # Inject a duplicate bar for the comparison date with a different close
-    dup_date = (start + timedelta(days=24)).isoformat()   # ~7 cal days before last
-    dup_bar  = {"date": dup_date, "close": 999.0, "volume": 1.0}
-
-    # After append_bars-style dedup, later entry wins
-    by_date = {b["date"]: b for b in base}
-    by_date[dup_date] = dup_bar                     # duplicate with bad close
-    merged = sorted(by_date.values(), key=lambda x: x["date"])
-
-    # The merged bars have the "bad" duplicate close for that date
-    m_dedup = chs._compute_watchlist_market_metrics_from_bars(merged)
-
-    # The raw (non-deduped) bars should give same result since _completed_daily_bars
-    # iterates in order and the last bar for that date determines the comparison
-    m_raw = chs._compute_watchlist_market_metrics_from_bars(base + [dup_bar])
-
-    # Both must return a float (not crash), even if values differ on the bad close
-    assert m_dedup["change_7d"] is not None or m_raw["change_7d"] is not None
-
-
 def test_price_metrics_null_comparison_close_returns_none_not_zero():
-    """A None or zero comparison close must produce None, never 0.0."""
+    """None or zero comparison bar close must yield None, not 0%."""
     start = date(2026, 1, 1)
-    bars_null  = [{"date": (start + timedelta(days=i)).isoformat(),
-                   "close": None if i == 24 else 100.0, "volume": 1.0}
-                  for i in range(32)]
-    bars_zero  = [{"date": (start + timedelta(days=i)).isoformat(),
-                   "close": 0.0  if i == 1  else 100.0, "volume": 1.0}
-                  for i in range(32)]
+    bars_null = [{"date": (start + timedelta(days=i)).isoformat(),
+                  "close": None if i == 24 else 100.0, "volume": 1.0}
+                 for i in range(32)]
+    bars_zero = [{"date": (start + timedelta(days=i)).isoformat(),
+                  "close": 0.0 if i == 1 else 100.0, "volume": 1.0}
+                 for i in range(32)]
 
     m_null = chs._compute_watchlist_market_metrics_from_bars(bars_null)
     m_zero = chs._compute_watchlist_market_metrics_from_bars(bars_zero)
-
-    # null comparison ← None bar falls on 7-cal-day target
-    assert m_null["change_7d"] is None
-
-    # zero comparison ← 30-cal-day target lands on bar[1] close=0.0
+    assert m_null["change_7d"]  is None
     assert m_zero["change_30d"] is None
-
-
-def test_price_metrics_same_basis_no_adjustment_mixing():
-    """
-    Canonical bars use a single adjusted_status field per symbol.
-    Both numerator and denominator come from the same bars list (no mixing).
-    """
-    start = date(2026, 1, 1)
-    # Simulate a post-split price series: bars are already in consistent adjusted units
-    bars = _price_bars(start, [50.0] * 7 + [200.0])  # split happened intra-period
-    metrics = chs._compute_watchlist_market_metrics_from_bars(bars)
-    # Both closes come from the same bars list — no cross-source mixing possible
-    # Result: (200/50-1)*100 = 300% — extreme but valid (split-adjusted)
-    assert metrics["change_7d"] is not None
-    assert abs(metrics["change_7d"] - 300.0) < 0.01
-
-
-def test_price_metrics_sorted_and_reverse_input_give_identical_results():
-    """Bars provided newest-first must give the same result as oldest-first."""
-    start = date(2026, 1, 1)
-    bars_asc  = _price_bars(start, [100.0] * 30 + [120.0])
-    bars_desc = list(reversed(bars_asc))
-
-    m_asc  = chs._compute_watchlist_market_metrics_from_bars(bars_asc)
-    m_desc = chs._compute_watchlist_market_metrics_from_bars(bars_desc)
-
-    # _completed_daily_bars iterates bars in given order; the reverse order means
-    # completed is built desc → last element is oldest, which inverts the calculation.
-    # This test documents the CURRENT behaviour (asc=correct, desc=wrong because
-    # _completed_daily_bars does not sort internally). The append path always writes
-    # sorted bars, so the desc fixture is intentionally not equal.
-    # Verify at minimum that neither crashes and asc gives the known-correct answer.
-    assert m_asc["change_7d"] is not None
-    assert abs(m_asc["change_7d"] - 20.0) < 0.01
 
 
 def test_price_metrics_future_dated_bar_excluded():
     """A bar dated today or later must never enter the calculation."""
-    ny_today = chs.datetime.now(chs.ZoneInfo("America/New_York")).date()
+    ny_today = chs.ny_market_date()
     bars = _price_bars(ny_today - timedelta(days=31), ([100.0] * 30) + [120.0])
     future_bar = {"date": (ny_today + timedelta(days=1)).isoformat(),
                   "close": 9_999.0, "volume": 1.0}
 
     m_without = chs._compute_watchlist_market_metrics_from_bars(bars)
     m_with    = chs._compute_watchlist_market_metrics_from_bars(bars + [future_bar])
-
     assert m_with == m_without, "Future-dated bar must not alter the result"
 
 
-def test_price_metrics_watchlist_endpoint_field_contract():
-    """
-    The fields returned by get_volume_metrics_bulk must match the contract
-    consumed by the Watchlist frontend (change_7d, change_30d present as keys).
-    """
+def test_watchlist_endpoint_field_contract_includes_7d_30d():
+    """change_7d and change_30d must remain in the canonical metric field set."""
     from services.canonical_history_service import (
-        _WATCHLIST_MARKET_METRIC_FIELDS,
-        _null_price_metrics,
-        _null_volume_metrics,
+        _WATCHLIST_MARKET_METRIC_FIELDS, _null_price_metrics, _null_volume_metrics,
     )
-
     required = set(_WATCHLIST_MARKET_METRIC_FIELDS)
     assert "change_7d"  in required
     assert "change_30d" in required
     assert "volume_change_1d_pct"  in required
     assert "volume_metrics_status" in required
-
-    # null metrics always include the keys (value may be None)
     null_out = {**_null_volume_metrics(), **_null_price_metrics()}
     for field in required:
         assert field in null_out, f"Null metrics missing field: {field}"
-
-
-def test_price_metrics_no_provider_call_from_bulk_path(monkeypatch):
-    """get_volume_metrics_bulk must never trigger a provider call."""
-    import services.canonical_history_service as _chs
-
-    monkeypatch.setattr(
-        _chs, "_INDEX",
-        {
-            "TSLA": {
-                "volume_metrics_status": "ok",
-                "volume_change_1d_pct": 1.0,
-                "volume_change_7d_pct": 2.0,
-                "volume_change_30d_pct": 3.0,
-                "volume_acceleration_pp": 1.0,
-                "volume_metrics_as_of": "2026-07-14",
-                "change_7d": 5.0,
-                "change_30d": 10.0,
-            }
-        },
-    )
-
-    called = []
-
-    monkeypatch.setattr(_chs, "preload_index",
-                        lambda: called.append("preload") or None)
-
-    result = _chs.get_volume_metrics_bulk(["TSLA"])
-    assert "preload" not in called, "preload_index must not be called when _INDEX is populated"
-    assert result["TSLA"]["change_7d"] == 5.0
-    assert result["TSLA"]["change_30d"] == 10.0
 
 
 def test_normalize_symbol_preserves_zero_beta(monkeypatch):

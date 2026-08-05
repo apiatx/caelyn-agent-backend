@@ -200,7 +200,7 @@ def classify_append_freshness(base_status: str, newest_bar_date: Optional[str]) 
         return "available_10y_stale_but_usable"
     try:
         newest = datetime.strptime(newest_bar_date[:10], "%Y-%m-%d").date()
-        age_d  = (date.today() - newest).days
+        age_d  = (ny_market_date() - newest).days
         if age_d <= 3:
             return "available_10y_fresh"
         if age_d <= 10:
@@ -316,12 +316,23 @@ def _age_hours(fetched_at: str) -> float:
         return 9999.0
 
 
+def ny_market_date() -> date:
+    """Current date in America/New_York.  Use instead of date.today() on UTC servers.
+
+    The Replit container runs UTC.  date.today() returns the UTC calendar date,
+    which rolls forward at 00:00 UTC — 4–5 hours before the US market date
+    changes.  This helper prevents UTC-midnight from distorting market-session
+    cutoffs, freshness checks, and comparison-close target dates.
+    """
+    return datetime.now(ZoneInfo("America/New_York")).date()
+
+
 def _age_days_since_newest_bar(newest_bar_date: Optional[str]) -> float:
     if not newest_bar_date:
         return 9999.0
     try:
         newest = datetime.strptime(newest_bar_date[:10], "%Y-%m-%d").date()
-        return float((date.today() - newest).days)
+        return float((ny_market_date() - newest).days)
     except Exception:
         return 9999.0
 
@@ -365,8 +376,12 @@ def _finite_float_or_none(value) -> float | None:
 
 
 def _completed_daily_bars(bars: list[dict]) -> list[tuple[str, float | None, float | None]]:
-    """Return canonical daily bars strictly before the current New York date."""
-    ny_today = datetime.now(ZoneInfo("America/New_York")).date()
+    """Return canonical daily bars strictly before the current New York date.
+
+    Uses ny_market_date() so tests can monkeypatch the date cutoff without
+    touching real-clock state.
+    """
+    ny_today = ny_market_date()
     completed: list[tuple[str, float | None, float | None]] = []
     for bar in bars:
         date_raw = str(bar.get("date") or "")[:10]
@@ -596,6 +611,118 @@ def preload_index() -> None:
 
 def get_metadata(symbol: str) -> Optional[dict]:
     return _INDEX.get(symbol.upper())
+
+
+def _select_comparison_closes(
+    completed: list[tuple[str, float | None, float | None]],
+    as_of_date: date,
+    max_gap_days: int = 10,
+) -> dict[str, object]:
+    """
+    Select the 7-day and 30-day calendar-day comparison bar closes from
+    *completed* bars, relative to *as_of_date* (today's NY market date).
+
+    For each lookback window (7 cal days, 30 cal days):
+      target = as_of_date - window_days
+      comparison = most recent bar whose date ≤ target
+
+    A comparison is rejected (None) when the selected bar is more than
+    *max_gap_days* calendar days before the target, which catches materially
+    stale canonical history (e.g. bars frozen 3+ weeks ago) and prevents
+    publishing a confidently wrong percentage.
+
+    Returns:
+      comparison_close_7d,  comparison_date_7d,
+      comparison_close_30d, comparison_date_30d
+    All values may be None when insufficient or stale history.
+    """
+    result: dict[str, object] = {
+        "comparison_close_7d":  None,
+        "comparison_date_7d":   None,
+        "comparison_close_30d": None,
+        "comparison_date_30d":  None,
+    }
+    if not completed:
+        return result
+
+    for label, cal_days in (("7d", 7), ("30d", 30)):
+        target = as_of_date - timedelta(days=cal_days)
+        for bar_date_str, close, _ in reversed(completed):
+            try:
+                bd = date.fromisoformat(bar_date_str)
+            except (ValueError, TypeError):
+                continue
+            if bd > target:
+                continue
+            # Reject if the comparison bar is too far before the target
+            if (target - bd).days > max_gap_days:
+                break
+            if close is not None and close > 0:
+                result[f"comparison_close_{label}"] = close
+                result[f"comparison_date_{label}"]  = bar_date_str
+            break
+    return result
+
+
+def get_comparison_closes_bulk(
+    symbols: list[str],
+    ny_today: date | None = None,
+) -> dict[str, dict[str, object]]:
+    """
+    Return 7D and 30D calendar-day comparison closes for the given symbols.
+
+    These are the *historical denominators* for the Watchlist change_7d and
+    change_30d fields.  The numerator (current displayed price) is supplied
+    by the caller after it resolves the live quote — this function never
+    makes a provider request.
+
+    ny_today: effective New York market date (defaults to current NY date).
+              Pass an explicit value in tests to avoid real-clock dependency.
+
+    Keys per symbol:
+      comparison_close_7d  — close of the most recent session ≤ (ny_today − 7d)
+      comparison_date_7d   — that session's ISO date string
+      comparison_close_30d — close of the most recent session ≤ (ny_today − 30d)
+      comparison_date_30d  — that session's ISO date string
+
+    Any value may be None when:
+      • no canonical bar file exists for the symbol
+      • the bar file has insufficient or materially stale history
+      • the comparison bar's close is missing or non-positive
+    """
+    effective_today = ny_today if ny_today is not None else ny_market_date()
+    if not _INDEX:
+        try:
+            preload_index()
+        except Exception:
+            pass
+
+    _null: dict[str, object] = {
+        "comparison_close_7d":  None,
+        "comparison_date_7d":   None,
+        "comparison_close_30d": None,
+        "comparison_date_30d":  None,
+    }
+    out: dict[str, dict[str, object]] = {}
+    seen: set[str] = set()
+    for raw_sym in symbols:
+        sym = str(raw_sym or "").strip().upper()
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        bar_path = _bar_file(sym)
+        if not bar_path.exists():
+            out[sym] = dict(_null)
+            continue
+        try:
+            with gzip.open(str(bar_path), "rt", encoding="utf-8") as fh:
+                payload = json.loads(fh.read())
+            completed = _completed_daily_bars(payload.get("bars") or [])
+            out[sym] = _select_comparison_closes(completed, effective_today)
+        except Exception as exc:
+            print(f"[CANON_HIST] comparison closes read failed {sym}: {exc}")
+            out[sym] = dict(_null)
+    return out
 
 
 def get_all_status() -> dict:

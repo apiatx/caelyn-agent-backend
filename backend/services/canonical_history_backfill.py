@@ -602,13 +602,18 @@ async def backfill_symbol(
         if meta and meta.get("newest_bar_date"):
             newest   = meta["newest_bar_date"]
             newest_d = datetime.strptime(newest[:10], "%Y-%m-%d").date()
-            days_behind = (date.today() - newest_d).days
+            # Use NY market date, not UTC date.  The Replit container runs UTC;
+            # date.today() would roll forward at 00:00 UTC, 4-5 hours before
+            # the US market date changes, causing spurious append attempts.
+            from services.canonical_history_service import ny_market_date as _ny_date
+            _ny_today   = _ny_date()
+            days_behind = (_ny_today - newest_d).days
             if days_behind <= 0:
                 return {"symbol": sym, "action": "skipped_current",
                         "bar_count": meta.get("bar_count", 0)}
             # 1 request: start = newest - 2 days (2-day overlap inside this single request)
             start_date = (newest_d - timedelta(days=2)).isoformat()
-            end_date   = date.today().isoformat()
+            end_date   = _ny_today.isoformat()
             new_bars   = await _fetch_tradier_history_managed(sym, start_date, end_date)
             if new_bars:
                 updated = append_bars(sym, new_bars, "tradier")
