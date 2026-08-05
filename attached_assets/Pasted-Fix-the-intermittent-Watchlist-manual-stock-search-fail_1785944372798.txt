@@ -1,0 +1,251 @@
+Fix the intermittent Watchlist manual stock-search failure in the CaelynAI backend.
+
+The user reports that searching through the Watchlist manual stock-add bar succeeds approximately 1 out of 5 times and otherwise fails to load stock results.
+
+This is a focused reliability correction. Preserve the existing Watchlist architecture, canonical security identities, endpoint, provider, membership path, caches, and add/delete contracts.
+
+## Operating rules
+
+Read and follow the local `AGENTS.md` before doing anything.
+
+Work only in `/home/runner/workspace` on the existing local `main` branch.
+
+Before editing:
+
+1. Confirm `git rev-parse --show-toplevel` is `/home/runner/workspace`.
+2. Confirm `git branch --show-current` is `main`.
+3. Run `git status -sb`.
+4. Preserve all pre-existing work and unrelated dirty files.
+5. Refresh remote tracking only if allowed by `AGENTS.md`.
+6. Confirm local `main` is not behind or diverged from `origin/main`.
+
+Do not push, pull, merge, rebase, stash, reset, clean, clone, create a branch, create a worktree, or use another repository.
+
+Local Replit files are the primary source of truth. GitHub is only reference evidence.
+
+## Known GitHub evidence to verify locally
+
+The current GitHub backup appears to have:
+
+* `GET /api/watchlist/security-search` in `backend/services/watchlist_router.py`
+* `FMPProvider.search_securities()` in `backend/data/fmp_provider.py`
+* parallel calls to FMP:
+
+  * `/stable/search-symbol`
+  * `/stable/search-name`
+* a 10-second `httpx.AsyncClient` timeout
+* canonical registry construction already offloaded from the event loop
+* provider exceptions/non-2xx responses converted into empty raw results
+* an endpoint exception response containing:
+
+  * `results: []`
+  * `count: 0`
+  * `error: "provider_error"`
+
+Do not assume the local code matches GitHub. Verify every point directly.
+
+## Scope
+
+Expected production files:
+
+* `backend/data/fmp_provider.py`
+* `backend/services/watchlist_router.py`
+
+Modify fewer files if possible.
+
+Tests may be added or updated in the existing appropriate Watchlist/FMP test file.
+
+Do not modify:
+
+* Watchlist membership persistence
+* the canonical security adapter’s identity rules
+* single-ticker add/delete behavior
+* any frontend code
+* unrelated FMP methods
+* general FMP caching infrastructure
+
+No new endpoint, provider, cache, database object, dependency, scheduler, worker, fallback symbol directory, or source of truth.
+
+## Phase 1 — trace and prove the failure
+
+Trace the complete existing path:
+
+1. `/api/watchlist/security-search`
+2. `FMPProvider.search_securities`
+3. both FMP requests
+4. response parsing
+5. canonical registry construction
+6. canonical result normalization
+7. endpoint serialization
+
+Inspect all consumers of `search_securities()` before changing its behavior.
+
+Reproduce the issue read-only without starting the full application if startup can trigger background writes.
+
+Test representative searches:
+
+* `NVDA`
+* `Nvidia`
+* `MSFT`
+* `CRWV`
+* `TRT`
+* `Soitec`
+* `000660`
+
+Run:
+
+* sequential searches
+* repeated searches with uncached query variations where practical
+* a small concurrent burst
+* mocked provider timeout
+* one FMP endpoint succeeding while the other fails
+* both FMP endpoints failing
+* both FMP endpoints returning valid empty arrays
+
+Record for each request:
+
+* HTTP status
+* elapsed milliseconds
+* result count
+* response error field
+* whether `search-symbol` succeeded
+* whether `search-name` succeeded
+* canonical registry elapsed time
+
+Do not log the API key, authorization headers, database URL, or complete private provider payloads.
+
+## Required behavior
+
+A legitimate zero-match search and a provider failure must no longer be indistinguishable.
+
+Preserve these semantics:
+
+### Valid zero result
+
+When at least one FMP search endpoint successfully returns a valid response and the merged result is genuinely empty:
+
+* return a successful search response
+* `results` is empty
+* `count` is zero
+* do not report a provider failure
+
+### Partial provider success
+
+When one FMP search endpoint fails but the other succeeds:
+
+* preserve and return the successful endpoint’s results
+* do not discard partial results
+* do not fail the entire request
+* log concise diagnostics for the failed side
+
+### Total provider failure
+
+When both FMP search requests time out, raise, return non-success statuses, or return unusable payloads:
+
+* do not silently convert the incident into a valid empty search
+* ensure the route exposes a real, machine-detectable provider failure
+* use the existing `error: "provider_error"` contract where practical
+
+Audit all consumers before deciding HTTP status behavior.
+
+Preferred behavior, provided no existing consumer requires HTTP 200 for provider failure:
+
+* return HTTP 503
+* include a compact JSON error response
+* do not expose provider bodies or secrets
+
+If another proven consumer requires the existing HTTP 200 contract, preserve HTTP 200 but ensure `error: "provider_error"` is reliably present whenever both provider paths fail. Explain that compatibility decision in the report.
+
+Do not introduce a generalized status/provenance framework.
+
+## Timeout behavior
+
+Do not blindly increase every timeout.
+
+The backend provider timeout must remain bounded. Verify whether 10 seconds is appropriate based on observed behavior.
+
+The frontend proxy will be corrected separately to allow more time than the backend provider deadline. The backend must return promptly and deterministically once both provider calls have completed or failed.
+
+Keep the two independent FMP calls parallel.
+
+## Diagnostics
+
+Add narrowly scoped structured logging sufficient to distinguish:
+
+* valid empty result
+* partial provider failure
+* total provider failure
+* provider timeout
+* non-2xx response
+* invalid JSON/response shape
+* canonical registry failure
+* total elapsed time
+
+Do not emit a log per normal result row.
+
+## Tests
+
+Add deterministic tests covering at minimum:
+
+1. both provider endpoints succeed with results
+2. exact ticker result ranks before prefix/name matches
+3. one provider endpoint fails and the other succeeds
+4. both provider endpoints time out
+5. both provider endpoints return non-2xx
+6. both provider endpoints return valid empty arrays
+7. canonical registry failure still allows FMP fallback canonicalization
+8. endpoint provider failure is distinguishable from a valid zero result
+9. no Watchlist membership or database mutation occurs during search
+
+Mock external HTTP requests. Do not make the test suite dependent on live FMP availability.
+
+Run the focused tests, relevant Watchlist tests, and `git diff --check`.
+
+## Validation
+
+After the fix, run a read-only reliability check against the available local endpoint:
+
+* at least 20 sequential searches
+* a controlled burst of at least 10 searches
+* report success count, failures, p50, p95, and maximum latency
+* report any valid zero-result searches separately from provider failures
+
+Do not claim success solely because one request worked.
+
+Acceptance criteria:
+
+* valid searches do not intermittently become indistinguishable empty results
+* partial FMP success remains usable
+* total provider failure is explicit
+* no event-loop blocking is introduced
+* no new provider calls beyond the existing two search calls
+* no Watchlist membership changes
+* existing canonical ticker output is preserved
+
+## Commit and report
+
+Stage only exact task files. Never use `git add .` or `git add -A`.
+
+Create exactly one descriptive local commit after validation succeeds.
+
+Do not push.
+
+Overwrite `/home/runner/workspace/.opencode-reports/latest.md` with:
+
+* task requested
+* completion status
+* proven root cause
+* whether local code differed from GitHub
+* complete traced search path
+* exact files changed
+* exact behavior changed
+* behavior deliberately preserved
+* test commands and results
+* reliability-check results and latency distribution
+* provider, cache, database, and runtime effects
+* remaining risks
+* final `git status -sb`
+* commit SHA and message
+* complete committed diff
+
+Stop after the local commit and report.
