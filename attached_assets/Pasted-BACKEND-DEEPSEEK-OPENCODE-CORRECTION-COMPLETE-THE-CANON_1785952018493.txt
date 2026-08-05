@@ -1,0 +1,434 @@
+BACKEND DEEPSEEK / OPENCODE CORRECTION — COMPLETE THE CANONICAL HIERARCHY CONTRACT BEFORE FRONTEND WORK
+
+Work only in `/home/runner/workspace` on the existing local `main` branch and follow `AGENTS.md` exactly.
+
+The preceding implementation is in local commit:
+
+`72960e96`
+
+Do not discard or broadly rewrite that implementation. Audit it against the live Replit files, correct only the contract gaps described below, run focused and relevant broader tests, and create exactly one additional local corrective commit. Do not push.
+
+The live Replit workspace is authoritative. GitHub may not contain commit `72960e96`.
+
+## Background
+
+The previous task added:
+
+* `parent_theme_id`
+* `rollup_sector_ids`
+* hierarchy validation
+* parent-theme classification promotions
+* Copper and Rare Earth display-label corrections
+* additive Watchlist fields:
+
+  * `sector_id`
+  * `primary_theme_id`
+  * `theme_ids`
+  * `subtheme_ids`
+
+The architecture direction is correct, but the frontend must not begin until the following four contracts are proven and corrected where necessary.
+
+---
+
+# Contract 1 — hierarchy metadata must exist on the canonical shared frontend response
+
+The frontend currently reuses the canonical React Query request for:
+
+```text
+GET /api/themes/relative-strength?timeframe=1D&classification=all
+```
+
+The previous report states that `parent_theme_id` and `rollup_sector_ids` were added to:
+
+```text
+GET /api/themes/list
+```
+
+That is not sufficient by itself.
+
+## Required audit
+
+Trace the actual response construction for:
+
+* `/api/themes/list`
+* `/api/themes/relative-strength`
+* `/api/themes/relative-strength/refresh`
+
+Inspect the row builder in the relative-strength service rather than assuming registry metadata is automatically retained.
+
+Prove whether every row returned by `/api/themes/relative-strength?...classification=all` currently includes:
+
+```json
+{
+  "theme_id": "gold",
+  "classification": "sub_theme",
+  "parent_theme_id": "metals_mining",
+  "rollup_sector_ids": ["materials"]
+}
+```
+
+## Required correction
+
+If either hierarchy field is absent from relative-strength rows:
+
+* add both fields additively through the existing relative-strength row-building path
+* source them only from the existing canonical `THEME_RS_UNIVERSE` / enriched-universe metadata
+* preserve all existing endpoint URLs, query parameters, cache keys, calculations, and response fields
+* do not create a new endpoint
+* do not require the frontend to issue a second taxonomy request
+* do not alter relative-strength calculations, baskets, rankings, curves, or cache behavior
+
+Both normal and refresh endpoints must expose the same metadata because they share the same canonical service contract.
+
+## Required tests
+
+Prove that `/api/themes/relative-strength` rows for at least these nodes contain the new fields:
+
+* `metals_mining`
+* `gold`
+* `semiconductors`
+* `memory_storage`
+* `oil_gas`
+* `lng_gas`
+* `clean_energy`
+* `datacenter_infra`
+
+Also prove existing response fields remain present.
+
+---
+
+# Contract 2 — every non-sector node needs an effective sector rollup
+
+The preceding report says only seven nodes received `rollup_sector_ids`:
+
+* five promoted parent themes
+* Clean Energy
+* Data Center Infrastructure
+
+That leaves descendant subthemes potentially without their own rollup-sector metadata.
+
+This creates a functional hole:
+
+* Gold belongs under Metals & Mining.
+* Metals & Mining rolls up to Materials.
+* A stock may have only `theme_ids=["gold"]`.
+* A Materials filter matching only IDs directly listed under Materials would not match that stock.
+
+The frontend must not need undocumented label heuristics or hidden inheritance assumptions to make basic sector filtering work.
+
+## Required canonical rule
+
+Every node with classification `theme` or `sub_theme` must expose a non-empty effective `rollup_sector_ids` list unless it is explicitly and intentionally market-wide.
+
+Use this resolution order:
+
+1. Explicit `rollup_sector_ids` on the node.
+2. Otherwise, the node’s valid canonical `parent_sector`.
+3. For a subtheme with `parent_theme_id`, include the parent theme’s effective rollups as inherited values.
+4. Preserve any valid explicit cross-sector additions.
+
+The final exposed list must be:
+
+* canonical sector IDs
+* deduplicated
+* deterministic
+* cycle-safe
+* never display labels
+
+This can be represented explicitly in every registry node or computed through one canonical helper used by response serialization. Do not create parallel implementations in multiple endpoints.
+
+Prefer keeping `rollup_sector_ids` semantically complete in the canonical registry or a single canonical registry helper. Do not make the frontend reconstruct registry semantics.
+
+## Required examples
+
+These effective results must be proven:
+
+```text
+metals_mining          -> ["materials"]
+gold                   -> includes "materials"
+silver                 -> includes "materials"
+copper_miners          -> includes "materials"
+rare_earth             -> includes "materials"
+
+semiconductors         -> includes "technology"
+memory_storage         -> includes "technology"
+semicap_equipment      -> includes "technology"
+substrates_packaging   -> includes "technology"
+
+oil_gas                -> includes "energy"
+lng_gas                -> includes "energy"
+oil_services           -> includes "energy"
+
+software               -> includes "technology"
+cloud_software         -> includes "technology"
+cybersecurity          -> includes "technology"
+
+defense                -> includes "industrials"
+drones                 -> includes "industrials"
+```
+
+Preserve deliberate cross-sector values for Clean Energy and Data Center Infrastructure.
+
+## Validation additions
+
+Extend hierarchy validation to prove:
+
+1. Every non-sector, non-market-wide node has at least one effective rollup sector.
+2. Every effective rollup ID references a sector-classified registry node.
+3. Parent-theme inheritance cannot recurse through a cycle.
+4. Child nodes preserve explicit additional sector rollups.
+5. No display labels appear in `rollup_sector_ids`.
+
+---
+
+# Contract 3 — Watchlist identity fields must exist on every production row path
+
+The preceding report says the new fields were added to the Watchlist “skeleton builder.”
+
+The frontend normally consumes rows from:
+
+```text
+analysis.sections[].tickers[]
+```
+
+when saved analysis sections exist. It may consume a skeleton/fallback path only under other conditions.
+
+## Required audit
+
+Trace every production Watchlist response path that can populate:
+
+```text
+analysis.sections[].tickers[]
+```
+
+At minimum inspect:
+
+* the normal saved-analysis/enrichment path
+* the skeleton path
+* cached/LKG response paths
+* any legacy section normalization path still reachable
+* the exact endpoint used by the current Watchlist page
+
+Do not infer coverage merely because one helper is shared. Prove it from the call graph and response fixtures.
+
+## Required row contract
+
+Every ticker row returned to the Watchlist frontend, regardless of production path, must additively expose:
+
+```json
+{
+  "sector_id": "technology",
+  "primary_theme_id": "semiconductors",
+  "theme_ids": ["semiconductors", "memory_storage"],
+  "subtheme_ids": ["memory_storage"]
+}
+```
+
+Use the exact implemented field names above unless existing code already standardizes an equivalent canonical name.
+
+Requirements:
+
+* `primary_theme_id` must be the existing canonical resolver result.
+* `theme_ids` must include the primary theme when present.
+* `theme_ids` must include every currently active additional theme membership.
+* `theme_ids` must be deduplicated and deterministic.
+* `subtheme_ids` must be the subset of active IDs whose registry classification is `sub_theme`.
+* Removed membership rows must not appear.
+* Missing mappings must produce null/empty values, never guessed values.
+* Existing `canonical_theme_id` and `canonical_theme_name` must remain unchanged for compatibility.
+* Do not mutate authoritative Watchlist membership.
+* Do not infer memberships from `proxy_symbols`, `candidate_symbols`, ETF holdings, display labels, section titles, or substring matching.
+
+## Efficiency requirement
+
+Loading active membership records once per Watchlist response is acceptable.
+
+Do not:
+
+* query Neon separately for every ticker
+* rebuild the enriched universe for every row
+* call providers
+* call an LLM
+* add a new cache
+* add a new endpoint
+
+## Required tests
+
+Create fixtures proving the fields exist on:
+
+1. A normal saved-analysis section row.
+2. A skeleton/fallback section row.
+3. A row loaded from any reachable cached response path.
+4. A ticker with only a primary parent theme.
+5. A ticker with a primary theme and one additional subtheme.
+6. A ticker with multiple active memberships.
+7. A ticker with an `action="remove"` membership row.
+8. An unmapped ticker.
+
+The normal saved-analysis test is mandatory. A skeleton-only test is not sufficient.
+
+---
+
+# Contract 4 — `sector_id` must be actual company sector identity
+
+`sector_id` must answer:
+
+> What canonical economic sector is this company classified in?
+
+It must not answer:
+
+> Which sector does the company’s primary investment theme roll up to?
+
+Those are different concepts.
+
+## Required audit
+
+Identify the existing authoritative company-sector value available on Watchlist rows or saved CSV/profile data, including likely variants such as:
+
+* `sector`
+* `Sector`
+* canonical profile-sector fields already merged onto rows
+
+Trace its source and normalization.
+
+## Required sector normalization
+
+Add or reuse one deterministic normalization helper mapping existing company-sector labels to canonical sector IDs:
+
+```text
+Communication Services -> communication_services
+Consumer Cyclical / Consumer Discretionary -> consumer_discretionary
+Consumer Defensive / Consumer Staples -> consumer_staples
+Energy -> energy
+Financial Services / Financials -> financials
+Healthcare / Health Care -> healthcare
+Industrials -> industrials
+Basic Materials / Materials -> materials
+Real Estate -> real_estate
+Technology -> technology
+Utilities -> utilities
+```
+
+Use actual repository/provider label variants discovered during the audit. Do not invent broad fuzzy matching when an exact normalized alias map is sufficient.
+
+## Critical prohibition
+
+Never derive `sector_id` from:
+
+* `primary_theme_id`
+* `parent_theme_id`
+* `parent_sector`
+* `rollup_sector_ids`
+* theme membership
+* theme basket membership
+
+If the actual company sector is unavailable, return:
+
+```json
+"sector_id": null
+```
+
+Do not guess.
+
+## Required conflict test
+
+Add a fixture where:
+
+* the company’s actual sector is one canonical sector
+* its primary or additional theme rolls up to another sector
+
+Prove that:
+
+* `sector_id` remains the actual company sector
+* `theme_ids` contains the theme
+* sector ecosystem filtering can later use the theme’s `rollup_sector_ids` independently
+
+Example shape:
+
+```json
+{
+  "sector_id": "energy",
+  "primary_theme_id": "datacenter_infra",
+  "theme_ids": ["datacenter_infra"]
+}
+```
+
+The exact ticker need not be a live company; a deterministic fixture is preferred.
+
+---
+
+# Preserve the previous implementation
+
+Do not reverse the following unless a failing test proves a concrete defect:
+
+* existing frozen IDs
+* `parent_theme_id`
+* hierarchy validation
+* Metals & Mining promotion
+* Semiconductors promotion
+* Oil & Gas promotion
+* Software promotion
+* Defense promotion
+* Copper display label
+* Rare Earth Elements display label
+* preserved aliases
+* existing additional-membership persistence
+* existing primary-theme resolver precedence
+* existing Watchlist authoritative ticker membership
+* existing relative-strength calculations
+* existing cache and invalidation behavior
+* existing endpoint URLs
+
+Do not attach Space to Defense or Photonics to Semiconductors in this correction.
+
+---
+
+# Test and validation requirements
+
+Run:
+
+1. Focused hierarchy tests.
+2. Focused Themes endpoint serialization tests.
+3. Focused Watchlist row-contract tests.
+4. Existing relevant Themes tests.
+5. Existing relevant Watchlist tests.
+6. `git diff --check`.
+
+A known unrelated test failure is not automatically acceptable. Re-run it against the parent commit or otherwise provide concrete evidence that it also fails without the corrective diff.
+
+Do not merely state that it is pre-existing.
+
+Do not start the full app solely for validation if startup work could mutate persistent state.
+
+---
+
+# Completion requirements
+
+If the four contracts are satisfied:
+
+* create exactly one additional local commit
+* do not amend `72960e96`
+* do not push
+* overwrite `/home/runner/workspace/.opencode-reports/latest.md`
+
+The report must include:
+
+1. Current branch and starting commit.
+2. Exact files inspected.
+3. Whether relative-strength initially exposed both hierarchy fields.
+4. Example relative-strength response rows after correction.
+5. How effective rollup sectors are computed.
+6. Proof that Gold, Copper, Memory & Storage, and LNG inherit correct sectors.
+7. Every Watchlist row-building path found.
+8. Proof that normal saved-analysis rows and skeleton rows both expose identity fields.
+9. Exact source used for actual `sector_id`.
+10. Proof `sector_id` is never inferred from theme hierarchy.
+11. Active-membership filtering behavior, including removed rows.
+12. Exact files changed.
+13. Tests and results.
+14. `git diff --check` result.
+15. Final `git status -sb`.
+16. New corrective commit SHA and message.
+17. Complete diff for the new corrective commit only.
+
+If any contract cannot be satisfied through the existing architecture without a new endpoint, persistence path, or provider call, stop and report the precise blocker instead of inventing an alternative.

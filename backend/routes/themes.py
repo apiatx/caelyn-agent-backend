@@ -27,6 +27,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
 from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as THEME_RS_UNIVERSE
+from services.theme_rs_universe import get_effective_rollup_sector_ids as _get_effective_rollup
 
 router = APIRouter(prefix="/api/themes", tags=["themes"])
 
@@ -185,8 +186,11 @@ async def themes_list(
             "classification":      meta.get("classification", "theme"),
             "parent_sector":       meta.get("parent_sector"),
             # Hierarchy v2 — additive fields (None when not applicable)
+            # rollup_sector_ids: always the EFFECTIVE set (explicit + inherited
+            # from parent_sector / parent_theme_id chain) so callers never need
+            # to reconstruct registry semantics client-side.
             "parent_theme_id":     meta.get("parent_theme_id"),
-            "rollup_sector_ids":   meta.get("rollup_sector_ids", []),
+            "rollup_sector_ids":   _get_effective_rollup(theme_id, THEME_RS_UNIVERSE),
             "proxy_type":          meta["proxy_type"],
             "proxy_symbols":       meta["proxy_symbols"],
             "candidate_symbols":   meta.get("candidate_symbols", []),

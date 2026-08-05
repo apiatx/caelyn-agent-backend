@@ -1169,6 +1169,37 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
 
     now_str = datetime.now(timezone.utc).isoformat() + "Z"
 
+    # ── Pre-load theme registry + override map (once per request) ────────────
+    # Hoisted out of the skeleton branch so ALL row paths — normal, missing-
+    # append, uncategorized reclassification, and skeleton — share the same
+    # override map and sector-normalization helper.  No per-row Neon calls.
+    try:
+        from services.theme_rs_universe import (
+            THEME_RS_UNIVERSE          as _wl_trs_uni,
+            normalize_company_sector_to_id as _wl_norm_sector,
+        )
+    except Exception:
+        _wl_trs_uni   = {}
+        _wl_norm_sector = lambda x: None  # type: ignore[assignment]
+
+    _wl_override_map: dict[str, list[str]] = {}
+    try:
+        from data.pg_storage import get_theme_ticker_overrides as _wl_get_overrides
+        for _wl_ov_row in (_wl_get_overrides() or []):
+            if _wl_ov_row.get("action") != "add":
+                continue
+            _wl_ov_sym = (_wl_ov_row.get("symbol") or "").upper()
+            _wl_ov_tid = (_wl_ov_row.get("theme_id") or "").strip()
+            if _wl_ov_sym and _wl_ov_tid:
+                _wl_override_map.setdefault(_wl_ov_sym, [])
+                if _wl_ov_tid not in _wl_override_map[_wl_ov_sym]:
+                    _wl_override_map[_wl_ov_sym].append(_wl_ov_tid)
+    except Exception as _wl_ov_err:
+        print(
+            f"[WATCHLIST_ENRICH] theme_ticker_overrides pre-load failed (non-fatal): "
+            f"{_wl_ov_err}"
+        )
+
     def _build_ticker_row(sym: str, base_row: dict) -> dict:
         """Build one enriched ticker row from quote + CSV data."""
         sym = sym.strip().upper()
@@ -1418,6 +1449,46 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         enriched["stage2_breakout"] = _stage   # backward-compat field
         enriched["stage_analysis"]  = _stage   # canonical alias (same object)
 
+        # ── Hierarchy identity fields — Contracts 3 & 4 ──────────────────────
+        # Applied unconditionally so every row path (normal, missing-append,
+        # skeleton, uncategorized reclassification) carries the same fields.
+        #
+        # Contract 3 — primary_theme_id / theme_ids / subtheme_ids
+        try:
+            _id_primary = (
+                enriched.get("canonical_theme_id")
+                or enriched.get("primary_theme_id")
+            )
+            _id_extras  = [
+                t for t in _wl_override_map.get(sym, []) if t != _id_primary
+            ]
+            _id_all     = ([_id_primary] if _id_primary else []) + _id_extras
+            _id_subs    = [
+                t for t in _id_all
+                if (_wl_trs_uni.get(t) or {}).get("parent_theme_id")
+            ]
+            enriched["primary_theme_id"] = _id_primary
+            enriched["theme_ids"]        = _id_all
+            enriched["subtheme_ids"]     = _id_subs
+        except Exception:
+            enriched.setdefault("primary_theme_id", None)
+            enriched.setdefault("theme_ids", [])
+            enriched.setdefault("subtheme_ids", [])
+
+        # Contract 4 — sector_id from actual company sector, never from theme
+        # Source priority: fund_snap "sector" field → CSV "Sector" / "sector"
+        # Normalised to a canonical sector ID; null when unavailable or unknown.
+        try:
+            _id_sector_raw = (
+                _fund_snap.get("fields", {}).get("sector")
+                or csv_row.get("Sector")
+                or csv_row.get("sector")
+                or ""
+            )
+            enriched["sector_id"] = _wl_norm_sector(_id_sector_raw) or None
+        except Exception:
+            enriched.setdefault("sector_id", None)
+
         return enriched
 
     # ── FALLBACK: no sections yet (analysis pending / never completed) ─────────
@@ -1434,27 +1505,11 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             build_theme_resolution_context as _skl_build_ctx,
             resolve_primary_theme_for_ticker as _skl_resolve_theme,
         )
-        from services.theme_rs_universe import THEME_RS_UNIVERSE as _skl_trs_uni
         _skl_theme_ctx = _skl_build_ctx()
 
-        # ── Batch-load all theme_ticker_overrides once for the whole pass ────
-        # Used to populate theme_ids / subtheme_ids per ticker.
-        # Populated from existing active "add" rows only — never from ETF proxies,
-        # candidate baskets, labels, or substring matching.
-        _skl_override_map: dict[str, list[str]] = {}
-        try:
-            from data.pg_storage import get_theme_ticker_overrides as _skl_get_overrides
-            for _ov_row in (_skl_get_overrides() or []):
-                if _ov_row.get("action") != "add":
-                    continue
-                _ov_sym = (_ov_row.get("symbol") or "").upper()
-                _ov_tid = (_ov_row.get("theme_id") or "").strip()
-                if _ov_sym and _ov_tid:
-                    _skl_override_map.setdefault(_ov_sym, [])
-                    if _ov_tid not in _skl_override_map[_ov_sym]:
-                        _skl_override_map[_ov_sym].append(_ov_tid)
-        except Exception as _skl_ov_err:
-            print(f"[WATCHLIST_SKL] theme_ticker_overrides unavailable (non-fatal): {_skl_ov_err}")
+        # Identity fields (sector_id, primary_theme_id, theme_ids, subtheme_ids)
+        # are now injected inside _build_ticker_row using the shared _wl_override_map
+        # and _wl_trs_uni pre-loaded above.  No per-ticker pre-computation needed here.
 
         skeleton: list[dict] = []
         for sym in tickers:
@@ -1468,24 +1523,6 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             _canon_theme_id = _theme_res["theme_id"]
             _theme_src      = _theme_res["source"]
 
-            # ── Additive hierarchy identifiers ────────────────────────────────
-            # sector_id: canonical sector this ticker's primary theme belongs to.
-            _skl_sector_id = (_skl_trs_uni.get(_canon_theme_id) or {}).get("parent_sector")
-            # theme_ids: primary + any additional "add" memberships from overrides.
-            # Sourced exclusively from existing canonical resolver + active override records.
-            _skl_extra_tids = [
-                t for t in _skl_override_map.get(_s, []) if t != _canon_theme_id
-            ]
-            _skl_all_tids = (
-                [_canon_theme_id] if _canon_theme_id else []
-            ) + _skl_extra_tids
-            # subtheme_ids: those theme_ids whose registry node has a parent_theme_id
-            # (i.e. they are positioned below a parent theme in the hierarchy).
-            _skl_subtheme_ids = [
-                t for t in _skl_all_tids
-                if (_skl_trs_uni.get(t) or {}).get("parent_theme_id")
-            ]
-
             row = _build_ticker_row(_s, {
                 "symbol":               _s,
                 "catalyst":             None,
@@ -1494,13 +1531,8 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
                 "conviction":           None,
                 "theme":                _canon_theme,
                 "canonical_theme_name": _canon_theme,
-                "canonical_theme_id":   _canon_theme_id,   # primary_theme_id equivalent
+                "canonical_theme_id":   _canon_theme_id,
                 "theme_source":         _theme_src,
-                # ── Hierarchy v2 fields ───────────────────────────────────────
-                "sector_id":        _skl_sector_id,
-                "primary_theme_id": _canon_theme_id,
-                "theme_ids":        _skl_all_tids,
-                "subtheme_ids":     _skl_subtheme_ids,
             })
             skeleton.append(row)
 
@@ -1647,11 +1679,20 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
                 if _mapping:
                     _tgt_name, _tgt_id = _mapping
                     _tgt_name = _SECTION_ALIAS_MAP.get(_tgt_name, _tgt_name)
+                    # Re-compute identity fields when canonical_theme_id changes.
+                    # sector_id is UNCHANGED — it reflects the actual company sector,
+                    # not the theme assignment, so it must not be re-derived here.
+                    _unc_extra  = [t for t in _wl_override_map.get(_sym, []) if t != _tgt_id]
+                    _unc_all    = ([_tgt_id] if _tgt_id else []) + _unc_extra
+                    _unc_subs   = [t for t in _unc_all if (_wl_trs_uni.get(t) or {}).get("parent_theme_id")]
                     _enriched_row = {
                         **_row,
                         "canonical_theme_name": _tgt_name,
                         "canonical_theme_id":   _tgt_id,
                         "theme_source":         "industry_fallback",
+                        "primary_theme_id":     _tgt_id,
+                        "theme_ids":            _unc_all,
+                        "subtheme_ids":         _unc_subs,
                     }
                     if _tgt_name in _sec_title_idx:
                         _i = _sec_title_idx[_tgt_name]

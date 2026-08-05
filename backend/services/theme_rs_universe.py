@@ -891,6 +891,135 @@ ALL_CANDIDATE_SYMBOLS: list[str] = sorted(
 )
 
 
+# ── Canonical sector-ID normalization ─────────────────────────────────────────
+# Maps the provider label strings that FMP / Finnhub / CSV emit (e.g. "Consumer
+# Cyclical", "Basic Materials") to the canonical sector IDs used in the registry.
+# Add new variants here whenever a new data-source spelling is discovered.
+_SECTOR_LABEL_TO_ID: dict[str, str] = {
+    # Technology
+    "technology":                "technology",
+    "tech":                      "technology",
+    "information technology":    "technology",
+    # Materials
+    "basic materials":           "materials",
+    "materials":                 "materials",
+    # Energy
+    "energy":                    "energy",
+    # Industrials
+    "industrials":               "industrials",
+    "industrial":                "industrials",
+    # Financials
+    "financials":                "financials",
+    "financial services":        "financials",
+    "financial":                 "financials",
+    # Healthcare
+    "healthcare":                "healthcare",
+    "health care":               "healthcare",
+    # Utilities
+    "utilities":                 "utilities",
+    "utility":                   "utilities",
+    # Real estate
+    "real estate":               "real_estate",
+    "real_estate":               "real_estate",
+    # Communication services
+    "communication services":    "communication_services",
+    "communication_services":    "communication_services",
+    "communication":             "communication_services",
+    # Consumer discretionary (FMP emits "Consumer Cyclical")
+    "consumer cyclical":         "consumer_discretionary",
+    "consumer discretionary":    "consumer_discretionary",
+    "consumer_discretionary":    "consumer_discretionary",
+    # Consumer staples (FMP emits "Consumer Defensive")
+    "consumer defensive":        "consumer_staples",
+    "consumer staples":          "consumer_staples",
+    "consumer_staples":          "consumer_staples",
+}
+
+
+def normalize_company_sector_to_id(label: str | None) -> str | None:
+    """
+    Map a raw company-sector label (as returned by FMP / Finnhub / CSV) to a
+    canonical sector ID from the registry.  Returns None when the label is
+    blank or unrecognised — never falls back to a theme-derived value.
+
+    Examples:
+        "Technology"          → "technology"
+        "Consumer Cyclical"   → "consumer_discretionary"
+        "Basic Materials"     → "materials"
+        "Consumer Defensive"  → "consumer_staples"
+        ""                    → None
+        "Widget Sector XYZ"   → None  (unknown label, not guessed)
+    """
+    if not label:
+        return None
+    return _SECTOR_LABEL_TO_ID.get(label.strip().lower())
+
+
+def get_effective_rollup_sector_ids(
+    theme_id: str,
+    registry: "dict[str, dict] | None" = None,
+    _visited: "frozenset[str] | None" = None,
+) -> list[str]:
+    """
+    Compute the effective rollup_sector_ids for any registry node.
+
+    Resolution order (first available wins; all are merged without duplicates):
+      1. Explicit ``rollup_sector_ids`` on the node.
+      2. Node's ``parent_sector`` (when it resolves to a sector-classified node).
+      3. Inherited effective rollups from the parent theme (via ``parent_theme_id``).
+
+    Sectors themselves return [] — they have no rollup.
+    Cycle-safe: a visited-node guard prevents infinite recursion.
+
+    This is the ONE canonical implementation used by all serialization paths
+    (RS endpoint rows, /list endpoint, watchlist rows).  Do not implement
+    rollup resolution anywhere else.
+    """
+    if registry is None:
+        registry = THEME_RS_UNIVERSE
+    if _visited is None:
+        _visited = frozenset()
+
+    if theme_id in _visited:
+        return []   # cycle guard
+
+    meta = registry.get(theme_id)
+    if not meta:
+        return []
+
+    if meta.get("classification") == "sector":
+        return []   # sectors don't roll up to themselves
+
+    _visited = _visited | {theme_id}
+
+    seen: set[str] = set()
+    result: list[str] = []
+
+    # 1. Explicit rollup_sector_ids
+    for sid in (meta.get("rollup_sector_ids") or []):
+        if sid not in seen:
+            result.append(sid)
+            seen.add(sid)
+
+    # 2. parent_sector — add if it resolves to a sector-classified node
+    ps = meta.get("parent_sector")
+    if ps and ps not in seen:
+        ps_meta = registry.get(ps)
+        if ps_meta and ps_meta.get("classification") == "sector":
+            result.append(ps)
+            seen.add(ps)
+
+    # 3. Inherit from parent theme (via parent_theme_id)
+    ptid = meta.get("parent_theme_id")
+    if ptid:
+        for sid in get_effective_rollup_sector_ids(ptid, registry, _visited):
+            if sid not in seen:
+                result.append(sid)
+                seen.add(sid)
+
+    return result
+
+
 def validate_theme_hierarchy(
     registry: "dict[str, dict] | None" = None,
 ) -> list[str]:
@@ -992,6 +1121,25 @@ def validate_theme_hierarchy(
         if alias not in node_aliases:
             errors.append(
                 f"{owning_tid}: required backward-compat alias {alias!r} is missing"
+            )
+
+    # ── 9: every non-sector node with a parent_sector must have ≥1 effective rollup ─
+    # Sectors themselves are excluded (they ARE the rollup target, not a rollup
+    # source).  Nodes with classification="sector" or with no parent_sector at all
+    # (market-wide nodes like some custom themes) are also excluded from this check.
+    for tid, meta in registry.items():
+        if meta.get("classification") == "sector":
+            continue
+        if not meta.get("parent_sector"):
+            # Market-wide themes with no declared sector affiliation are exempt.
+            continue
+        effective = get_effective_rollup_sector_ids(tid, registry)
+        if not effective:
+            errors.append(
+                f"{tid}: non-sector node has parent_sector "
+                f"{meta['parent_sector']!r} but get_effective_rollup_sector_ids() "
+                f"returned [] — check explicit rollup_sector_ids / parent_sector / "
+                f"parent_theme_id chain"
             )
 
     return errors

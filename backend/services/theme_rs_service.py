@@ -56,6 +56,9 @@ from services.theme_merge_layer import (
     ENRICHED_ALL_PROXY_SYMBOLS as ALL_PROXY_SYMBOLS,
     ENRICHED_ALL_CANDIDATE_SYMBOLS as ALL_CANDIDATE_SYMBOLS,
 )
+from services.theme_rs_universe import (
+    get_effective_rollup_sector_ids as _get_effective_rollup,
+)
 from services.sector_rotation.analytics import _pct_change, _ytd_change, _sma
 from services.sector_rotation.providers import (
     fetch_etf_history,          # yfinance executor (emergency fallback)
@@ -527,6 +530,12 @@ def _validate_basket_hashes(
         # are reflected immediately without requiring a cache bust or LKG rewrite.
         live_display = meta.get("display_name") or row.get("display_name", "")
 
+        # Hierarchy fields — always pulled from the live registry so display-name
+        # changes, parent_theme_id assignments, and effective rollup updates are
+        # reflected immediately without a full LKG rewrite.
+        _live_parent_tid = meta.get("parent_theme_id")
+        _live_rollup     = _get_effective_rollup(tid, THEME_RS_UNIVERSE)
+
         if stored_hash is None:
             # Old-format row — no hash stored (pre-membership-hash LKG snapshot).
             # We cannot verify whether the baked-in proxy_symbols are current, so
@@ -536,6 +545,8 @@ def _validate_basket_hashes(
             patched_rows.append({
                 **row,
                 "display_name":           live_display,
+                "parent_theme_id":        _live_parent_tid,
+                "rollup_sector_ids":      _live_rollup,
                 "proxy_symbols":          sorted(current_syms),
                 "theme_holdings":         sorted(current_syms),
                 "proxy_symbols_used":     sorted(current_syms),
@@ -557,6 +568,8 @@ def _validate_basket_hashes(
             patched_rows.append({
                 **row,
                 "display_name":           live_display,
+                "parent_theme_id":        _live_parent_tid,
+                "rollup_sector_ids":      _live_rollup,
                 "proxy_symbols":          sorted(current_syms),
                 "theme_holdings":         sorted(current_syms),
                 "proxy_symbols_used":     sorted(current_syms),
@@ -574,7 +587,13 @@ def _validate_basket_hashes(
 
         else:
             # Hash matches — basket is current-membership.
-            patched_rows.append({**row, "display_name": live_display, "curve_status": "current"})
+            patched_rows.append({
+                **row,
+                "display_name":      live_display,
+                "parent_theme_id":   _live_parent_tid,
+                "rollup_sector_ids": _live_rollup,
+                "curve_status":      "current",
+            })
 
     patched_payload = {
         **payload,
@@ -1542,6 +1561,8 @@ async def _build_theme_row(
         "display_name":          meta["display_name"],
         "classification":        meta.get("classification", "theme"),
         "parent_sector":         meta.get("parent_sector"),
+        "parent_theme_id":       meta.get("parent_theme_id"),
+        "rollup_sector_ids":     _get_effective_rollup(theme_id, THEME_RS_UNIVERSE),
         "sector_tags":           meta.get("sector_tags", []),
         "proxy_type":            meta["proxy_type"],
         # Stable chart symbol for Ticker column / TradingView popup.
