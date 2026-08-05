@@ -1,0 +1,478 @@
+The live Replit files are authoritative. GitHub is only the backup/audit reference.
+
+Relevant existing commits include:
+
+72960e96 — initial taxonomy hierarchy
+98b281a3 — four-contract correction
+the current live HEAD may also contain automatic Replit deployment/cache commits after 98b281a3
+
+Do not reset, amend, rebase, or rewrite those commits. Create one new corrective commit on top of the current live HEAD.
+
+Do not push.
+
+Objective
+
+Correct two production Watchlist taxonomy bugs, replace simulation-only tests with tests that execute the real production paths, and keep the already-correct hierarchy and relative-strength architecture intact.
+
+Do not begin frontend work in this task.
+
+Proven defects
+Defect 1 — subtheme_ids uses parent_theme_id instead of classification
+
+The current Watchlist row logic effectively does:
+
+subtheme_ids = [
+    theme_id
+    for theme_id in theme_ids
+    if registry.get(theme_id, {}).get("parent_theme_id")
+]
+
+This is incorrect.
+
+parent_theme_id means:
+
+This node has a broader parent theme.
+
+It does not mean:
+
+This node is classified as a subtheme.
+
+Several legitimate existing nodes have:
+
+classification = "sub_theme"
+parent_theme_id = null
+
+Examples include ai_networking, banks, biotech, and other standalone subthemes that have not yet been attached to a broader parent theme.
+
+Those IDs must still appear in subtheme_ids.
+
+Required correction
+
+For every Watchlist row:
+
+subtheme_ids = [
+    theme_id
+    for theme_id in theme_ids
+    if registry.get(theme_id, {}).get("classification") == "sub_theme"
+]
+
+Apply the same rule everywhere identity fields are recomputed, including:
+
+normal saved-analysis rows
+missing-append rows
+skeleton rows
+uncategorized reclassification
+any reachable cached/LKG normalization path
+
+Do not use the existence of parent_theme_id as a classification proxy anywhere.
+
+Defect 2 — sector_id reads the wrong FMP fundamentals path
+
+The production fundamentals snapshot stores profile metadata under:
+
+fund_snap["fields"]["profile"]
+
+The FMP company sector therefore lives at:
+
+fund_snap["fields"]["profile"]["sector"]
+
+The current Watchlist implementation attempts to read:
+
+fund_snap["fields"]["sector"]
+
+That misses the canonical cached FMP value and unnecessarily falls back to CSV or null.
+
+Required correction
+
+Use this deterministic source priority:
+
+fund_snap["fields"]["profile"]["sector"]
+fund_snap["fields"]["sector"] only as a backward-compatible legacy fallback if that shape is genuinely reachable
+csv_row["Sector"]
+csv_row["sector"]
+null
+
+Normalize the selected value through the existing:
+
+normalize_company_sector_to_id()
+
+Continue returning null for blank or unknown labels.
+
+Never derive sector_id from:
+
+primary_theme_id
+theme_ids
+subtheme_ids
+parent_theme_id
+parent_sector
+rollup_sector_ids
+theme baskets
+proxy symbols
+Harden the identity-field contract
+
+While correcting the two defects, verify and enforce these exact semantics.
+
+primary_theme_id
+Use the existing canonical primary-theme result.
+It must be a canonical registry ID before it is exposed as a filter identity.
+A sentinel or unmapped value such as other_uncategorized must not masquerade as a valid taxonomy node.
+When no valid canonical registry node exists, expose:
+"primary_theme_id": null
+
+Do not alter the existing human-readable Watchlist category fields such as canonical_theme_name.
+
+theme_ids
+Include the valid primary theme ID when present.
+Include every active additional membership whose action is add.
+Exclude rows whose action is remove.
+Include both theme-classified and subtheme-classified membership IDs.
+Include only IDs present in the canonical registry.
+Deduplicate by ID.
+Keep the primary ID first.
+Sort remaining additional IDs deterministically.
+Do not derive or automatically insert parent theme IDs.
+Do not infer membership from proxy symbols, ETF holdings, candidates, display names, aliases, section names, or substring matching.
+
+Example:
+
+{
+  "primary_theme_id": "semiconductors",
+  "theme_ids": [
+    "semiconductors",
+    "ai_networking",
+    "memory_storage"
+  ],
+  "subtheme_ids": [
+    "ai_networking",
+    "memory_storage"
+  ]
+}
+
+In this example:
+
+ai_networking must be included because its classification is sub_theme
+it does not matter whether it currently has a parent_theme_id
+semiconductors must not appear in subtheme_ids
+subtheme_ids
+
+subtheme_ids must be the deterministic subset of theme_ids where:
+
+classification == "sub_theme"
+
+Nothing else determines inclusion.
+
+Preserve the correct work already completed
+
+Do not replace or roll back:
+
+THEME_RS_UNIVERSE
+parent_theme_id
+rollup_sector_ids
+get_effective_rollup_sector_ids()
+normalize_company_sector_to_id()
+validate_theme_hierarchy()
+/api/themes/list
+/api/themes/relative-strength
+/api/themes/relative-strength/refresh
+_validate_basket_hashes() metadata repair
+existing primary-theme resolver precedence
+existing additional-membership persistence
+existing endpoint paths
+existing cache keys
+relative-strength calculations
+theme baskets
+performance curves
+ranking logic
+Copper and Rare Earth display-label corrections
+existing aliases
+existing taxonomy IDs
+
+Do not create:
+
+a new taxonomy registry
+a new endpoint
+a new database table
+a second primary-theme resolver
+a frontend-specific taxonomy response
+a new cache
+provider calls
+LLM calls
+Replace simulation tests with production-path tests
+
+The existing _simulate_row_identity() tests are not sufficient because they duplicate the production implementation and therefore duplicated the same bug.
+
+Do not count a helper that mirrors production logic as proof that the production path works.
+
+Required production Watchlist tests
+
+Invoke the real Watchlist enrichment function and inspect its returned section rows.
+
+Use monkeypatching/stubs for existing dependencies so tests make:
+
+no network requests
+no Neon writes
+no provider calls
+no app startup
+no background jobs
+
+At minimum prove these cases through the real production function:
+
+Case 1 — normal saved-analysis row
+
+Input:
+
+saved analysis.sections[].tickers[] row
+primary theme ai_networking
+no parent_theme_id on that registry node
+classification sub_theme
+
+Expected:
+
+{
+  "primary_theme_id": "ai_networking",
+  "theme_ids": ["ai_networking"],
+  "subtheme_ids": ["ai_networking"]
+}
+
+This is the mandatory regression test for Defect 1.
+
+Case 2 — parent theme plus standalone and nested subthemes
+
+Input:
+
+primary semiconductors
+active additional memberships:
+ai_networking
+memory_storage
+
+Expected:
+
+{
+  "primary_theme_id": "semiconductors",
+  "theme_ids": [
+    "semiconductors",
+    "ai_networking",
+    "memory_storage"
+  ],
+  "subtheme_ids": [
+    "ai_networking",
+    "memory_storage"
+  ]
+}
+
+Prove both subtheme forms work:
+
+standalone subtheme with no parent_theme_id
+nested subtheme with parent_theme_id
+Case 3 — removed membership
+
+Input includes an override row such as:
+
+{
+  "theme_id": "cybersecurity",
+  "symbol": "TEST",
+  "action": "remove"
+}
+
+Expected:
+
+cybersecurity absent from theme_ids
+cybersecurity absent from subtheme_ids
+Case 4 — duplicates and deterministic order
+
+Input includes duplicate active IDs or unsorted override rows.
+
+Expected:
+
+no duplicates
+primary first
+additional IDs consistently sorted
+Case 5 — actual FMP profile sector wins
+
+Fundamentals snapshot:
+
+{
+  "fields": {
+    "profile": {
+      "sector": "Utilities"
+    }
+  }
+}
+
+CSV row:
+
+{
+  "Sector": "Technology"
+}
+
+Expected:
+
+"sector_id": "utilities"
+
+This proves the real stored FMP path is being read and has priority over CSV.
+
+Case 6 — CSV sector fallback
+
+Fundamentals profile sector absent.
+
+CSV:
+
+{
+  "Sector": "Basic Materials"
+}
+
+Expected:
+
+"sector_id": "materials"
+Case 7 — sector/theme conflict
+
+Input:
+
+company profile sector Energy
+primary theme datacenter_infra
+
+Expected:
+
+{
+  "sector_id": "energy",
+  "primary_theme_id": "datacenter_infra",
+  "theme_ids": ["datacenter_infra"]
+}
+
+Prove the theme’s Technology/Utilities/Real Estate rollups do not overwrite actual company sector identity.
+
+Case 8 — invalid or sentinel primary mapping
+
+Input:
+
+primary value absent from the canonical registry, such as other_uncategorized
+no valid additional memberships
+
+Expected:
+
+{
+  "primary_theme_id": null,
+  "theme_ids": [],
+  "subtheme_ids": []
+}
+
+The pre-existing human-readable category field may remain unchanged.
+
+Case 9 — skeleton path
+
+Invoke the real skeleton/fallback construction path and prove all four identity fields appear.
+
+Case 10 — cached/saved path
+
+Invoke the actual reachable saved or cached Watchlist response path—not a copied simulation—and prove identity enrichment occurs before the response is returned.
+
+Strengthen the relative-strength tests without redesigning the implementation
+
+The current RS implementation appears correct, but the tests mainly inspect registry metadata as a proxy.
+
+Add focused tests that invoke the real existing functions.
+
+At minimum:
+
+Invoke the real _build_theme_row() with deterministic local inputs and prove the returned row contains:
+parent_theme_id
+effective rollup_sector_ids
+existing core RS fields
+Invoke the real _validate_basket_hashes() on a stale/legacy row and prove it repairs:
+display_name
+parent_theme_id
+rollup_sector_ids
+
+Do not make live provider calls.
+
+Repository hygiene
+
+Commit 98b281a3 included unrelated runtime cache mutations and the pasted prompt asset:
+
+attached_assets/Pasted-BACKEND-DEEPSEEK-OPENCODE-CORRECTION-COMPLETE-THE-CANON_1785952018493.txt
+
+If that file is merely the automatically attached task prompt and is not referenced by application code or required project documentation, delete it in this corrective commit.
+
+Do not broadly delete other attached_assets files.
+
+Do not restore or alter runtime cache files based solely on GitHub because the live Replit workspace is authoritative.
+
+For this new commit:
+
+do not use git add -A
+do not use git add .
+stage only the exact intended source files, test files, report file, and the one confirmed prompt-asset deletion
+do not stage runtime-generated JSON/cache changes
+do not start the full application merely to validate imports
+do not run startup routines that can mutate cache files or persistent state
+
+Before committing, inspect:
+
+git diff --cached --name-status
+
+The staged set must not contain runtime caches, snapshots, LKG files, provider data files, or unrelated assets.
+
+Validation
+
+Run:
+
+Focused hierarchy tests.
+Actual production Watchlist taxonomy tests.
+Actual RS row-builder/cache-repair tests.
+Existing relevant Watchlist tests.
+Existing relevant Themes tests.
+git diff --check.
+
+For any broader test failure claimed to be pre-existing:
+
+run the exact failing test against the parent commit in an isolated worktree or otherwise produce direct before/after evidence
+proving that the test file existed previously is not proof that the failure existed previously
+
+Do not start the production application as a substitute for tests.
+
+Commit requirements
+
+Create exactly one new local corrective commit on top of the current live HEAD.
+
+Do not amend prior commits.
+
+Do not push.
+
+Suggested commit message:
+
+fix: correct watchlist subtheme and company-sector identity
+
+Stage explicit files only.
+
+Report requirements
+
+Overwrite:
+
+/home/runner/workspace/.opencode-reports/latest.md
+
+The report must include:
+
+Starting branch and exact starting HEAD.
+Exact source files inspected.
+Exact root cause of the subtheme_ids defect.
+Examples of existing sub_theme nodes without parent_theme_id.
+Exact root cause of the FMP sector-path defect.
+The confirmed stored fundamentals path for sector.
+Final production identity-field algorithm.
+How invalid/sentinel IDs are handled.
+How deterministic ordering and deduplication work.
+Every production Watchlist row path tested.
+Proof that tests invoke production code rather than a copied simulation.
+Real RS row-builder and stale-cache-repair test results.
+Exact files changed.
+Exact files staged.
+Confirmation that no runtime cache files were staged.
+Whether the pasted prompt asset was removed and why.
+All test commands and complete results.
+Direct before/after evidence for any claimed pre-existing failure.
+git diff --check result.
+Final git status -sb.
+New commit SHA and message.
+Complete diff for the new corrective commit only.
+
+Stop and report rather than inventing a new implementation path if the existing Watchlist enrichment architecture cannot support these corrections.
