@@ -1434,7 +1434,27 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             build_theme_resolution_context as _skl_build_ctx,
             resolve_primary_theme_for_ticker as _skl_resolve_theme,
         )
+        from services.theme_rs_universe import THEME_RS_UNIVERSE as _skl_trs_uni
         _skl_theme_ctx = _skl_build_ctx()
+
+        # ── Batch-load all theme_ticker_overrides once for the whole pass ────
+        # Used to populate theme_ids / subtheme_ids per ticker.
+        # Populated from existing active "add" rows only — never from ETF proxies,
+        # candidate baskets, labels, or substring matching.
+        _skl_override_map: dict[str, list[str]] = {}
+        try:
+            from data.pg_storage import get_theme_ticker_overrides as _skl_get_overrides
+            for _ov_row in (_skl_get_overrides() or []):
+                if _ov_row.get("action") != "add":
+                    continue
+                _ov_sym = (_ov_row.get("symbol") or "").upper()
+                _ov_tid = (_ov_row.get("theme_id") or "").strip()
+                if _ov_sym and _ov_tid:
+                    _skl_override_map.setdefault(_ov_sym, [])
+                    if _ov_tid not in _skl_override_map[_ov_sym]:
+                        _skl_override_map[_ov_sym].append(_ov_tid)
+        except Exception as _skl_ov_err:
+            print(f"[WATCHLIST_SKL] theme_ticker_overrides unavailable (non-fatal): {_skl_ov_err}")
 
         skeleton: list[dict] = []
         for sym in tickers:
@@ -1448,6 +1468,24 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             _canon_theme_id = _theme_res["theme_id"]
             _theme_src      = _theme_res["source"]
 
+            # ── Additive hierarchy identifiers ────────────────────────────────
+            # sector_id: canonical sector this ticker's primary theme belongs to.
+            _skl_sector_id = (_skl_trs_uni.get(_canon_theme_id) or {}).get("parent_sector")
+            # theme_ids: primary + any additional "add" memberships from overrides.
+            # Sourced exclusively from existing canonical resolver + active override records.
+            _skl_extra_tids = [
+                t for t in _skl_override_map.get(_s, []) if t != _canon_theme_id
+            ]
+            _skl_all_tids = (
+                [_canon_theme_id] if _canon_theme_id else []
+            ) + _skl_extra_tids
+            # subtheme_ids: those theme_ids whose registry node has a parent_theme_id
+            # (i.e. they are positioned below a parent theme in the hierarchy).
+            _skl_subtheme_ids = [
+                t for t in _skl_all_tids
+                if (_skl_trs_uni.get(t) or {}).get("parent_theme_id")
+            ]
+
             row = _build_ticker_row(_s, {
                 "symbol":               _s,
                 "catalyst":             None,
@@ -1456,8 +1494,13 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
                 "conviction":           None,
                 "theme":                _canon_theme,
                 "canonical_theme_name": _canon_theme,
-                "canonical_theme_id":   _canon_theme_id,
+                "canonical_theme_id":   _canon_theme_id,   # primary_theme_id equivalent
                 "theme_source":         _theme_src,
+                # ── Hierarchy v2 fields ───────────────────────────────────────
+                "sector_id":        _skl_sector_id,
+                "primary_theme_id": _canon_theme_id,
+                "theme_ids":        _skl_all_tids,
+                "subtheme_ids":     _skl_subtheme_ids,
             })
             skeleton.append(row)
 

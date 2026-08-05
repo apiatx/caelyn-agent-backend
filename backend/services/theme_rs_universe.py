@@ -127,12 +127,15 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "sector_tags": ["Energy", "Utilities", "Industrials"],
         "keywords": ["clean energy", "renewable", "wind", "solar", "hydrogen", "ESG"],
         "macro_sensitivities": ["IRA policy", "interest rates", "power demand", "carbon prices"],
+        # Cross-sector: appears under Energy, Utilities, and Industrials sector filters.
+        "rollup_sector_ids": ["utilities", "industrials", "energy"],
     },
 
     "cloud_software": {
         "classification": "sub_theme",
         "parent_sector":  "technology",
         "display_name": "Cloud Software",
+        "parent_theme_id": "software",
         "proxy_type": "etf",
         # SKYY = First Trust Cloud Computing ETF (primary); CLOU = Global X Cloud Computing ETF
         "proxy_symbols": ["SKYY", "CLOU"],
@@ -200,7 +203,9 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     "copper_miners": {
         "classification": "sub_theme",
         "parent_sector":  "materials",
-        "display_name": "Copper Miners",
+        # Display label shortened; prior label preserved as alias for backward compat.
+        "display_name": "Copper",
+        "parent_theme_id": "metals_mining",
         "proxy_type": "etf",
         # DBB = Invesco DB Base Metals Fund (broad base metals incl. copper, zinc, aluminum)
         # Added as secondary proxy to preserve coverage previously in old theme_service
@@ -209,6 +214,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "sector_tags": ["Materials", "Mining"],
         "keywords": ["copper", "mining", "electrification", "EV infrastructure", "base metals"],
         "macro_sensitivities": ["China manufacturing", "electrification demand", "USD", "global growth"],
+        "aliases": ["copper_miners"],          # prior display label preserved as alias
     },
 
     "crypto_equities": {
@@ -231,6 +237,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "classification": "sub_theme",
         "parent_sector":  "technology",
         "display_name": "Cybersecurity",
+        "parent_theme_id": "software",
         "proxy_type": "etf",
         "proxy_symbols": ["CIBR", "HACK", "BUG", "IHAK"],
         "candidate_symbols": ["PANW", "CRWD", "FTNT", "ZS", "CYBR"],
@@ -244,6 +251,9 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "classification": "sub_theme",
         "parent_sector":  "technology",
         "display_name": "Data Center Infrastructure",
+        # Cross-sector: data center real estate, power demand, and cloud infrastructure
+        # roll up to Technology, Utilities, and Real Estate per existing sector_tags.
+        "rollup_sector_ids": ["technology", "utilities", "real_estate"],
         "proxy_type": "etf",
         # SRVR = Pacer Data & Infrastructure Real Estate ETF (primary)
         # Uranium/nuclear tickers excluded via exclude_tickers in theme_fmp_industry_map.json
@@ -269,7 +279,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "defense": {
-        "classification": "sub_theme",
+        # Promoted to parent theme: drones is a canonical subtheme.
+        "classification": "theme",
         "parent_sector":  "industrials",
         "display_name": "Defense",
         "proxy_type": "etf",
@@ -280,6 +291,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "sector_tags": ["Industrials", "Defense"],
         "keywords": ["defense", "aerospace", "military", "government contracts", "NATO"],
         "macro_sensitivities": ["geopolitical risk", "defense budgets", "NATO spending"],
+        "rollup_sector_ids": ["industrials"],
         "aliases": ["aerospace_defense"],
     },
 
@@ -287,6 +299,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "classification": "sub_theme",
         "parent_sector":  "industrials",
         "display_name": "Drones",
+        "parent_theme_id": "defense",
         "proxy_type": "hybrid",
         "proxy_symbols": ["XAR", "ITA"],
         "candidate_symbols": ["AVAV", "KTOS", "RCAT", "JOBY", "ACHR", "EH"],
@@ -342,6 +355,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "classification": "theme",
         "parent_sector":  "materials",
         "display_name": "Gold",
+        "parent_theme_id": "metals_mining",
         "proxy_type": "etf",
         "proxy_symbols": ["GLD", "IAU", "GDX", "GDXJ"],
         "candidate_symbols": ["NEM", "GOLD", "AEM"],
@@ -422,6 +436,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "classification": "sub_theme",
         "parent_sector":  "energy",
         "display_name": "LNG & Natural Gas",
+        "parent_theme_id": "oil_gas",
         "proxy_type": "etf",
         # FCG = First Trust Natural Gas ETF (E&P + midstream); UNG = commodity front-month
         "proxy_symbols": ["FCG", "UNG"],
@@ -463,6 +478,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "classification": "sub_theme",
         "parent_sector":  "technology",
         "display_name": "Memory & Storage",
+        "parent_theme_id": "semiconductors",
         "proxy_type": "basket",
         # DRAM (Defiance DRAM Memory, Storage, and AI ETF) is primary per spec.
         # Service tries DRAM first; if unavailable or insufficient bars, uses SMH/SOXX median.
@@ -488,7 +504,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "metals_mining": {
-        "classification": "sub_theme",
+        # Promoted to parent theme: gold, silver, copper_miners, rare_earth are subthemes.
+        "classification": "theme",
         "parent_sector":  "materials",
         "display_name": "Metals & Mining",
         "proxy_type": "etf",
@@ -497,11 +514,13 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "sector_tags": ["Materials", "Mining"],
         "keywords": ["metals", "mining", "steel", "iron ore", "diversified miners"],
         "macro_sensitivities": ["China infrastructure", "global growth", "commodity cycle"],
+        "rollup_sector_ids": ["materials"],
     },
 
     # ── O ──────────────────────────────────────────────────────────────────────
     "oil_gas": {
-        "classification": "sub_theme",
+        # Promoted to parent theme: lng_gas and oil_services are subthemes.
+        "classification": "theme",
         "parent_sector":  "energy",
         "display_name": "Oil & Gas",
         "proxy_type": "etf",
@@ -510,12 +529,14 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "sector_tags": ["Energy"],
         "keywords": ["oil", "natural gas", "E&P", "upstream", "OPEC", "crude"],
         "macro_sensitivities": ["crude oil price", "OPEC+ decisions", "global demand", "USD"],
+        "rollup_sector_ids": ["energy"],
     },
 
     "oil_services": {
         "classification": "sub_theme",
         "parent_sector":  "energy",
         "display_name": "Oil Services",
+        "parent_theme_id": "oil_gas",
         "proxy_type": "etf",
         # OIH = VanEck Oil Services ETF (primary; dedicated oil-field services basket)
         "proxy_symbols": ["OIH", "XES", "IEZ"],
@@ -601,13 +622,16 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     "rare_earth": {
         "classification": "sub_theme",
         "parent_sector":  "materials",
-        "display_name": "Rare Earth Metals",
+        # Display label updated; prior label preserved as alias for backward compat.
+        "display_name": "Rare Earth Elements",
+        "parent_theme_id": "metals_mining",
         "proxy_type": "etf",
         "proxy_symbols": ["REMX"],
         "candidate_symbols": ["MP", "UUUU", "TMRC", "LYSDY"],
         "sector_tags": ["Materials", "Mining"],
         "keywords": ["rare earth", "critical minerals", "magnets", "defense supply chain"],
         "macro_sensitivities": ["China export controls", "EV demand", "defense spending"],
+        "aliases": ["rare_earth_metals"],      # prior display label preserved as alias
     },
 
     # SECTOR: Real Estate (new entry)
@@ -652,6 +676,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     "semicap_equipment": {
         "classification": "sub_theme",
         "parent_sector":  "technology",
+        "parent_theme_id": "semiconductors",
         # Display label updated to "Semi Equipment & Materials" to reflect that
         # the basket also covers process chemicals, specialty gases, and compound
         # semiconductor materials companies alongside pure-play equipment makers.
@@ -707,7 +732,9 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "semiconductors": {
-        "classification": "sub_theme",
+        # Promoted to parent theme: memory_storage, semicap_equipment, substrates_packaging
+        # are canonical subthemes.
+        "classification": "theme",
         "parent_sector":  "technology",
         "display_name": "Semiconductors",
         "proxy_type": "etf",
@@ -717,6 +744,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "sector_tags": ["Technology"],
         "keywords": ["semiconductors", "chips", "fab", "GPU", "CPU", "AI chips", "fabless"],
         "macro_sensitivities": ["AI capex", "PC/mobile cycle", "China restrictions", "leading-edge node"],
+        "rollup_sector_ids": ["technology"],
         "aliases": ["chips", "chip_stocks"],
     },
 
@@ -724,6 +752,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "classification": "theme",
         "parent_sector":  "materials",
         "display_name": "Silver",
+        "parent_theme_id": "metals_mining",
         "proxy_type": "etf",
         "proxy_symbols": ["SLV", "SIL", "SILJ"],
         "candidate_symbols": ["PAAS", "AG", "MAG"],
@@ -733,7 +762,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     "software": {
-        "classification": "sub_theme",
+        # Promoted to parent theme: cloud_software and cybersecurity are canonical subthemes.
+        "classification": "theme",
         "parent_sector":  "technology",
         "display_name": "Software",
         "proxy_type": "etf",
@@ -742,12 +772,14 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "sector_tags": ["Technology"],
         "keywords": ["software", "SaaS", "cloud software", "enterprise software", "AI software"],
         "macro_sensitivities": ["enterprise IT budgets", "AI adoption", "interest rates (multiples)"],
+        "rollup_sector_ids": ["technology"],
     },
 
     "substrates_packaging": {  # OSAT / advanced packaging / substrate suppliers
         "classification": "sub_theme",
         "parent_sector":  "technology",
         "display_name": "Substrates / Packaging",
+        "parent_theme_id": "semiconductors",
         "proxy_type": "custom",
         "proxy_symbols": ["AMKR", "ASX"],
         "candidate_symbols": [
@@ -857,3 +889,109 @@ ALL_CANDIDATE_SYMBOLS: list[str] = sorted(
     set(sym for v in THEME_RS_UNIVERSE.values() for sym in v["candidate_symbols"])
     - {""}   # guard against empty strings
 )
+
+
+def validate_theme_hierarchy(
+    registry: "dict[str, dict] | None" = None,
+) -> list[str]:
+    """
+    Validate structural integrity of the theme registry hierarchy.
+
+    Checks performed
+    ----------------
+    1. Every non-null parent_theme_id references an existing registry node.
+    2. The referenced parent has classification == "theme" (not "sector" or "sub_theme").
+    3. Every entry in rollup_sector_ids references an existing node with
+       classification == "sector".
+    4. No node is its own parent (self-reference).
+    5. No cycles exist in the parent_theme_id chain.
+    6. Alias strings do not shadow a canonical registry ID.
+    7. The same alias is not claimed by more than one node.
+    8. Display-label changes preserved prior labels as aliases (copper, rare_earth).
+
+    Returns a list of error strings.  An empty list means the registry is valid.
+    """
+    if registry is None:
+        registry = THEME_RS_UNIVERSE
+
+    ids = set(registry.keys())
+    errors: list[str] = []
+
+    for tid, meta in registry.items():
+        parent_theme_id: "str | None" = meta.get("parent_theme_id")
+        rollup_sector_ids: list[str] = meta.get("rollup_sector_ids") or []
+
+        # ── 1 & 2: parent_theme_id references ────────────────────────────────
+        if parent_theme_id is not None:
+            if parent_theme_id not in ids:
+                errors.append(
+                    f"{tid}: parent_theme_id={parent_theme_id!r} not found in registry"
+                )
+            else:
+                ref_cls = registry[parent_theme_id].get("classification")
+                if ref_cls != "theme":
+                    errors.append(
+                        f"{tid}: parent_theme_id={parent_theme_id!r} has "
+                        f"classification={ref_cls!r}, expected 'theme'"
+                    )
+            # ── 4: self-reference ─────────────────────────────────────────────
+            if parent_theme_id == tid:
+                errors.append(f"{tid}: parent_theme_id references itself")
+
+        # ── 3: rollup_sector_ids references ──────────────────────────────────
+        for sid in rollup_sector_ids:
+            if sid not in ids:
+                errors.append(
+                    f"{tid}: rollup_sector_ids entry {sid!r} not found in registry"
+                )
+            else:
+                ref_cls = registry[sid].get("classification")
+                if ref_cls != "sector":
+                    errors.append(
+                        f"{tid}: rollup_sector_ids entry {sid!r} has "
+                        f"classification={ref_cls!r}, expected 'sector'"
+                    )
+
+    # ── 5: cycle detection ────────────────────────────────────────────────────
+    for start_tid in ids:
+        visited: set[str] = set()
+        current: "str | None" = start_tid
+        while current is not None:
+            if current in visited:
+                errors.append(
+                    f"{start_tid}: cycle detected in parent_theme_id chain "
+                    f"(revisited {current!r})"
+                )
+                break
+            visited.add(current)
+            current = registry.get(current, {}).get("parent_theme_id")
+
+    # ── 6 & 7: alias uniqueness and no alias shadows a *different* node's ID ──
+    # A self-alias (alias == own theme_id) is a harmless no-op and is allowed.
+    seen_aliases: dict[str, str] = {}   # alias_str → first-claiming theme_id
+    for tid, meta in registry.items():
+        for alias in (meta.get("aliases") or []):
+            if alias in ids and alias != tid:
+                # Alias shadows a *different* node's canonical ID — disallow.
+                errors.append(
+                    f"{tid}: alias {alias!r} shadows canonical registry ID of another node"
+                )
+            if alias in seen_aliases and seen_aliases[alias] != tid:
+                errors.append(
+                    f"{tid}: alias {alias!r} already claimed by {seen_aliases[alias]!r}"
+                )
+            seen_aliases[alias] = tid
+
+    # ── 8: required backward-compat aliases ──────────────────────────────────
+    _required_aliases: dict[str, str] = {
+        "copper_miners":   "copper_miners",      # prior display label for copper_miners node
+        "rare_earth_metals": "rare_earth",       # prior display label for rare_earth node
+    }
+    for alias, owning_tid in _required_aliases.items():
+        node_aliases = registry.get(owning_tid, {}).get("aliases") or []
+        if alias not in node_aliases:
+            errors.append(
+                f"{owning_tid}: required backward-compat alias {alias!r} is missing"
+            )
+
+    return errors

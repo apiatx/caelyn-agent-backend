@@ -184,6 +184,9 @@ async def themes_list(
             "display_name":        meta["display_name"],
             "classification":      meta.get("classification", "theme"),
             "parent_sector":       meta.get("parent_sector"),
+            # Hierarchy v2 — additive fields (None when not applicable)
+            "parent_theme_id":     meta.get("parent_theme_id"),
+            "rollup_sector_ids":   meta.get("rollup_sector_ids", []),
             "proxy_type":          meta["proxy_type"],
             "proxy_symbols":       meta["proxy_symbols"],
             "candidate_symbols":   meta.get("candidate_symbols", []),
