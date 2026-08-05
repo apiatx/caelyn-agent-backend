@@ -1,0 +1,412 @@
+You are working inside the current CaelynAI BACKEND Replit workspace:
+
+`/home/runner/workspace`
+
+This is the implementation task following the completed read-only performance investigation.
+
+Read the current `AGENTS.md` before editing and follow it exactly.
+
+Work only in the existing Replit workspace and existing local `main` branch.
+
+Do not create a branch, clone, worktree, pull request, or alternate repository.
+
+Do not reset, rebase, clean, stash, pull, merge, or discard existing work.
+
+Do not push. The user will push personally.
+
+## Proven root cause
+
+The read-only audit conclusively established:
+
+`PROVEN PRIMARY ROOT CAUSE`
+
+Commit:
+
+`b7964131c06852bf5cab9f0b52fb7aa8d0c4915f`
+
+added `get_comparison_closes_bulk(tickers)` to the full Watchlist request path.
+
+For the current Primary Watchlist:
+
+* 450 normalized tickers
+* 385 matching canonical-history files
+* 385 `gzip.open` calls on every request
+* approximately 14.2 MB of compressed files read per request
+* approximately 718,000 completed bars parsed per request
+* approximately 5 seconds inside `_load_cached_watchlist_market_data`
+* approximately 6–7 seconds total endpoint latency when warm
+* approximately 14 seconds on the measured cold path
+
+Every repeated warm call reopens and reparses all 385 files.
+
+The existing frontend globally prefetches the Primary Watchlist while the authenticated application is mounted, so this expensive backend request can begin while the user is viewing or navigating unrelated pages.
+
+The audit also proved that four internal fields leak into each serialized Watchlist row:
+
+* `_comparison_close_7d`
+* `_comparison_date_7d`
+* `_comparison_close_30d`
+* `_comparison_date_30d`
+
+That currently creates approximately 1,800 unwanted internal response fields for 450 rows.
+
+## Important correction to the audit’s suggested implementation
+
+Do not implement a design that stores only the comparison close for one `comparison_as_of_ny_date` and performs a full canonical-history scan when the New York date changes.
+
+That would move the full 385-file scan from every request to the first request of each New York calendar date. It would preserve a recurring daily freeze and could create a first-request stampede.
+
+The request path must not perform a full canonical-history scan on date rollover.
+
+## Required architecture
+
+Preserve the existing architecture and data contracts.
+
+Use the existing canonical-history `_INDEX` as the in-memory request-time source for historical comparison selection.
+
+Persist a compact recent completed-price tail in each existing canonical-history metadata entry.
+
+Recommended representation:
+
+```python
+"comparison_close_tail": [
+    ["2026-05-01", 123.45],
+    ["2026-05-04", 125.10],
+    ...
+]
+```
+
+Store only:
+
+* completed market-session date
+* canonical close
+
+Do not store complete OHLCV bars in `_INDEX`.
+
+Keep the most recent 64 completed sessions, or another narrowly justified count that safely covers:
+
+* a 30-calendar-day comparison target
+* weekends
+* exchange holidays
+* the existing maximum comparison-gap guard
+* modest canonical-history staleness before missing/null behavior applies
+
+Prefer 64 completed sessions unless repository evidence proves a different minimal count is required.
+
+This tail is part of the existing canonical-history metadata. It is not a new endpoint, provider, table, worker, scheduler, or independent source of truth.
+
+## Required production behavior
+
+The final Watchlist calculations must remain:
+
+```text
+change_7d =
+    ((final displayed Watchlist price / selected 7D comparison close) - 1) * 100
+
+change_30d =
+    ((final displayed Watchlist price / selected 30D comparison close) - 1) * 100
+```
+
+The numerator must remain the exact final accepted price already displayed in the Watchlist row.
+
+Canonical history remains the source of the historical denominator.
+
+Preserve:
+
+* New York market-date semantics
+* calendar-day lookbacks
+* latest valid completed session on or before the target date
+* weekend and exchange-holiday handling
+* current-day partial-bar exclusion
+* materially stale comparison rejection
+* missing/null behavior
+* split-consistent price basis
+* existing quote source and merge precedence
+* all public response field names and numeric types
+* final row counts
+* all existing Watchlist consumers
+
+Do not reintroduce the old stale-canonical-close numerator bug.
+
+## Authorized production files
+
+The expected production scope is:
+
+1. `backend/services/canonical_history_service.py`
+2. `backend/services/watchlist_router.py`
+
+Tests may be changed or added in the existing relevant backend test file.
+
+Do not modify frontend code.
+
+Stop and report before editing if repository evidence proves more than these two production files are required.
+
+## Part 1 — Build and persist the compact comparison tail
+
+In `canonical_history_service.py`, add one narrowly scoped helper that builds the compact comparison close tail from the already-normalized completed bars.
+
+Requirements:
+
+1. Use the existing completed-bar normalization and New York date protections.
+2. Exclude current-day and future bars.
+3. Preserve chronological ordering.
+4. Deduplicate market-session dates according to the existing canonical contract.
+5. Include only valid finite positive closes.
+6. Retain only the selected recent completed-session count.
+7. Return a compact JSON-serializable structure.
+8. Do not perform provider calls.
+9. Do not introduce another cache object or global source of truth.
+
+Populate or refresh the tail whenever canonical metadata is already being produced from full bars, including the directly involved existing paths such as:
+
+* `save_bars`
+* `append_bars`
+* existing metadata build/application helpers
+* `backfill_volume_metrics_metadata`
+
+Do not add a parallel repair pipeline.
+
+Ensure the existing metadata-repair function does not incorrectly skip symbols merely because their older Watchlist metric fields already exist while `comparison_close_tail` is absent.
+
+## Part 2 — Make comparison selection index-only
+
+Rewrite `get_comparison_closes_bulk` so the normal request path:
+
+* reads the compact tail from `_INDEX`
+* selects the 7D and 30D comparison closes in memory
+* uses the current `ny_market_date()` on every call
+* correctly changes selected sessions as the date rolls
+* performs zero `gzip.open` calls
+* performs zero full JSON history loads
+* performs zero provider calls
+* performs zero database calls
+
+Do not key the entire result to one cached `comparison_as_of_ny_date` in a way that requires a daily full-history rebuild.
+
+The compact tail must support date-roll selection directly in memory.
+
+When the tail is missing or cannot satisfy a valid comparison:
+
+* return the existing missing/null contract
+* do not synchronously open the full canonical-history file
+* do not publish a stale or fabricated value
+
+After the one-time metadata repair described below, normal Watchlist symbols should have populated tails.
+
+Preserve the existing comparison staleness or maximum-gap guard.
+
+Use a shared selection helper rather than duplicating the calendar-date algorithm.
+
+## Part 3 — Stop internal fields from leaking
+
+In `watchlist_router.py`, preserve the internal comparison values long enough to calculate `change_7d` and `change_30d`, but do not merge them into the public row.
+
+The current problematic behavior is effectively:
+
+```python
+enriched.update(_volume_metrics)
+```
+
+while `_volume_metrics` contains `_comparison_*` keys.
+
+Correct this without changing the public response contract.
+
+Requirements:
+
+1. Extract the internal comparison values into local variables.
+2. Merge only legitimate public Watchlist market fields into `enriched`.
+3. Use the extracted internal values for the final percentage calculation.
+4. Ensure no serialized Watchlist row contains a key beginning with `_comparison_`.
+5. Do not remove legitimate public volume fields.
+6. Do not change the final `change_7d` or `change_30d` field names.
+7. Do not create another row-building path.
+
+## Part 4 — One-time existing-path metadata repair
+
+After the source correction and focused tests pass, run the existing metadata-repair path once for the authoritative Primary Watchlist universe so existing canonical-history entries receive `comparison_close_tail`.
+
+This is an authorized, targeted runtime metadata repair using existing canonical files.
+
+Requirements:
+
+* use the existing metadata-repair function after extending it
+* use canonical Watchlist membership, not CSV membership
+* do not fetch providers
+* do not rebuild or delete canonical history
+* do not alter bars
+* do not create a new repair script in the repository
+* do not stage or commit `_index.json`, `.json.gz` files, caches, logs, reports, or runtime-generated data
+* report the exact number selected, updated, skipped, missing, and failed
+* confirm all expected matching canonical-history symbols now contain a valid compact tail
+
+If runtime persistence behavior means this repair would not survive the intended deployed environment, stop before claiming completion and report the exact persistence problem. Do not silently restore request-time scanning as a fallback.
+
+## Required regression tests
+
+Use the real production functions.
+
+At minimum, add or update deterministic tests proving:
+
+### Performance-path invariants
+
+1. `get_comparison_closes_bulk` with many populated metadata entries performs zero `gzip.open` calls.
+2. Repeating it three times still performs zero file reads.
+3. Changing only the New York date changes the selected baseline when appropriate without reading any history file.
+4. The compact tail remains small and bounded.
+5. Missing-tail behavior returns null rather than opening a full file.
+
+### Date-selection correctness
+
+6. Seven-calendar-day target selection.
+7. Thirty-calendar-day target selection.
+8. Weekend target selects the latest prior valid session.
+9. Exchange-holiday target selects the latest prior valid session.
+10. Materially stale comparison is rejected.
+11. Insufficient history returns null.
+12. Current-day partial bars are not included in a newly generated tail.
+13. Duplicate dates are handled according to the existing canonical merge contract.
+
+### Final row correctness
+
+14. The final displayed price remains the numerator.
+15. A stale persisted `change_7d` or `change_30d` cannot overwrite the dynamically calculated value.
+16. Changing only the current quote changes the final percentages.
+17. No provider call is added to the Watchlist request path.
+18. No final row contains any `_comparison_*` field.
+19. Public volume fields remain present.
+20. Final row count and public contract remain unchanged.
+21. One split-consistent fixture still produces the correct percentage basis.
+
+Tests that merely recreate equivalent dictionary logic without invoking production functions are not sufficient.
+
+## Required focused validation
+
+Run:
+
+* the relevant canonical-history tests
+* the relevant Watchlist market-data tests
+* any directly affected Watchlist router tests
+* `git diff --check`
+
+Clearly distinguish unrelated pre-existing failures from task-related failures.
+
+## Required runtime validation
+
+After the metadata repair, call the actual Primary Watchlist endpoint consumed by the frontend at least three consecutive times.
+
+For each call, report:
+
+| Measurement                      | Required evidence |
+| -------------------------------- | ----------------- |
+| HTTP status                      | exact             |
+| TTFB                             | exact             |
+| total elapsed time               | exact             |
+| response bytes                   | exact             |
+| final row count                  | exact             |
+| history fetch time               | exact server log  |
+| comparison gzip opens            | exact             |
+| comparison compressed bytes read | exact             |
+| comparison bars fully parsed     | exact             |
+| leaked `_comparison_*` fields    | exact count       |
+
+Success criteria:
+
+* zero request-time comparison-history gzip opens
+* zero request-time full comparison-history parses
+* zero leaked `_comparison_*` fields
+* 450 expected rows, unless the current canonical Watchlist count has legitimately changed
+* warm history enrichment reduced from approximately five seconds to an in-memory operation
+* warm endpoint response materially restored toward the previous baseline
+* no daily/date-roll request-time full scan
+
+Do not claim success based only on unit tests.
+
+## Correctness validation
+
+For at least:
+
+* AAPL
+* MSFT
+* NVDA
+* PLTR
+
+Report:
+
+* final displayed row price
+* selected 7D comparison date
+* selected 7D comparison close
+* manual 7D result
+* endpoint `change_7d`
+* selected 30D comparison date
+* selected 30D comparison close
+* manual 30D result
+* endpoint `change_30d`
+* exact difference between manual and endpoint
+
+The manual and endpoint result must agree within 0.01 percentage points.
+
+## Date-roll validation
+
+Using deterministic function-level validation, prove that the same in-memory compact tail can answer two adjacent New York dates correctly without:
+
+* rebuilding the tail
+* reading a gzip file
+* loading the complete bars array
+
+Include at least one weekend or holiday transition.
+
+This validation is mandatory because the repair must not merely convert the recurring freeze into a once-daily freeze.
+
+## Git requirements
+
+Before editing:
+
+1. confirm repository root
+2. confirm branch is `main`
+3. run `git status -sb`
+4. preserve all pre-existing work
+5. confirm local `main` is not behind or diverged from `origin/main`
+6. confirm `b7964131` remains an ancestor of HEAD
+
+Before committing:
+
+1. run `git diff --check`
+2. stage exact task source and test paths only
+3. never use `git add .` or `git add -A`
+4. show staged file names
+5. show the staged diff
+6. confirm runtime-generated canonical-history and report files are not staged
+
+Create exactly one descriptive local commit after all required validation passes.
+
+Do not push.
+
+## Final report
+
+Write the report to the location required by the current `AGENTS.md`.
+
+The final report must include:
+
+1. Completion status
+2. Proven original root cause
+3. Why a date-keyed daily full recomputation was deliberately rejected
+4. Exact compact-tail representation and retention size
+5. Existing path preserved
+6. Exact production and test files changed
+7. Exact behavior changed
+8. Behavior deliberately preserved
+9. One-time metadata repair counts
+10. Focused test commands and results
+11. Real endpoint timing before and after
+12. Request-time gzip opens before and after
+13. Bars fully parsed before and after
+14. Leaked internal field count before and after
+15. AAPL/MSFT/NVDA/PLTR formula evidence
+16. Date-roll/weekend validation
+17. Provider, database, cache, and runtime effects
+18. Risks or remaining limitations
+19. Final `git status -sb`
+20. Commit SHA and message
+21. Complete committed task diff
+
+Stop after the local commit and report. Do not push.
