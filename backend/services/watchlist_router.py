@@ -1454,18 +1454,29 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         # skeleton, uncategorized reclassification) carries the same fields.
         #
         # Contract 3 — primary_theme_id / theme_ids / subtheme_ids
+        # Semantics:
+        #   primary_theme_id — null when the raw ID is absent or not in the
+        #     canonical registry (e.g. "other_uncategorized" sentinel).
+        #   theme_ids        — primary first, then sorted additional IDs;
+        #     only IDs present in the canonical registry; no duplicates.
+        #   subtheme_ids     — subset of theme_ids where classification ==
+        #     "sub_theme".  parent_theme_id is NOT used as a classification
+        #     proxy: 19 standalone sub_themes have no parent_theme_id.
         try:
-            _id_primary = (
+            _id_raw = (
                 enriched.get("canonical_theme_id")
                 or enriched.get("primary_theme_id")
             )
-            _id_extras  = [
-                t for t in _wl_override_map.get(sym, []) if t != _id_primary
-            ]
+            # Null sentinel/unmapped IDs not present in the canonical registry
+            _id_primary = _id_raw if (_id_raw and _id_raw in _wl_trs_uni) else None
+            _id_extras  = sorted(
+                t for t in _wl_override_map.get(sym, [])
+                if t != _id_primary and t in _wl_trs_uni
+            )
             _id_all     = ([_id_primary] if _id_primary else []) + _id_extras
             _id_subs    = [
                 t for t in _id_all
-                if (_wl_trs_uni.get(t) or {}).get("parent_theme_id")
+                if (_wl_trs_uni.get(t) or {}).get("classification") == "sub_theme"
             ]
             enriched["primary_theme_id"] = _id_primary
             enriched["theme_ids"]        = _id_all
@@ -1476,11 +1487,18 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             enriched.setdefault("subtheme_ids", [])
 
         # Contract 4 — sector_id from actual company sector, never from theme
-        # Source priority: fund_snap "sector" field → CSV "Sector" / "sector"
+        # Source priority:
+        #   1. fund_snap["fields"]["profile"]["sector"]  — canonical FMP stored path
+        #   2. fund_snap["fields"]["sector"]             — legacy flat-field fallback
+        #   3. csv_row["Sector"] / csv_row["sector"]    — CSV static fallback
         # Normalised to a canonical sector ID; null when unavailable or unknown.
+        # Never derived from primary_theme_id, parent_theme_id, rollup_sector_ids,
+        # or any other theme-hierarchy field.
         try:
+            _fund_fields = _fund_snap.get("fields") or {}
             _id_sector_raw = (
-                _fund_snap.get("fields", {}).get("sector")
+                (_fund_fields.get("profile") or {}).get("sector")
+                or _fund_fields.get("sector")
                 or csv_row.get("Sector")
                 or csv_row.get("sector")
                 or ""
@@ -1682,9 +1700,12 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
                     # Re-compute identity fields when canonical_theme_id changes.
                     # sector_id is UNCHANGED — it reflects the actual company sector,
                     # not the theme assignment, so it must not be re-derived here.
-                    _unc_extra  = [t for t in _wl_override_map.get(_sym, []) if t != _tgt_id]
-                    _unc_all    = ([_tgt_id] if _tgt_id else []) + _unc_extra
-                    _unc_subs   = [t for t in _unc_all if (_wl_trs_uni.get(t) or {}).get("parent_theme_id")]
+                    _unc_extra  = sorted(
+                        t for t in _wl_override_map.get(_sym, [])
+                        if t != _tgt_id and t in _wl_trs_uni
+                    )
+                    _unc_all    = ([_tgt_id] if (_tgt_id and _tgt_id in _wl_trs_uni) else []) + _unc_extra
+                    _unc_subs   = [t for t in _unc_all if (_wl_trs_uni.get(t) or {}).get("classification") == "sub_theme"]
                     _enriched_row = {
                         **_row,
                         "canonical_theme_name": _tgt_name,

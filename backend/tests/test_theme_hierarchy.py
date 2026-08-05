@@ -8,7 +8,8 @@ Tests for the theme hierarchy metadata added in the canonical registry:
   - get_effective_rollup_sector_ids() — Contract 2
   - normalize_company_sector_to_id()  — Contract 4
   - RS endpoint row serialization     — Contract 1
-  - Watchlist row identity fields     — Contract 3
+  - Watchlist row identity fields (production-path) — Contract 3
+  - sector_id uses FMP profile path  — Contract 4 (production-path)
 
 Run with:
     cd backend && python -m pytest tests/test_theme_hierarchy.py -v
@@ -16,6 +17,7 @@ Run with:
 from __future__ import annotations
 
 import pytest
+from unittest.mock import patch as _patch
 
 from services.theme_rs_universe import (
     THEME_RS_UNIVERSE as REG,
@@ -683,91 +685,432 @@ class TestRsRowHierarchyFields:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Contract 3 — Watchlist row identity-field fixtures
+# Contracts 3 & 4 — Production Watchlist path tests
+#
+# These tests invoke the REAL _enrich_store_with_quotes() function (not a
+# copied simulation) with all external I/O stubbed out so tests make:
+#   - no network requests
+#   - no Neon reads or writes
+#   - no provider calls
+#   - no app startup
+#   - no background jobs
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _simulate_row_identity(
-    canonical_theme_id: str | None,
-    override_tids: list[str],
-    registry: dict | None = None,
+async def _run_enrich(
+    store: dict,
+    *,
+    fund_snaps: dict | None = None,
+    overrides: list | None = None,
 ) -> dict:
     """
-    Pure-Python simulation of the identity-field block in _build_ticker_row.
-    Used by test fixtures without importing the full watchlist_router.
+    Call the real _enrich_store_with_quotes with all external I/O stubbed.
 
-    Returns a dict with primary_theme_id / theme_ids / subtheme_ids.
+    fund_snaps: ticker → fund_snap dict (controls sector_id via profile.sector).
+    overrides:  list of {"symbol": ..., "theme_id": ..., "action": "add"|"remove"}
+                rows (controls additional theme memberships).
     """
-    reg = registry or REG
-    primary = canonical_theme_id
-    extras  = [t for t in override_tids if t != primary]
-    all_ids = ([primary] if primary else []) + extras
-    subs    = [t for t in all_ids if (reg.get(t) or {}).get("parent_theme_id")]
+    from services.watchlist_router import _enrich_store_with_quotes
+
+    async def _fake_quotes(_tickers):
+        return {}
+
+    with (
+        _patch("services.watchlist_quote_cache.get_watchlist_quotes", side_effect=_fake_quotes),
+        _patch("services.name_overrides.get_name_overrides", return_value={}),
+        _patch("data.watchlist_fundamentals_store.get_snapshots_bulk", return_value=fund_snaps or {}),
+        _patch("services.watchlist_router._load_cached_watchlist_market_data", return_value={}),
+        _patch("data.pg_storage.get_theme_ticker_overrides", return_value=overrides or []),
+        _patch("data.quote_demand_registry.register", return_value=None),
+        _patch("services.watchlist_router._get_stage2_breakout", return_value={}),
+    ):
+        return await _enrich_store_with_quotes(store)
+
+
+async def _run_enrich_skeleton(
+    tickers: list[str],
+    *,
+    resolved_theme_id: str,
+    resolved_theme_name: str,
+    fund_snaps: dict | None = None,
+    overrides: list | None = None,
+) -> dict:
+    """
+    Call _enrich_store_with_quotes with an empty sections list (skeleton path).
+
+    Stubs theme_resolver so identity fields can be verified without real I/O.
+    """
+    from services.watchlist_router import _enrich_store_with_quotes
+
+    async def _fake_quotes(_tickers):
+        return {}
+
+    def _fake_build_ctx():
+        return {}
+
+    def _fake_resolve_theme(sym, *, industry="", ctx=None):
+        return {
+            "theme_name": resolved_theme_name,
+            "theme_id":   resolved_theme_id,
+            "source":     "test_stub",
+        }
+
+    with (
+        _patch("services.watchlist_quote_cache.get_watchlist_quotes", side_effect=_fake_quotes),
+        _patch("services.name_overrides.get_name_overrides", return_value={}),
+        _patch("data.watchlist_fundamentals_store.get_snapshots_bulk", return_value=fund_snaps or {}),
+        _patch("services.watchlist_router._load_cached_watchlist_market_data", return_value={}),
+        _patch("data.pg_storage.get_theme_ticker_overrides", return_value=overrides or []),
+        _patch("data.quote_demand_registry.register", return_value=None),
+        _patch("services.watchlist_router._get_stage2_breakout", return_value={}),
+        _patch("services.theme_resolver.build_theme_resolution_context", side_effect=_fake_build_ctx),
+        _patch("services.theme_resolver.resolve_primary_theme_for_ticker", side_effect=_fake_resolve_theme),
+    ):
+        return await _enrich_store_with_quotes({
+            "tickers":  tickers,
+            "analysis": {"sections": []},
+            "csv_data": [],
+        })
+
+
+def _section_row(result: dict, section_index: int = 0, row_index: int = 0) -> dict:
+    """Extract one ticker row from the enriched result."""
+    return result["analysis"]["sections"][section_index]["tickers"][row_index]
+
+
+def _make_store(sym: str, canonical_theme_id: str, sections: list | None = None) -> dict:
+    """Build a minimal store with one ticker in one section."""
     return {
-        "primary_theme_id": primary,
-        "theme_ids":        all_ids,
-        "subtheme_ids":     subs,
+        "tickers":  [sym],
+        "analysis": {
+            "sections": sections or [{
+                "id":      canonical_theme_id,
+                "title":   canonical_theme_id.replace("_", " ").title(),
+                "tickers": [{"symbol": sym, "canonical_theme_id": canonical_theme_id}],
+            }],
+        },
+        "csv_data": [],
     }
 
 
-class TestWatchlistRowIdentityFields:
+class TestWatchlistProductionPath:
     """
-    8 fixture scenarios for watchlist row identity-field contract.
-    All scenarios mirror what _build_ticker_row produces for each row path.
+    10 production-path test cases that invoke the real _enrich_store_with_quotes()
+    and inspect the returned section rows.  No simulation helpers — these tests
+    prove what the production function actually produces.
     """
 
-    def test_normal_path_theme_only(self):
-        """Normal path: ticker in 'semiconductors' with no overrides."""
-        row = _simulate_row_identity("semiconductors", [])
+    # ── Case 1 — Defect 1 regression: standalone sub_theme without parent_theme_id ─
+
+    async def test_case1_standalone_subtheme_without_parent_theme_id(self):
+        """
+        MANDATORY Defect 1 regression:
+        ai_networking has classification='sub_theme' but parent_theme_id=None.
+
+        Old (broken) code: parent_theme_id existence → subtheme_ids empty.
+        Fixed code:        classification == 'sub_theme' → subtheme_ids=['ai_networking'].
+        """
+        # Verify the precondition is real in the live registry
+        assert REG["ai_networking"]["classification"] == "sub_theme"
+        assert REG["ai_networking"].get("parent_theme_id") is None, (
+            "Precondition: ai_networking must have no parent_theme_id "
+            "for this to be a meaningful Defect 1 regression test"
+        )
+
+        result = await _run_enrich(_make_store("ANET", "ai_networking"))
+        row = _section_row(result)
+
+        assert row["primary_theme_id"] == "ai_networking"
+        assert row["theme_ids"] == ["ai_networking"]
+        assert row["subtheme_ids"] == ["ai_networking"], (
+            "ai_networking must appear in subtheme_ids because "
+            "classification='sub_theme', regardless of parent_theme_id being absent"
+        )
+
+    # ── Case 2 — Parent theme + standalone and nested subthemes ──────────────────
+
+    async def test_case2_parent_plus_standalone_and_nested_subthemes(self):
+        """
+        primary=semiconductors (classification='theme')
+        additional: ai_networking (sub_theme, no parent_theme_id)
+                    memory_storage (sub_theme, parent_theme_id='semiconductors')
+
+        Both sub_theme forms must appear in subtheme_ids.
+        semiconductors must NOT appear in subtheme_ids.
+        """
+        assert REG["ai_networking"].get("parent_theme_id") is None
+        assert REG["memory_storage"].get("parent_theme_id") == "semiconductors"
+        assert REG["semiconductors"]["classification"] == "theme"
+
+        result = await _run_enrich(
+            _make_store("TEST", "semiconductors"),
+            overrides=[
+                {"symbol": "TEST", "theme_id": "ai_networking",   "action": "add"},
+                {"symbol": "TEST", "theme_id": "memory_storage",  "action": "add"},
+            ],
+        )
+        row = _section_row(result)
+
         assert row["primary_theme_id"] == "semiconductors"
-        assert row["theme_ids"] == ["semiconductors"]
-        assert row["subtheme_ids"] == []   # semiconductors has no parent_theme_id
+        assert row["theme_ids"][0] == "semiconductors", "primary must be first"
+        assert set(row["theme_ids"]) == {"semiconductors", "ai_networking", "memory_storage"}
+        assert "ai_networking"  in row["subtheme_ids"], "standalone sub_theme must be included"
+        assert "memory_storage" in row["subtheme_ids"], "nested sub_theme must be included"
+        assert "semiconductors" not in row["subtheme_ids"], "theme node must not appear in subtheme_ids"
 
-    def test_normal_path_subtheme(self):
-        """Normal path: ticker in 'memory_storage' (sub-theme of semiconductors)."""
-        row = _simulate_row_identity("memory_storage", [])
-        assert row["primary_theme_id"] == "memory_storage"
-        assert "memory_storage" in row["theme_ids"]
-        assert "memory_storage" in row["subtheme_ids"]   # has parent_theme_id
+    # ── Case 3 — Removed membership excluded ─────────────────────────────────────
 
-    def test_normal_path_with_additional_membership(self):
-        """Normal path: ticker in 'semiconductors' + override adds 'memory_storage'."""
-        row = _simulate_row_identity("semiconductors", ["memory_storage"])
-        assert row["primary_theme_id"] == "semiconductors"
-        assert set(row["theme_ids"]) == {"semiconductors", "memory_storage"}
-        assert "memory_storage" in row["subtheme_ids"]
-        assert "semiconductors" not in row["subtheme_ids"]
+    async def test_case3_removed_membership_excluded(self):
+        """
+        An override row with action='remove' must exclude that theme_id from
+        theme_ids and subtheme_ids.
+        """
+        result = await _run_enrich(
+            _make_store("TEST", "semiconductors"),
+            overrides=[
+                {"symbol": "TEST", "theme_id": "cybersecurity", "action": "remove"},
+            ],
+        )
+        row = _section_row(result)
 
-    def test_missing_append_industry_fallback(self):
-        """Missing-append path: ticker resolved via industry → 'gold'."""
-        row = _simulate_row_identity("gold", [])
-        assert row["primary_theme_id"] == "gold"
-        assert "gold" in row["subtheme_ids"]   # gold has parent_theme_id = metals_mining
+        assert "cybersecurity" not in row["theme_ids"]
+        assert "cybersecurity" not in row["subtheme_ids"]
 
-    def test_missing_append_uncategorized(self):
-        """Missing-append path: ticker that lands in 'other_uncategorized'."""
-        row = _simulate_row_identity("other_uncategorized", [])
-        assert row["primary_theme_id"] == "other_uncategorized"
-        assert row["subtheme_ids"] == []   # other_uncategorized not in registry
+    # ── Case 4 — Duplicates and deterministic order ───────────────────────────────
 
-    def test_skeleton_path_parent_theme(self):
-        """Skeleton path: ticker resolved to parent theme 'defense'."""
-        row = _simulate_row_identity("defense", [])
-        assert row["primary_theme_id"] == "defense"
-        assert "defense" not in row["subtheme_ids"]   # defense has no parent_theme_id
+    async def test_case4_deduplication_and_deterministic_order(self):
+        """
+        Duplicate IDs in overrides must produce no duplicates.
+        Primary ID must be first.
+        Additional IDs must be consistently sorted.
+        """
+        result = await _run_enrich(
+            _make_store("TEST", "semiconductors"),
+            overrides=[
+                # memory_storage listed twice — must be deduplicated
+                {"symbol": "TEST", "theme_id": "memory_storage",  "action": "add"},
+                {"symbol": "TEST", "theme_id": "ai_networking",   "action": "add"},
+                {"symbol": "TEST", "theme_id": "memory_storage",  "action": "add"},
+            ],
+        )
+        row = _section_row(result)
 
-    def test_skeleton_path_subtheme_with_override(self):
-        """Skeleton path: primary='drones' + override='defense'."""
-        row = _simulate_row_identity("drones", ["defense"])
-        assert row["primary_theme_id"] == "drones"
-        assert "drones" in row["subtheme_ids"]     # drones → defense (has parent_theme_id)
-        assert "defense" not in row["subtheme_ids"]  # defense has no parent_theme_id
+        assert row["theme_ids"][0] == "semiconductors"
+        # No duplicates
+        assert len(row["theme_ids"]) == len(set(row["theme_ids"]))
+        # Additional IDs sorted (ai_networking < memory_storage alphabetically)
+        assert row["theme_ids"][1:] == sorted(row["theme_ids"][1:])
 
-    def test_no_canonical_theme_id(self):
-        """Edge case: no canonical_theme_id (ticker not resolved to any theme)."""
-        row = _simulate_row_identity(None, [])
-        assert row["primary_theme_id"] is None
+    # ── Case 5 — FMP profile sector wins over CSV ─────────────────────────────────
+
+    async def test_case5_fmp_profile_sector_wins_over_csv(self):
+        """
+        fund_snap["fields"]["profile"]["sector"] = "Utilities"
+        CSV Sector = "Technology"
+
+        Expected sector_id = "utilities" (FMP profile path wins).
+        """
+        fund_snaps = {
+            "TEST": {
+                "fields": {
+                    "profile": {"sector": "Utilities"},
+                },
+            }
+        }
+        result = await _run_enrich(
+            {
+                "tickers":  ["TEST"],
+                "analysis": {"sections": [{
+                    "id": "clean_energy", "title": "Clean Energy",
+                    "tickers": [{"symbol": "TEST", "canonical_theme_id": "clean_energy"}],
+                }]},
+                "csv_data": [{"Symbol": "TEST", "Sector": "Technology"}],
+            },
+            fund_snaps=fund_snaps,
+        )
+        row = _section_row(result)
+        assert row["sector_id"] == "utilities", (
+            f"Expected 'utilities' from FMP profile, got {row['sector_id']!r}"
+        )
+
+    # ── Case 6 — CSV sector fallback ─────────────────────────────────────────────
+
+    async def test_case6_csv_sector_fallback(self):
+        """
+        No FMP profile sector present.
+        CSV Sector = "Basic Materials"
+        Expected sector_id = "materials".
+        """
+        fund_snaps = {
+            "TEST": {
+                "fields": {},  # no "profile", no "sector"
+            }
+        }
+        result = await _run_enrich(
+            {
+                "tickers":  ["TEST"],
+                "analysis": {"sections": [{
+                    "id": "metals_mining", "title": "Metals & Mining",
+                    "tickers": [{"symbol": "TEST", "canonical_theme_id": "metals_mining"}],
+                }]},
+                "csv_data": [{"Symbol": "TEST", "Sector": "Basic Materials"}],
+            },
+            fund_snaps=fund_snaps,
+        )
+        row = _section_row(result)
+        assert row["sector_id"] == "materials", (
+            f"Expected 'materials' from CSV, got {row['sector_id']!r}"
+        )
+
+    # ── Case 7 — sector_id and theme diverge; company sector always wins ──────────
+
+    async def test_case7_sector_theme_conflict_company_sector_wins(self):
+        """
+        company profile sector = Energy
+        primary theme = datacenter_infra (rollup: technology/utilities/real_estate)
+
+        Expected:
+          sector_id = "energy"                  (from actual company data)
+          primary_theme_id = "datacenter_infra" (from theme assignment)
+          theme's rollup sectors must NOT overwrite sector_id
+        """
+        fund_snaps = {
+            "TEST": {
+                "fields": {
+                    "profile": {"sector": "Energy"},
+                },
+            }
+        }
+        result = await _run_enrich(
+            _make_store("TEST", "datacenter_infra"),
+            fund_snaps=fund_snaps,
+        )
+        row = _section_row(result)
+
+        assert row["sector_id"] == "energy"
+        assert row["primary_theme_id"] == "datacenter_infra"
+        assert row["theme_ids"] == ["datacenter_infra"]
+        # theme rollups must NOT appear as sector_id
+        theme_rollups = get_effective_rollup_sector_ids("datacenter_infra", REG)
+        assert row["sector_id"] not in theme_rollups or row["sector_id"] == "energy", (
+            "sector_id must track company, not theme rollup"
+        )
+
+    # ── Case 8 — Invalid / sentinel primary maps to null ─────────────────────────
+
+    async def test_case8_sentinel_primary_maps_to_null(self):
+        """
+        primary value = 'other_uncategorized' which is absent from the canonical
+        registry.  primary_theme_id must be null; theme_ids and subtheme_ids empty.
+        The human-readable canonical_theme_name field may remain unchanged.
+        """
+        assert "other_uncategorized" not in REG, (
+            "Precondition: other_uncategorized must not be in the canonical registry"
+        )
+
+        result = await _run_enrich(
+            {
+                "tickers":  ["TEST"],
+                "analysis": {"sections": [{
+                    "id":    "other_uncategorized",
+                    "title": "Other / Uncategorized",
+                    "tickers": [{
+                        "symbol":              "TEST",
+                        "canonical_theme_id":  "other_uncategorized",
+                        "canonical_theme_name": "Other / Uncategorized",
+                    }],
+                }]},
+                "csv_data": [],
+            },
+        )
+        row = _section_row(result)
+
+        assert row["primary_theme_id"] is None, (
+            f"other_uncategorized is not in the registry; "
+            f"primary_theme_id must be null, got {row['primary_theme_id']!r}"
+        )
         assert row["theme_ids"] == []
         assert row["subtheme_ids"] == []
+        # Human-readable name preserved
+        assert row.get("canonical_theme_name") == "Other / Uncategorized"
+
+    # ── Case 9 — Skeleton path: all four identity fields present ─────────────────
+
+    async def test_case9_skeleton_path_all_identity_fields_present(self):
+        """
+        No saved analysis sections (skeleton path).
+        Ticker resolved to 'ai_networking' (sub_theme, no parent_theme_id).
+
+        All four identity fields must be present and correct.
+        """
+        result = await _run_enrich_skeleton(
+            ["ANET"],
+            resolved_theme_id="ai_networking",
+            resolved_theme_name="AI Networking",
+        )
+        sections = result["analysis"]["sections"]
+        assert sections, "Skeleton must produce at least one section"
+        all_tickers = [r for s in sections for r in s.get("tickers", [])]
+        assert all_tickers, "Skeleton must produce at least one ticker row"
+
+        row = all_tickers[0]
+        assert "primary_theme_id" in row, "primary_theme_id must be present"
+        assert "theme_ids"        in row, "theme_ids must be present"
+        assert "subtheme_ids"     in row, "subtheme_ids must be present"
+        assert "sector_id"        in row, "sector_id must be present"
+
+        assert row["primary_theme_id"] == "ai_networking"
+        assert row["theme_ids"] == ["ai_networking"]
+        assert row["subtheme_ids"] == ["ai_networking"], (
+            "ai_networking is sub_theme; must appear in subtheme_ids via "
+            "classification check, not parent_theme_id check"
+        )
+
+    # ── Case 10 — Saved / cached path: identity enrichment occurs ────────────────
+
+    async def test_case10_saved_path_identity_enrichment_occurs(self):
+        """
+        Saved analysis sections (normal path) — the standard code path for a
+        watchlist that has completed its AI analysis.
+
+        Verifies that identity enrichment occurs before the response is returned,
+        covering both a theme-classified and a subtheme-classified row.
+        """
+        store = {
+            "tickers":  ["NVDA", "ANET"],
+            "analysis": {
+                "sections": [
+                    {
+                        "id": "semiconductors", "title": "Semiconductors",
+                        "tickers": [{"symbol": "NVDA", "canonical_theme_id": "semiconductors"}],
+                    },
+                    {
+                        "id": "ai_networking", "title": "AI Networking",
+                        "tickers": [{"symbol": "ANET", "canonical_theme_id": "ai_networking"}],
+                    },
+                ],
+            },
+            "csv_data": [],
+        }
+        result = await _run_enrich(store)
+
+        # Find the row for each ticker regardless of section order
+        all_rows = {
+            r["symbol"]: r
+            for s in result["analysis"]["sections"]
+            for r in s.get("tickers", [])
+        }
+
+        nvda = all_rows["NVDA"]
+        assert nvda["primary_theme_id"] == "semiconductors"
+        assert nvda["subtheme_ids"] == [], (
+            "semiconductors has classification='theme'; must not appear in subtheme_ids"
+        )
+
+        anet = all_rows["ANET"]
+        assert anet["primary_theme_id"] == "ai_networking"
+        assert "ai_networking" in anet["subtheme_ids"], (
+            "ai_networking has classification='sub_theme'; must appear in subtheme_ids"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -829,3 +1172,242 @@ class TestSectorIdConflict:
         assert company_sector_id == "utilities"
         assert theme_parent_sector == "technology"
         # The company sector wins; no assertion error means the conflict is handled
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RS production-function tests — Contract 1
+#
+# These invoke the REAL _build_theme_row() and _validate_basket_hashes() with
+# deterministic local inputs.  No live provider calls; _build_leader_universe
+# is patched to return an empty universe.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _make_bars(n: int = 60) -> list[dict]:
+    """Return n synthetic daily OHLCV bars."""
+    from datetime import date, timedelta
+    start = date(2025, 1, 1)
+    return [
+        {
+            "date":   (start + timedelta(days=i)).isoformat(),
+            "open":   100.0 + i * 0.1,
+            "high":   101.0 + i * 0.1,
+            "low":    99.0  + i * 0.1,
+            "close":  100.5 + i * 0.1,
+            "volume": 1_000_000.0,
+        }
+        for i in range(n)
+    ]
+
+
+async def _build_row(theme_id: str, tf: str = "7D") -> dict | None:
+    """
+    Invoke the real _build_theme_row() with synthetic history + patched universe.
+    Returns the row dict, or None if the function itself returns None.
+    """
+    from services.theme_rs_service import _build_theme_row
+    from services.theme_rs_universe import THEME_RS_UNIVERSE
+
+    meta = THEME_RS_UNIVERSE[theme_id]
+    proxy_syms = meta["proxy_symbols"]
+    bars = _make_bars(60)
+    histories = {sym: (bars, "test") for sym in proxy_syms}
+    histories["SPY"] = (bars, "test")
+    quotes = {sym: {"price": bars[-1]["close"], "last": bars[-1]["close"]} for sym in proxy_syms}
+    stock_perfs = {sym: 1.5 for sym in proxy_syms}
+    stock_sources = {sym: "test" for sym in proxy_syms}
+
+    # Stub _build_leader_universe so no ETF/Grok I/O occurs
+    async def _fake_universe(tid, m, used):
+        return (list(proxy_syms), {s: ["test_basket"] for s in proxy_syms}, "test")
+
+    with _patch("services.theme_rs_service._build_leader_universe", side_effect=_fake_universe):
+        return await _build_theme_row(
+            theme_id, meta, quotes, histories, tf, stock_perfs, stock_sources
+        )
+
+
+class TestRsBuildThemeRowProduction:
+    """
+    Production tests that invoke the real _build_theme_row() and verify that
+    hierarchy fields are present in the returned row dict.
+    """
+
+    async def test_parent_theme_row_has_hierarchy_fields(self):
+        """
+        A parent-theme node (semiconductors) must emit parent_theme_id=None and
+        rollup_sector_ids containing 'technology' in the real _build_theme_row row.
+        """
+        row = await _build_row("semiconductors")
+        assert row is not None, "_build_theme_row returned None for semiconductors"
+        assert "parent_theme_id" in row, "parent_theme_id key must be present"
+        assert "rollup_sector_ids" in row, "rollup_sector_ids key must be present"
+        assert row["parent_theme_id"] is None, (
+            f"semiconductors is a top-level theme; parent_theme_id must be None, "
+            f"got {row['parent_theme_id']!r}"
+        )
+        assert "technology" in (row["rollup_sector_ids"] or []), (
+            f"semiconductors must roll up to technology; got {row['rollup_sector_ids']!r}"
+        )
+
+    async def test_nested_subtheme_row_has_inherited_rollup(self):
+        """
+        A nested sub_theme (memory_storage, parent=semiconductors) must emit
+        parent_theme_id='semiconductors' and rollup_sector_ids=['technology']
+        in the real _build_theme_row row.
+        """
+        row = await _build_row("memory_storage")
+        assert row is not None, "_build_theme_row returned None for memory_storage"
+        assert row["parent_theme_id"] == "semiconductors", (
+            f"memory_storage parent_theme_id must be 'semiconductors', "
+            f"got {row['parent_theme_id']!r}"
+        )
+        assert "technology" in (row["rollup_sector_ids"] or []), (
+            f"memory_storage must inherit technology rollup; got {row['rollup_sector_ids']!r}"
+        )
+
+    async def test_standalone_subtheme_row_has_rollup_without_parent_theme_id(self):
+        """
+        A standalone sub_theme (ai_networking, no parent_theme_id) must emit
+        parent_theme_id=None AND have a non-empty rollup_sector_ids in the real row.
+        """
+        row = await _build_row("ai_networking")
+        assert row is not None, "_build_theme_row returned None for ai_networking"
+        assert row.get("parent_theme_id") is None
+        assert row["rollup_sector_ids"], (
+            f"ai_networking must have an effective rollup even without parent_theme_id; "
+            f"got {row['rollup_sector_ids']!r}"
+        )
+
+    async def test_core_rs_fields_present_alongside_hierarchy(self):
+        """
+        The real _build_theme_row row must carry the expected core RS fields
+        alongside the new hierarchy fields.
+        """
+        row = await _build_row("semiconductors")
+        assert row is not None
+        required_core = {"theme_id", "display_name", "classification", "proxy_symbols",
+                         "basket_hash", "performance_curve", "members"}
+        missing = required_core - set(row)
+        assert not missing, f"Core RS fields missing from _build_theme_row output: {missing}"
+        # Hierarchy fields co-exist with core RS fields
+        assert "parent_theme_id"   in row
+        assert "rollup_sector_ids" in row
+
+
+class TestValidateBasketHashesProduction:
+    """
+    Production tests that invoke the real _validate_basket_hashes() and verify
+    that stale/legacy rows are patched with live display_name, parent_theme_id,
+    and rollup_sector_ids from the live registry.
+    """
+
+    def test_legacy_row_receives_hierarchy_fields(self):
+        """
+        A legacy LKG row (no basket_hash) must be stamped with the current
+        parent_theme_id and rollup_sector_ids from the live registry.
+        curve_status must be 'stale_legacy_lkg'.
+        """
+        from services.theme_rs_service import _validate_basket_hashes
+
+        # memory_storage: parent_theme_id=semiconductors, rollup=['technology']
+        tid = "memory_storage"
+        assert REG[tid].get("parent_theme_id") == "semiconductors"
+
+        legacy_row = {
+            "theme_id":    tid,
+            "display_name": "Old Display Name",
+            # No basket_hash — this is a legacy LKG row
+        }
+        payload = {"themes": [legacy_row]}
+        patched, stale_count = _validate_basket_hashes(payload)
+
+        assert stale_count == 0, "legacy rows are not 'stale' — they are 'legacy'"
+        out = patched["themes"][0]
+        assert out["curve_status"] == "stale_legacy_lkg"
+        assert out["parent_theme_id"] == "semiconductors", (
+            f"parent_theme_id not repaired from live registry; got {out.get('parent_theme_id')!r}"
+        )
+        assert "technology" in (out.get("rollup_sector_ids") or []), (
+            f"rollup_sector_ids not repaired from live registry; got {out.get('rollup_sector_ids')!r}"
+        )
+        # display_name must be pulled from live registry
+        live_display = REG[tid]["display_name"]
+        assert out["display_name"] == live_display, (
+            f"display_name not updated from live registry; got {out['display_name']!r}"
+        )
+
+    def test_stale_hash_row_receives_hierarchy_fields(self):
+        """
+        A row with a mismatched basket_hash (stale membership) must have
+        parent_theme_id and rollup_sector_ids repaired from the live registry.
+        curve_status must be 'stale_membership'.
+        """
+        from services.theme_rs_service import _validate_basket_hashes
+
+        tid = "gold"  # parent_theme_id=metals_mining, rollup=['materials']
+        assert REG[tid].get("parent_theme_id") == "metals_mining"
+
+        stale_row = {
+            "theme_id":           tid,
+            "display_name":       "Gold (outdated)",
+            "parent_theme_id":    None,          # stale — wrong value
+            "rollup_sector_ids":  [],            # stale — wrong value
+            "basket_hash":        "WRONG_HASH",  # deliberate mismatch
+            "performance_curve":  [1, 2, 3],
+        }
+        payload = {"themes": [stale_row]}
+        patched, stale_count = _validate_basket_hashes(payload)
+
+        assert stale_count == 1
+        out = patched["themes"][0]
+        assert out["curve_status"] == "stale_membership"
+        assert out["parent_theme_id"] == "metals_mining", (
+            f"parent_theme_id not repaired for stale row; got {out.get('parent_theme_id')!r}"
+        )
+        assert "materials" in (out.get("rollup_sector_ids") or []), (
+            f"rollup_sector_ids not repaired for stale row; got {out.get('rollup_sector_ids')!r}"
+        )
+        # Stale curve must be wiped
+        assert out["performance_curve"] == [], (
+            "stale_membership row must have performance_curve wiped"
+        )
+
+    def test_current_hash_row_is_untouched(self):
+        """
+        A row whose basket_hash matches the live enriched registry must be
+        served as-is.  curve_status must be 'current' and performance_curve
+        must be preserved.
+
+        The hash is derived from the ENRICHED registry that _validate_basket_hashes
+        actually uses (from services.theme_merge_layer), not the base registry, to
+        avoid divergence when the merge layer adds manual symbols.
+        """
+        from services.theme_rs_service import _validate_basket_hashes
+
+        tid = "semiconductors"
+        # Derive the current hash by running a legacy call first — this ensures
+        # we use the exact same enriched proxy_symbols list that the function uses.
+        legacy_payload = {"themes": [{"theme_id": tid, "display_name": "tmp"}]}
+        _legacy_out, _ = _validate_basket_hashes(legacy_payload)
+        current_hash = _legacy_out["themes"][0]["basket_hash"]
+
+        current_row = {
+            "theme_id":          tid,
+            "display_name":      "Semiconductors",
+            "parent_theme_id":   REG[tid].get("parent_theme_id"),
+            "rollup_sector_ids": get_effective_rollup_sector_ids(tid, REG),
+            "basket_hash":       current_hash,
+            "performance_curve": [0.5, 1.0, 1.5],
+        }
+        payload = {"themes": [current_row]}
+        patched, stale_count = _validate_basket_hashes(payload)
+
+        assert stale_count == 0, (
+            "Current-hash row must not increment stale_count"
+        )
+        out = patched["themes"][0]
+        assert out.get("curve_status") == "current", (
+            f"current-hash row must have curve_status='current', got {out.get('curve_status')!r}"
+        )
+        # Performance curve must be preserved (not wiped)
+        assert out["performance_curve"] == [0.5, 1.0, 1.5]

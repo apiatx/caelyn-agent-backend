@@ -1,342 +1,317 @@
-# Theme Hierarchy Registry — Task Report
-**Commit:** `72960e96`  
-**Date:** 2026-08-05  
-**Status:** Complete — 79/79 tests passing, git diff --check clean
+# Corrective Commit Report — Watchlist Subtheme and Company-Sector Identity
+
+## Starting Branch and HEAD
+
+Branch: `main`  
+Starting HEAD: `a9d043ec` (Published your App — automatic Replit deployment commit on top of `98b281a3`)  
+Parent contract commits: `72960e96` (initial hierarchy), `98b281a3` (four-contract correction)
 
 ---
 
-## Proven Current Architecture
+## Exact Source Files Inspected
 
-### Canonical Registry
-`backend/services/theme_rs_universe.py` — `THEME_RS_UNIVERSE: dict[str, dict]`  
-Pure Python dict literals. **No database backing.** Static metadata additions require no schema work.
-
-**Fields per node (pre-task):**  
-`classification`, `parent_sector`, `display_name`, `proxy_type`, `proxy_symbols`, `candidate_symbols`, `sector_tags`, `keywords`, `macro_sensitivities`, `aliases` (optional)
-
-**Node count:** 51 entries — 11 SPDR sectors + 40 themes/sub-themes.
-
-### Theme List Endpoint
-`GET /api/themes/list` (`backend/routes/themes.py` line 169)  
-Serializes directly from `THEME_RS_UNIVERSE`. Additive fields only need adding to the serialization dict — no endpoint logic changes required.
-
-**Pre-task response fields:** `theme_id`, `display_name`, `classification`, `parent_sector`, `proxy_type`, `proxy_symbols`, `candidate_symbols`, `sector_tags`, `keywords`, `macro_sensitivities`
-
-**Post-task additions (additive):** `parent_theme_id`, `rollup_sector_ids`
-
-### Watchlist Ticker Row (Skeleton Path)
-`backend/services/watchlist_router.py` lines 1427–1462
-
-**Pre-task theme fields per row:**
-| Field | Source |
-|-------|--------|
-| `canonical_theme_id` | `resolve_primary_theme_for_ticker()` — **equivalent to `primary_theme_id`** |
-| `canonical_theme_name` | same |
-| `theme_source` | same |
-
-**Absent pre-task:** `sector_id`, `primary_theme_id`, `theme_ids`, `subtheme_ids`
-
-**Post-task additions (additive, no new persistence path):**
-| Field | Source |
-|-------|--------|
-| `sector_id` | `THEME_RS_UNIVERSE[canonical_theme_id]["parent_sector"]` — zero DB calls |
-| `primary_theme_id` | alias for `canonical_theme_id` — zero cost |
-| `theme_ids` | primary + active "add" rows from batch `get_theme_ticker_overrides()` |
-| `subtheme_ids` | subset of `theme_ids` where registry node has `parent_theme_id` set |
-
-One batch `get_theme_ticker_overrides()` call per watchlist load. Not per-ticker. Existing infrastructure — no new persistence.
-
-### Additional Memberships (pre-task)
-`theme_ticker_overrides` Neon table. Accessible via `get_theme_ticker_overrides()` in `pg_storage.py`. Columns: `theme_id`, `symbol`, `action`, `source`, `note`, `created_by`. The `_get_ticker_theme_memberships()` helper in `routes/themes.py` already batches all rows and returns `additional_theme_memberships` — the `watchlist_router` skeleton was simply not using it.
+| File | Purpose |
+|---|---|
+| `backend/services/watchlist_router.py` | Production row-enrichment function `_enrich_store_with_quotes` and `_build_ticker_row` closure |
+| `backend/services/theme_rs_universe.py` | Canonical registry — `classification`, `parent_theme_id`, `rollup_sector_ids` per node |
+| `backend/services/theme_rs_service.py` | `_build_theme_row()`, `_validate_basket_hashes()` — imports `ENRICHED_THEME_RS_UNIVERSE` from `theme_merge_layer` |
+| `backend/tests/test_theme_hierarchy.py` | Full test suite — simulation helper removed, production tests added |
 
 ---
 
-## Taxonomy Metadata Added
+## Defect 1 — Exact Root Cause: `subtheme_ids` Used `parent_theme_id` as Proxy
 
-### New Registry Fields (additive — all `dict.get()` safe for existing consumers)
+**Location**: `services/watchlist_router.py`, inside `_build_ticker_row` closure and the uncategorized reclassification block.
 
-```
-parent_theme_id   : str | None  — canonical ID of parent theme; null for sectors and parent themes
-rollup_sector_ids : list[str]   — canonical sector IDs for inclusive sector filtering
+**Broken logic** (two locations):
+```python
+# _build_ticker_row identity block (line ~1468):
+_id_subs = [t for t in _id_all if (_wl_trs_uni.get(t) or {}).get("parent_theme_id")]
+
+# Uncategorized reclassification (line ~1687):
+_unc_subs = [t for t in _unc_all if (_wl_trs_uni.get(t) or {}).get("parent_theme_id")]
 ```
 
----
+**Why this was wrong**: `parent_theme_id` means "this node has a broader parent theme". It does **not** mean "this node is classified as a subtheme". The correct classification field is `classification == "sub_theme"`.
 
-## Classification Changes
+### Examples of Existing `sub_theme` Nodes WITHOUT `parent_theme_id` (19 total)
 
-| ID | Before | After | Reason |
-|----|--------|-------|--------|
-| `metals_mining` | `sub_theme` | `theme` | parent of gold/silver/copper/rare_earth |
-| `semiconductors` | `sub_theme` | `theme` | parent of memory/semicap/substrates |
-| `oil_gas` | `sub_theme` | `theme` | parent of lng_gas/oil_services |
-| `software` | `sub_theme` | `theme` | parent of cloud_software/cybersecurity |
-| `defense` | `sub_theme` | `theme` | parent of drones |
+These were silently excluded from `subtheme_ids` by the broken code:
 
-**Backward compat:** `theme_ticker_mapper.py` reads `classification` as a stored label only (`cls_val = meta.get("classification", "theme")`). No branching on "sub_theme" vs "theme". Safe to change.
+| theme_id | display_name |
+|---|---|
+| `ai_networking` | AI Networking |
+| `banks` | Banks |
+| `biotech` | Biotech |
+| `chemicals_materials` | Chemicals & Materials |
+| `consumer_retail` | Consumer Retail |
+| `datacenter_infra` | Data Center Infrastructure |
+| `fintech` | Fintech |
+| `homebuilders` | Homebuilders |
+| `insurance` | Insurance |
+| `medical_devices` | Medical Devices |
+| `photonics_lasers` | Photonics / Lasers |
+| `power_cooling` | Power / Cooling |
+| `quantum` | Quantum Computing |
+| `regional_banks` | Regional Banks |
+| `robotics_automation` | Robotics & Automation |
+| `solar` | Solar |
+| `space` | Space Economy |
+| `travel_transportation` | Travel & Transportation |
+| `uranium_nuclear` | Uranium & Nuclear Energy |
 
----
-
-## parent_theme_id Assignments
-
-| Child ID | parent_theme_id | Parent display name |
-|----------|-----------------|---------------------|
-| `gold` | `metals_mining` | Metals & Mining |
-| `silver` | `metals_mining` | Metals & Mining |
-| `copper_miners` | `metals_mining` | Metals & Mining |
-| `rare_earth` | `metals_mining` | Metals & Mining |
-| `memory_storage` | `semiconductors` | Semiconductors |
-| `semicap_equipment` | `semiconductors` | Semiconductors |
-| `substrates_packaging` | `semiconductors` | Semiconductors |
-| `lng_gas` | `oil_gas` | Oil & Gas |
-| `oil_services` | `oil_gas` | Oil & Gas |
-| `cloud_software` | `software` | Software |
-| `cybersecurity` | `software` | Software |
-| `drones` | `defense` | Defense |
-
----
-
-## rollup_sector_ids Assignments
-
-| ID | rollup_sector_ids | Notes |
-|----|-------------------|-------|
-| `metals_mining` | `["materials"]` | single-sector parent |
-| `semiconductors` | `["technology"]` | single-sector parent |
-| `oil_gas` | `["energy"]` | single-sector parent |
-| `software` | `["technology"]` | single-sector parent |
-| `defense` | `["industrials"]` | single-sector parent |
-| `clean_energy` | `["utilities", "industrials", "energy"]` | cross-sector; derived from existing `sector_tags` |
-| `datacenter_infra` | `["technology", "utilities", "real_estate"]` | cross-sector; derived from existing `sector_tags` |
-
----
-
-## Display-Label Changes + Aliases Preserved
-
-| ID | Old display_name | New display_name | Alias added |
-|----|-----------------|------------------|-------------|
-| `copper_miners` | "Copper Miners" | "Copper" | `"copper_miners"` (→ "Copper Miners" via `title()` transform in mapper) |
-| `rare_earth` | "Rare Earth Metals" | "Rare Earth Elements" | `"rare_earth_metals"` |
-
-Frozen IDs unchanged. `semicap_equipment` aliases (`semicap`, `semiconductor_equipment`, `semi_equipment`, `semi_materials`, `semiconductor_materials`, `semi_equipment_and_materials`, `semicap_equipment`) all preserved.
-
----
-
-## Endpoint Response Examples
-
-### GET /api/themes/list — semiconductors node
-
-```json
-{
-  "theme_id": "semiconductors",
-  "display_name": "Semiconductors",
-  "classification": "theme",
-  "parent_sector": "technology",
-  "parent_theme_id": null,
-  "rollup_sector_ids": ["technology"],
-  "proxy_type": "etf",
-  "proxy_symbols": ["SMH", "SOXX", "XSD", "PSI"],
-  "candidate_symbols": ["NVDA", "AMD", ...],
-  "sector_tags": ["Technology"],
-  "keywords": ["semiconductors", "chips", ...],
-  "macro_sensitivities": ["AI capex", ...]
-}
+**Fixed logic** (all three row paths):
+```python
+_id_subs = [t for t in _id_all if (_wl_trs_uni.get(t) or {}).get("classification") == "sub_theme"]
 ```
 
-### GET /api/themes/list — memory_storage node
+---
 
-```json
-{
-  "theme_id": "memory_storage",
-  "display_name": "Memory & Storage",
-  "classification": "sub_theme",
-  "parent_sector": "technology",
-  "parent_theme_id": "semiconductors",
-  "rollup_sector_ids": [],
-  ...
-}
+## Defect 2 — Exact Root Cause: Wrong FMP Fundamentals Path for `sector_id`
+
+**Location**: `services/watchlist_router.py`, `_build_ticker_row` sector_id block.
+
+**Broken logic**:
+```python
+_id_sector_raw = (
+    _fund_snap.get("fields", {}).get("sector")  # ← misses canonical FMP path
+    or csv_row.get("Sector")
+    or csv_row.get("sector")
+    or ""
+)
 ```
 
-### GET /api/themes/list — clean_energy node
+**Confirmed stored fundamentals path**: FMP profile data is stored under `fund_snap["fields"]["profile"]["sector"]`. The broken code read `fund_snap["fields"]["sector"]` (a flat field that is rarely populated), skipping the canonical FMP cached value and unnecessarily falling through to the CSV fallback.
 
-```json
-{
-  "theme_id": "clean_energy",
-  "display_name": "Clean Energy",
-  "classification": "theme",
-  "parent_sector": "utilities",
-  "parent_theme_id": null,
-  "rollup_sector_ids": ["utilities", "industrials", "energy"],
-  ...
-}
+**Verification**: Confirmed by inspecting `data/watchlist_fundamentals_store.py` and existing `_fund_fields_q` usage pattern at line ~1331 which reads `_fund_snap_q.get("fields") or {}` and then uses `_fund_fields_q` for other FMP fields including profile-nested ones.
+
+**Fixed source priority**:
+```python
+_fund_fields = _fund_snap.get("fields") or {}
+_id_sector_raw = (
+    (_fund_fields.get("profile") or {}).get("sector")  # ← canonical FMP stored path
+    or _fund_fields.get("sector")                        # ← legacy flat-field fallback
+    or csv_row.get("Sector")
+    or csv_row.get("sector")
+    or ""
+)
 ```
 
-### Watchlist Skeleton Row (additive fields only)
+---
 
-```json
-{
-  "canonical_theme_id":   "memory_storage",
-  "canonical_theme_name": "Memory & Storage",
-  "sector_id":            "technology",
-  "primary_theme_id":     "memory_storage",
-  "theme_ids":            ["memory_storage", "semiconductors"],
-  "subtheme_ids":         ["memory_storage"]
-}
+## Final Production Identity-Field Algorithm
+
+Applied unconditionally inside `_build_ticker_row` (every row path):
+
+```python
+# 1. Resolve raw primary from row fields
+_id_raw = enriched.get("canonical_theme_id") or enriched.get("primary_theme_id")
+
+# 2. Null sentinel/unmapped IDs not in the canonical registry
+_id_primary = _id_raw if (_id_raw and _id_raw in _wl_trs_uni) else None
+
+# 3. Additional memberships: registry-only, deduped, sorted deterministically
+_id_extras = sorted(
+    t for t in _wl_override_map.get(sym, [])
+    if t != _id_primary and t in _wl_trs_uni
+)
+
+# 4. Full theme_ids list: primary first, extras sorted
+_id_all = ([_id_primary] if _id_primary else []) + _id_extras
+
+# 5. subtheme_ids: classification-based, NOT parent_theme_id-based
+_id_subs = [
+    t for t in _id_all
+    if (_wl_trs_uni.get(t) or {}).get("classification") == "sub_theme"
+]
+
+enriched["primary_theme_id"] = _id_primary
+enriched["theme_ids"]        = _id_all
+enriched["subtheme_ids"]     = _id_subs
 ```
-(`semiconductors` additional membership from `theme_ticker_overrides`; `memory_storage` is a subtheme because it has `parent_theme_id`)
+
+The uncategorized reclassification path uses the same classification-based rule and same registry-filter + sort for extras.
 
 ---
 
-## Tests and Results
+## How Invalid/Sentinel IDs Are Handled
 
-**File:** `backend/tests/test_theme_hierarchy.py` — 407 lines, 79 tests  
-**Result:** 79 passed, 0 failed, 0.10s
+`other_uncategorized` is not in `THEME_RS_UNIVERSE` (confirmed: `"other_uncategorized" not in REG`).
 
-**Test categories:**
-- `test_validate_hierarchy_clean` — live registry passes all structural checks
-- `test_sector_nodes_exist[×11]` — all SPDR sector nodes valid
-- `test_parent_theme_classification[×5]` — promoted nodes have classification="theme"
-- `test_parent_theme_has_no_parent_theme_id[×5]` — parent themes have no parent
-- Metals & Mining hierarchy (4 child assignments + rollup)
-- Copper/Rare Earth display-name changes + aliases (4 tests)
-- Semiconductors hierarchy (4 tests + frozen IDs + aliases preserved)
-- Oil & Gas hierarchy (3 tests)
-- Software hierarchy (3 tests)
-- Defense hierarchy (2 tests)
-- `test_space_is_independent` — space has no parent_theme_id
-- Cross-sector rollup tests (clean_energy, datacenter_infra)
-- `test_all_rollup_ids_are_sectors` — integrity check across all nodes
-- `test_all_parent_theme_ids_exist` — referential integrity
-- `test_all_parent_theme_ids_are_theme_class` — parent classification check
-- `test_canonical_id_unchanged[×20]` — all 20 involved IDs unchanged
-- `test_list_endpoint_fields_present` — backward compat for all pre-existing fields
-- Validator negative tests (5): unknown parent, self-parent, sector-as-parent, cycle, non-sector rollup
-- `test_direct_parent_member_no_subtheme` — clean_energy pattern
-- `test_theme_ids_union_logic` — primary + additional membership union
+When `canonical_theme_id = "other_uncategorized"`:
+- `_id_primary = None` (not in registry — nulled)
+- `_id_all = []`
+- `_id_subs = []`
 
-**Broader existing tests:** 82/83 passing (1 pre-existing failure: `test_bootstrap_health_contract_unchanged` — subprocess cwd issue unrelated to this task, documented in session memory).
+The human-readable `canonical_theme_name` and `canonical_theme_id` fields on the row are **not touched** — they preserve the stored value. Only the taxonomy identity fields (`primary_theme_id`, `theme_ids`, `subtheme_ids`) expose `null`/`[]`.
 
 ---
 
-## Behavior Deliberately Preserved
+## How Deterministic Ordering and Deduplication Work
 
-- All canonical theme IDs unchanged (including `semicap_equipment` frozen ID)
-- All existing `aliases` entries preserved and extended
-- `parent_sector` and `sector_tags` fields present and unchanged on all nodes
-- `ALL_PROXY_SYMBOLS` and `ALL_CANDIDATE_SYMBOLS` computed lists unaffected
-- `ENRICHED_THEME_RS_UNIVERSE` in `theme_merge_layer.py` — reads from `THEME_RS_UNIVERSE`; `parent_theme_id` / `rollup_sector_ids` pass through transparently
-- `theme_ticker_mapper.py` — reads `classification` as a stored label; no branch on "sub_theme" vs "theme"; safe
-- `theme_resolver.py` — not touched; primary-theme resolution precedence unchanged
-- Existing `theme_ticker_overrides` Neon table and `watchlist_category_overrides` — not touched
-- Existing endpoint URLs — not changed
-- Existing Watchlist membership authority (`public.watchlist.tickers`) — not touched
-- Relative-strength calculations and baskets — not affected (use `proxy_symbols` / `candidate_symbols` which are unchanged)
-- `canonical_theme_id` field still present in skeleton row (backward compat); `primary_theme_id` is an alias added alongside it
+1. **Primary first**: `_id_primary` is always the first element when non-null.
+2. **Sorted extras**: `sorted(t for t in _wl_override_map.get(sym, []) if ...)` — sorted alphabetically by theme_id string.
+3. **Deduplication**: the `if t != _id_primary` guard prevents primary from appearing again; the `set`-free sorted comprehension already produces unique results because `_wl_override_map` values are deduplicated at build time (line ~1195: `if _wl_ov_tid not in _wl_override_map[_wl_ov_sym]`).
+4. **Registry filter**: `t in _wl_trs_uni` — only canonical registry IDs are included.
 
 ---
 
-## Unresolved Taxonomy Ambiguities
+## Every Production Watchlist Row Path Tested
 
-### Space Economy (`space`)
-**Design decision: intentionally independent.**  
-`space` has `parent_sector="industrials"` (same as defense) and `sector_tags=["Technology", "Industrials"]` but keywords include "defense space." Repository evidence is ambiguous — space companies (RKLB, ASTS) are not primarily defense contractors, and the current registry does not group them under defense. Left independent. Report this to the frontend team.
-
-### Photonics / Lasers (`photonics_lasers`)
-**Left independent.**  
-Keywords include "silicon photonics" but the node also covers industrial fiber lasers (IPGP), medical applications, and LiDAR. It is not exclusively a semiconductor-value-chain node. The spec condition ("if the current registry clearly treats it as part of the semiconductor value chain") is not met. Left independent; may be reassigned if a dedicated "Silicon Photonics" subtheme is created.
-
-### Lithium & Battery Tech (`lithium_battery`)
-Not placed under clean_energy. Battery tech spans materials (ALB, SQM — lithium mining) and industrials/EV (ENVX, QS — cell tech). The spec says "do not automatically place every battery, lithium, grid, or nuclear node under Clean Energy." Left independent; ambiguous.
-
-### Uranium & Nuclear (`uranium_nuclear`)
-Not placed under clean_energy. Nuclear straddles Utilities and Energy; the proxy (URA, URNM) tracks uranium miners, not clean-energy operators. Left independent. May need its own classification decision if a "Nuclear Energy" parent theme is created.
+| Row path | Covered by |
+|---|---|
+| Normal saved-analysis row | Cases 1, 2, 3, 4, 5, 6, 7, 8, 10 |
+| Skeleton (no sections, analysis pending) | Case 9 |
+| Cached/saved path (identity enrichment before response) | Case 10 |
+| Uncategorized reclassification | Covered by production code paths in Cases 1, 8 |
 
 ---
 
-## Proposed Future Nodes (Semiconductor Value Chain)
+## Proof That Tests Invoke Production Code Rather Than a Copied Simulation
 
-Per spec instruction to report rather than invent:
+The former `_simulate_row_identity()` helper was a pure-Python mirror of the `_build_ticker_row` identity block. It was removed entirely.
 
-| Proposed ID | Display Name | Would be child of |
-|-------------|-------------|-------------------|
-| `semiconductor_test` | Semiconductor Test | `semiconductors` |
-| `foundry` | Semiconductor Foundry | `semiconductors` |
-| `analog_semiconductors` | Analog & Mixed-Signal | `semiconductors` |
-| `power_semiconductors` | Power Semiconductors | `semiconductors` |
-| `silicon_photonics` | Silicon Photonics | `semiconductors` (if narrowed from `photonics_lasers`) |
+All 10 cases in `TestWatchlistProductionPath` call the real `_enrich_store_with_quotes()` function via the `_run_enrich()` / `_run_enrich_skeleton()` helpers. These helpers stub only external I/O:
 
-These would require curating candidate_symbols and proxy_symbols before adding. Not implemented.
+| Patched target | Why |
+|---|---|
+| `services.watchlist_quote_cache.get_watchlist_quotes` | Prevents Tradier/LKG network calls |
+| `services.name_overrides.get_name_overrides` | Prevents Neon lookup |
+| `data.watchlist_fundamentals_store.get_snapshots_bulk` | Returns controlled `fund_snaps` |
+| `services.watchlist_router._load_cached_watchlist_market_data` | Prevents disk/DB read |
+| `data.pg_storage.get_theme_ticker_overrides` | Returns controlled override rows |
+| `data.quote_demand_registry.register` | No-op |
+| `services.watchlist_router._get_stage2_breakout` | Prevents LKG disk read |
+| `services.theme_resolver.*` (skeleton only) | Returns controlled theme resolution |
+
+All other logic in `_enrich_store_with_quotes` and `_build_ticker_row` runs unmodified.
 
 ---
 
-## Files Changed
+## Real RS Row-Builder and Stale-Cache-Repair Test Results
+
+### `TestRsBuildThemeRowProduction` (4 tests, all pass)
+
+Calls the real `_build_theme_row()` with synthetic history bars and patched `_build_leader_universe`.
+
+- `test_parent_theme_row_has_hierarchy_fields`: `semiconductors` → `parent_theme_id=None`, `rollup_sector_ids` contains `"technology"` ✓
+- `test_nested_subtheme_row_has_inherited_rollup`: `memory_storage` → `parent_theme_id="semiconductors"`, rollup contains `"technology"` ✓
+- `test_standalone_subtheme_row_has_rollup_without_parent_theme_id`: `ai_networking` → `parent_theme_id=None`, non-empty `rollup_sector_ids` ✓
+- `test_core_rs_fields_present_alongside_hierarchy`: core RS fields (`theme_id`, `display_name`, `basket_hash`, etc.) co-exist with hierarchy fields ✓
+
+**Critical discovery during RS test development**: `theme_rs_service.py` imports `ENRICHED_THEME_RS_UNIVERSE` from `services.theme_merge_layer` (aliased as `THEME_RS_UNIVERSE`), not from `services.theme_rs_universe` (the base registry). This means `_validate_basket_hashes` uses the enriched proxy_symbol lists (which may include manually-added symbols). The `test_current_hash_row_is_untouched` test derives the current hash by calling `_validate_basket_hashes` on a legacy row first, ensuring the hash is computed from the same enriched source.
+
+### `TestValidateBasketHashesProduction` (3 tests, all pass)
+
+Calls the real `_validate_basket_hashes()` directly (synchronous, no I/O stubs needed).
+
+- `test_legacy_row_receives_hierarchy_fields`: no `basket_hash` → `curve_status="stale_legacy_lkg"`, `parent_theme_id` and `rollup_sector_ids` repaired from live registry ✓
+- `test_stale_hash_row_receives_hierarchy_fields`: mismatched hash → `stale_count=1`, `curve_status="stale_membership"`, `performance_curve=[]`, hierarchy fields repaired ✓
+- `test_current_hash_row_is_untouched`: matching hash → `stale_count=0`, `curve_status="current"`, `performance_curve` preserved ✓
+
+---
+
+## Exact Files Changed
 
 | File | Change |
-|------|--------|
-| `backend/services/theme_rs_universe.py` | +152 lines: 17 node edits (classification, display_name, parent_theme_id, rollup_sector_ids, aliases) + `validate_theme_hierarchy()` (108 lines) |
-| `backend/routes/themes.py` | +3 lines: `parent_theme_id` and `rollup_sector_ids` added to `/list` serialization |
-| `backend/services/watchlist_router.py` | +45 lines: batch override load + 4 new skeleton row fields |
-| `backend/tests/test_theme_hierarchy.py` | New file, 407 lines, 79 tests |
+|---|---|
+| `backend/services/watchlist_router.py` | 3 locations: (1) identity block — sentinel null, registry filter, sort, `classification`-based subtheme; (2) sector_id — `profile.sector` first; (3) uncategorized reclassification — same `classification` fix + registry filter + sort |
+| `backend/tests/test_theme_hierarchy.py` | Removed `_simulate_row_identity` helper + `TestWatchlistRowIdentityFields` (8 simulation tests); added `_run_enrich`, `_run_enrich_skeleton`, `_section_row`, `_make_store` helpers; added `TestWatchlistProductionPath` (10 production-path cases); added `_make_bars`, `_build_row` helpers; added `TestRsBuildThemeRowProduction` (4 tests); added `TestValidateBasketHashesProduction` (3 tests) |
+| `attached_assets/Pasted-BACKEND-DEEPSEEK-OPENCODE-CORRECTION-COMPLETE-THE-CANON_1785952018493.txt` | **Deleted** — automatically-attached task prompt from prior commit, not referenced by application code or required documentation |
 
 ---
 
-## git status -sb
+## Exact Files Staged
 
 ```
-## main...origin/main [ahead 3]
+D  attached_assets/Pasted-BACKEND-DEEPSEEK-OPENCODE-CORRECTION-COMPLETE-THE-CANON_1785952018493.txt
+M  backend/services/watchlist_router.py
+M  backend/tests/test_theme_hierarchy.py
+```
+
+No runtime cache files, no LKG files, no JSON snapshots, no unrelated assets.
+
+---
+
+## Confirmation That No Runtime Cache Files Were Staged
+
+`git add` was called with explicit file paths only. Modified runtime caches (`data/bittensor_dashboard_cache.json`, `data/hyperliquid_*.json`, `data/options_supplement_lkg_v1.json`, `data/predict_odds_live_lkg.json`, `data/thematic_context_snapshot.json`, `data/theme_rs_refresh_ts.json`, `data/themes_rs_1d_lkg.json`) were **not staged**.
+
+---
+
+## Pasted Prompt Asset — Removed
+
+`attached_assets/Pasted-BACKEND-DEEPSEEK-OPENCODE-CORRECTION-COMPLETE-THE-CANON_1785952018493.txt` was the automatically-attached prompt document for the prior task. It is not imported, referenced, or required by any application code or project documentation. It was deleted and staged for removal in this corrective commit.
+
+---
+
+## Test Commands and Complete Results
+
+```
+cd backend && python -m pytest tests/test_theme_hierarchy.py -v --tb=short
+```
+
+**Result: 154 passed in 2.95s**
+
+Prior simulation tests (8): removed — were duplicating production logic and masking the defect.  
+New production tests added: 10 (Watchlist) + 4 (RS row builder) + 3 (cache repair) = 17 net new.  
+Net count: 145 (prior) − 8 (simulation removed) + 17 (production added) = **154 total**.
+
+---
+
+## Direct Before/After Evidence for Pre-Existing Failures
+
+Three test modules fail to collect due to `ImportError: cannot import name '_build_event' from 'services.catalyst_calendar_service'`:
+- `tests/test_calendar_curation.py`
+- `tests/test_calendar_snapshot.py`
+- `tests/test_home_top_catalysts.py`
+
+**Before/after evidence**: Git stash was applied to restore the HEAD to the parent state (`a9d043ec`), then the collection was attempted:
+
+```
+cd backend && git stash && python -m pytest tests/test_calendar_snapshot.py --collect-only 2>&1 | grep "ImportError"
+```
+
+Output confirmed: `ImportError: cannot import name '_build_event' from 'services.catalyst_calendar_service'` — identical error on the parent commit. `git stash pop` restored the working state.
+
+These failures are unrelated to this task (catalyst calendar service missing a private function) and pre-date both `72960e96` and `98b281a3`.
+
+`test_bootstrap_health_contract_unchanged` in `tests/test_watchlist_market_data_rows.py` fails with `ModuleNotFoundError: No module named 'backend'` when run from inside the `backend/` directory — this is an environment-level test limitation pre-dating this commit (confirmed: `git show 98b281a3:backend/tests/test_watchlist_market_data_rows.py | grep -c test_bootstrap_health_contract_unchanged` → 1).
+
+---
+
+## `git diff --check` Result
+
+```
+cd backend && git diff --check HEAD
+(no output — zero whitespace errors)
 ```
 
 ---
 
-## Commit SHA and Message
+## Final `git status -sb`
 
 ```
-72960e96  feat: extend canonical theme registry with parent_theme_id / rollup_sector_ids hierarchy
+## main...origin/main [ahead 2]
+D  attached_assets/Pasted-BACKEND-DEEPSEEK-OPENCODE-CORRECTION-COMPLETE-THE-CANON_1785952018493.txt
+M  backend/services/watchlist_router.py
+M  backend/tests/test_theme_hierarchy.py
 ```
 
 ---
 
-## Complete Committed Diff Summary
+## New Commit SHA and Message
 
 ```
-backend/services/theme_rs_universe.py
-  clean_energy         + rollup_sector_ids: ["utilities", "industrials", "energy"]
-  cloud_software       + parent_theme_id: "software"
-  copper_miners          display_name: "Copper Miners" → "Copper"
-                       + parent_theme_id: "metals_mining"
-                       + aliases: ["copper_miners"]
-  cybersecurity        + parent_theme_id: "software"
-  datacenter_infra     + rollup_sector_ids: ["technology", "utilities", "real_estate"]
-  defense                classification: "sub_theme" → "theme"
-                       + rollup_sector_ids: ["industrials"]
-  drones               + parent_theme_id: "defense"
-  gold                 + parent_theme_id: "metals_mining"
-  lng_gas              + parent_theme_id: "oil_gas"
-  memory_storage       + parent_theme_id: "semiconductors"
-  metals_mining          classification: "sub_theme" → "theme"
-                       + rollup_sector_ids: ["materials"]
-  oil_gas                classification: "sub_theme" → "theme"
-                       + rollup_sector_ids: ["energy"]
-  oil_services         + parent_theme_id: "oil_gas"
-  rare_earth             display_name: "Rare Earth Metals" → "Rare Earth Elements"
-                       + parent_theme_id: "metals_mining"
-                       + aliases: ["rare_earth_metals"]
-  semicap_equipment    + parent_theme_id: "semiconductors"
-  semiconductors         classification: "sub_theme" → "theme"
-                       + rollup_sector_ids: ["technology"]
-  silver               + parent_theme_id: "metals_mining"
-  software               classification: "sub_theme" → "theme"
-                       + rollup_sector_ids: ["technology"]
-  substrates_packaging + parent_theme_id: "semiconductors"
-  [bottom]             + validate_theme_hierarchy() function (108 lines)
-
-backend/routes/themes.py
-  themes_list()        + "parent_theme_id": meta.get("parent_theme_id"),
-                       + "rollup_sector_ids": meta.get("rollup_sector_ids", []),
-
-backend/services/watchlist_router.py
-  skeleton builder     + batch load THEME_RS_UNIVERSE + get_theme_ticker_overrides()
-                       + "sector_id", "primary_theme_id", "theme_ids", "subtheme_ids"
-                         computed per-ticker from existing data (no new persistence)
-
-backend/tests/test_theme_hierarchy.py
-  [new file]           79 tests covering all hierarchy invariants + negative cases
+<SHA pending — commit command below>
+fix: correct watchlist subtheme and company-sector identity
 ```
+
+### Staged diff summary
+
+**`services/watchlist_router.py`** — 3 hunks:
+1. Identity block in `_build_ticker_row`: null sentinel, registry-filter + sort for extras, `classification == "sub_theme"` for `subtheme_ids`
+2. sector_id block: `profile.sector` promoted to highest priority, legacy `fields.sector` as backward-compat fallback
+3. Uncategorized reclassification: same `classification` fix, registry filter, sorted extras
+
+**`tests/test_theme_hierarchy.py`** — simulation helper and class removed; `_run_enrich`, `_run_enrich_skeleton`, `TestWatchlistProductionPath` (10 cases), `TestRsBuildThemeRowProduction` (4 cases), `TestValidateBasketHashesProduction` (3 cases) added; net 154 tests all passing.
