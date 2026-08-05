@@ -1,0 +1,361 @@
+You are working inside the current CaelynAI BACKEND Replit workspace:
+
+`/home/runner/workspace`
+
+This is a focused read-only deployment-durability and coverage audit following commit:
+
+`59e3ca97bb724747d80b1a49757b7140fba5cc9e`
+
+Read the current `AGENTS.md` first and follow it exactly.
+
+## Restrictions
+
+This task is strictly read-only.
+
+Do not:
+
+* edit source files
+* edit runtime data files
+* run the metadata repair again
+* restart the server
+* publish or deploy
+* create a branch, clone, or worktree
+* commit
+* push
+* reset, rebase, clean, stash, pull, or merge
+* call any market-data provider
+* modify `_index.json`
+* modify any `.json.gz` file
+
+Use the current Replit workspace as the primary runtime source of truth.
+
+The goal is to determine whether the performance fix is durably deployable and to explain the unresolved 7D coverage gap.
+
+## Current known state
+
+Commit `59e3ca97` implemented:
+
+* a compact 64-session `comparison_close_tail`
+* index-only `get_comparison_closes_bulk`
+* zero request-time comparison-history gzip reads
+* removal of leaked `_comparison_*` response fields
+
+The runtime repair reportedly updated 426 `_INDEX` entries.
+
+The report also claimed:
+
+* 7D coverage: 384/426
+* 30D coverage: 423/426
+* only three symbols lacked enough recent history
+
+Those figures are contradictory because 42 symbols lack 7D comparisons.
+
+The repair modified runtime `_index.json` but did not commit it.
+
+## Part 1 — Verify exact repository and workspace state
+
+Report:
+
+```bash
+pwd
+git branch --show-current
+git rev-parse HEAD
+git status -sb
+git log --oneline --decorate -8
+git merge-base --is-ancestor 59e3ca97 HEAD
+```
+
+Also report:
+
+```bash
+git diff --name-only
+git diff --stat
+git diff --numstat -- backend/data/canonical_history/_index.json
+git ls-files backend/data/canonical_history/_index.json
+```
+
+Determine whether the current workspace `_index.json` is:
+
+* tracked and modified
+* tracked and clean
+* untracked
+* ignored
+* absent
+
+Do not change it.
+
+## Part 2 — Compare runtime index against committed HEAD
+
+Using read-only Python or shell inspection, compare:
+
+1. Current workspace file:
+
+`backend/data/canonical_history/_index.json`
+
+2. The committed version:
+
+```bash
+git show HEAD:backend/data/canonical_history/_index.json
+```
+
+For each version report:
+
+* total symbol entries
+* entries containing `comparison_close_tail`
+* entries with a non-empty valid tail
+* minimum tail length
+* maximum tail length
+* median tail length
+* entries with malformed tails
+* AAPL tail presence and length
+* MSFT tail presence and length
+* NVDA tail presence and length
+* PLTR tail presence and length
+
+Do not materialize a replacement over the workspace file. Temporary files outside the repository are allowed only for read-only comparison and must be deleted afterward.
+
+## Part 3 — Prove fresh-HEAD behavior
+
+Using a temporary directory outside the repository, simulate the canonical-history index state that a fresh Git checkout at current HEAD would receive.
+
+Do not create a worktree or clone.
+
+Use:
+
+* the current committed source code
+* the committed `HEAD` version of `_index.json`
+* no provider calls
+* no writes to the repository
+* no writes to the real canonical-history directory
+
+Invoke the real production functions against the isolated temporary index state.
+
+For at least:
+
+* AAPL
+* MSFT
+* NVDA
+* PLTR
+
+Report the result from:
+
+`get_comparison_closes_bulk(...)`
+
+State explicitly whether a fresh HEAD-only instance produces:
+
+* populated 7D/30D comparison closes
+* null comparison closes
+* an automatic metadata migration
+* any gzip reads
+
+Do not infer. Show the observed values.
+
+## Part 4 — Inspect recovery from existing gzip payloads
+
+Read the metadata portion of the existing canonical-history gzip payloads for:
+
+* AAPL
+* MSFT
+* NVDA
+* PLTR
+* ten additional representative symbols
+
+Do not parse more data than necessary, although normal gzip decompression may be required for this read-only audit.
+
+Report whether each existing gzip payload itself contains:
+
+`comparison_close_tail`
+
+Then inspect the real `_rebuild_index_from_gz()` implementation and answer:
+
+If `_index.json` were deleted, replaced by the committed GitHub version, or rebuilt from existing gzip payload metadata, would the reconstructed index contain comparison tails?
+
+Answer with:
+
+* PROVEN YES
+* PROVEN NO
+* INCONCLUSIVE
+
+Include the exact code-path evidence.
+
+## Part 5 — Determine Replit deployment durability
+
+Inspect the current Replit deployment configuration and available local deployment metadata.
+
+Determine, without guessing:
+
+1. Whether a Replit Publish operation packages the current workspace copy of tracked-but-uncommitted `_index.json`.
+2. Whether it instead builds from committed Git state.
+3. Whether the autoscale deployment filesystem preserves `_index.json` writes across:
+
+   * process restart
+   * instance replacement
+   * scale-to-zero and cold start
+   * republish
+   * rollback
+4. Whether multiple autoscale instances share this file.
+5. Whether the currently published application contains commit `59e3ca97`.
+
+Use available Replit files, environment metadata, deployment logs, build records, or other local evidence.
+
+Do not rely on general assumptions about Replit.
+
+When evidence is unavailable, mark the item:
+
+`UNPROVEN`
+
+Do not call it persistent merely because a development-workspace process restart retained the file.
+
+## Part 6 — Explain all missing 7D and 30D comparisons
+
+Using the current runtime `_INDEX` and real production selector, evaluate all 426 indexed symbols for New York market date:
+
+`2026-08-05`
+
+Produce exact sets for:
+
+* valid 7D and valid 30D
+* missing 7D but valid 30D
+* valid 7D but missing 30D
+* missing both
+
+For every symbol missing either comparison, classify the reason into exactly one primary category:
+
+1. no index entry
+2. no comparison tail
+3. malformed comparison tail
+4. empty comparison tail
+5. tail too short to reach target
+6. newest available tail date materially stale
+7. no valid positive close on or before target
+8. selected date exceeds the existing `max_gap_days` guard
+9. another precisely identified production reason
+
+For each missing symbol report:
+
+* symbol
+* newest tail date
+* oldest tail date
+* tail length
+* 7D target date
+* best candidate 7D date
+* 7D target-to-candidate gap
+* 30D target date
+* best candidate 30D date
+* 30D target-to-candidate gap
+* exact null reason
+
+Summarize counts by reason.
+
+Explicitly reconcile:
+
+* why 42 symbols are missing 7D values
+* why only three symbols are missing 30D values
+* whether the report’s “three new listings” explanation was wrong
+
+## Part 7 — Check actual Primary Watchlist coverage
+
+Call the existing Primary Watchlist endpoint once without restarting the server.
+
+Report:
+
+* status
+* total row count
+* rows with populated `change_7d`
+* rows with null `change_7d`
+* rows with populated `change_30d`
+* rows with null `change_30d`
+* symbols with null `change_7d`
+* symbols with null `change_30d`
+* leaked `_comparison_*` key count
+
+Distinguish between:
+
+* a symbol absent from canonical `_INDEX`
+* a symbol present in `_INDEX` but missing a comparison
+* a row with no valid displayed price
+* another reason the final percentage is null
+
+Do not make provider calls beyond whatever the normal existing endpoint already does. Do not trigger an explicit refresh.
+
+## Part 8 — Correct the benchmark record
+
+Reconcile the conflicting benchmark figures from the two reports.
+
+Establish the authoritative values for the original regression:
+
+* gzip opens per request
+* compressed bytes read per request
+* uncompressed bytes processed if measurable
+* completed bars parsed
+* `datetime.strptime` calls
+* comparison-close wall time
+* endpoint latency
+
+Explain why the later report said approximately 600 MB and 190,000 bars when the original measured audit reported 14.2 MB compressed and approximately 718,000 bars.
+
+Also correct the weekday labels for:
+
+* 2026-08-01
+* 2026-08-02
+* 2026-08-04
+* 2026-08-05
+
+This is report correction only. Do not change source comments unless separately authorized later.
+
+## Required conclusion
+
+Choose exactly one:
+
+### A. READY TO PUBLISH
+
+Use only if all of the following are proven:
+
+* the repaired tail metadata will be present in the actual deployment image
+* it survives the relevant deployment lifecycle
+* fresh instances do not return null due to absent tails
+* the 42-symbol 7D gap is fully understood and correct
+* no code correction is required
+
+### B. CODE FIX CORRECT, DEPLOYMENT MIGRATION UNPROVEN
+
+Use when the hot-path implementation is correct but the repaired metadata is not proven durable across fresh deployment instances.
+
+### C. CORRECTION REQUIRED
+
+Use when fresh deployment behavior, recovery, coverage, or correctness requires another source change.
+
+If the result is B or C, recommend the smallest architecture-preserving correction, but do not implement it.
+
+Compare only these possible remedies, based on actual Replit evidence:
+
+1. Include the repaired tracked `_index.json` in the deployment artifact.
+2. Add an idempotent off-request migration to the existing deferred startup path.
+3. Extend an existing canonical maintenance path to repair missing tails before normal traffic depends on them.
+4. Another smaller existing-path remedy supported by repository evidence.
+
+Do not recommend:
+
+* restoring request-time gzip scans
+* a new endpoint
+* a new database table
+* a new provider call
+* an independent competing cache
+* a blocking 15-second startup operation before the health endpoint becomes available
+
+## Final report
+
+Write the read-only report to the location required by `AGENTS.md`.
+
+The final response must include:
+
+1. Exact conclusion: A, B, or C
+2. Repository state
+3. Runtime-vs-HEAD index comparison
+4. Fresh-HEAD simulation results
+5. Gzip recovery results
+6. Replit deployment durability evidence
+7. Full 7D/30D missing-symbol classification
+8. Actual endpoint field coverage
+9. Corrected benchmark values
+10. Corrected weekday labels
