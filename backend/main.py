@@ -15974,6 +15974,8 @@ def _build_trading_fetch_fresh(mp):
     GET /api/home/risk-intelligence (for background execution warmup).
     """
     async def _fetch_fresh():
+        import time as _perf_t
+
         async def _fetch_spy_qqq_extended():
             if not mp.tradier:
                 return {}
@@ -16042,14 +16044,25 @@ def _build_trading_fetch_fresh(mp):
             except Exception:
                 return {}
 
+        t0 = _perf_t.monotonic()
         risk_data, macro_data, calendar_data, sector_perf_raw, spy_qqq_extended, vix_history = await asyncio.gather(
-            mp.get_risk(),
-            mp.get_dashboard(),
-            mp.get_calendar(days_ahead=14),
-            _fetch_sector_perf(),
-            _fetch_spy_qqq_extended(),
-            asyncio.to_thread(_fetch_vix_history),
+            asyncio.wait_for(mp.get_risk(),                timeout=15),
+            asyncio.wait_for(mp.get_dashboard(),           timeout=20),
+            asyncio.wait_for(mp.get_calendar(days_ahead=14), timeout=10),
+            asyncio.wait_for(_fetch_sector_perf(),         timeout=10),
+            asyncio.wait_for(_fetch_spy_qqq_extended(),    timeout=12),
+            asyncio.wait_for(asyncio.to_thread(_fetch_vix_history), timeout=8),
             return_exceptions=True,
+        )
+        elapsed = _perf_t.monotonic() - t0
+        print(
+            f"[TD_FETCH] completed in {elapsed:.1f}s "
+            f"risk={'ok' if not isinstance(risk_data, BaseException) else type(risk_data).__name__} "
+            f"macro={'ok' if not isinstance(macro_data, BaseException) else type(macro_data).__name__} "
+            f"cal={'ok' if not isinstance(calendar_data, BaseException) else type(calendar_data).__name__} "
+            f"sector={'ok' if not isinstance(sector_perf_raw, BaseException) else type(sector_perf_raw).__name__} "
+            f"ext={'ok' if not isinstance(spy_qqq_extended, BaseException) else type(spy_qqq_extended).__name__} "
+            f"vix={'ok' if not isinstance(vix_history, BaseException) else type(vix_history).__name__}"
         )
         if isinstance(risk_data, Exception):
             risk_data = {}
@@ -16983,10 +16996,15 @@ async def trading_dashboard(
     force: bool = False,
     api_key: str = Header(None, alias="X-API-Key"),
 ):
-    """Should I Be Trading? — 5-pillar market scoring dashboard."""
+    """Should I Be Trading? — 5-pillar market scoring dashboard.
+
+    Stale-while-revalidate: returns expired snapshot immediately when
+    cache exists and schedules a nonblocking background refresh.
+    Falls back to synchronous build only when cache is empty or force=True.
+    """
     await _wait_for_init()
 
-    from services.trading_dashboard_service import get_trading_dashboard
+    from services.trading_dashboard_service import get_trading_dashboard_snapshot, get_trading_dashboard, schedule_trading_dashboard_refresh
 
     mp = _get_macro_provider()
     if not mp:
@@ -16997,8 +17015,28 @@ async def trading_dashboard(
 
     _fetch_fresh = _build_trading_fetch_fresh(mp)
 
+    if force:
+        try:
+            result = await asyncio.wait_for(
+                get_trading_dashboard(mode=mode, force=True, fetch_fresh_data=_fetch_fresh, allow_stale=False),
+                timeout=45,
+            )
+            return JSONResponse(content=result)
+        except asyncio.TimeoutError:
+            return JSONResponse(
+                status_code=504,
+                content={"error": "Trading dashboard build timed out", "mode": mode},
+            )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=500,
+                content={"error": f"Trading dashboard error: {str(e)}"},
+            )
+
     try:
-        result = await get_trading_dashboard(mode=mode, force=force, fetch_fresh_data=_fetch_fresh)
+        result = await get_trading_dashboard(mode=mode, force=False, fetch_fresh_data=_fetch_fresh, allow_stale=True)
         return JSONResponse(content=result)
     except Exception as e:
         import traceback

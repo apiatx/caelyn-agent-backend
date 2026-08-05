@@ -20,7 +20,42 @@ from services.trading_dashboard_service import (
     clear_dashboard_cache,
     _cache,
     _DASHBOARD_TTL,
+    _set_lkg_key_for_test,
 )
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test persistence isolation — mock Neon writes/reads to in-memory store.
+# Guarantees zero live Neon contact. Uses test-specific LKG key.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_TEST_LKG_STORE: dict[str, list] = {}
+_TEST_LKG_KEY = "trading_dashboard:swing:test"
+_original_lkg_key = _set_lkg_key_for_test(_TEST_LKG_KEY)
+
+
+def _install_persistence_mock():
+    import data.pg_storage as _pgs
+    _pgs._real_strategy_hist_write = _pgs.strategy_hist_write
+    _pgs._real_strategy_hist_read = _pgs.strategy_hist_read
+
+    def _mock_write(key: str, payload: list, source: str, row_count: int) -> bool:
+        _TEST_LKG_STORE[key] = payload
+        return True
+
+    def _mock_read(key: str, max_age_seconds: int | None = 86400) -> list | None:
+        return _TEST_LKG_STORE.get(key)
+
+    _pgs.strategy_hist_write = _mock_write
+    _pgs.strategy_hist_read = _mock_read
+
+
+_install_persistence_mock()
+
+
+def _setup():
+    clear_dashboard_cache()
+    _TEST_LKG_STORE.clear()
+    assert _cache == {}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Deterministic fixtures
@@ -392,10 +427,6 @@ def test_terminal_analysis_structure() -> None:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Cache tests
 # ═══════════════════════════════════════════════════════════════════════════════
-
-def _setup():
-    clear_dashboard_cache()
-    assert _cache == {}
 
 
 async def _fetch_fresh():
@@ -1308,6 +1339,242 @@ async def test_one_refresh_one_provider_orchestration():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Stale-while-revalidate — direct endpoint behavior
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def test_stale_while_revalidate_returns_expired():
+    """Expired cache returned immediately, refresh scheduled in background."""
+    clear_dashboard_cache()
+    build_count = [0]
+
+    async def counting_fetch():
+        build_count[0] += 1
+        return fixtures()
+
+    await get_trading_dashboard(mode="swing", fetch_fresh_data=counting_fetch, allow_stale=False)
+    assert build_count[0] == 1
+    snap1 = get_trading_dashboard_snapshot("swing")
+    assert snap1["status"] == "available"
+
+    # Expire by manipulating timestamp
+    key = "trading_dashboard_swing"
+    from services.trading_dashboard_service import _cache as _td_cache
+    _td_cache[key]["_ts"] = time.time() - _DASHBOARD_TTL - 10
+
+    # Now call with allow_stale=True — should return expired immediately
+    build_before = build_count[0]
+    result = await get_trading_dashboard(
+        mode="swing", fetch_fresh_data=counting_fetch, allow_stale=True
+    )
+    assert result["from_cache"] is True
+    # Provider should NOT have been called synchronously
+    assert build_count[0] == build_before
+
+    clear_dashboard_cache()
+    print("test_stale_while_revalidate_returns_expired PASSED")
+
+
+async def test_stale_while_revalidate_schedules_refresh():
+    """Expired return also schedules a nonblocking refresh."""
+    clear_dashboard_cache()
+    build_count = [0]
+
+    async def counting_fetch():
+        build_count[0] += 1
+        return fixtures()
+
+    # Build fresh first
+    await get_trading_dashboard(mode="swing", fetch_fresh_data=counting_fetch, allow_stale=False)
+
+    # Expire it
+    key = "trading_dashboard_swing"
+    from services.trading_dashboard_service import _cache as _td_cache
+    _td_cache[key]["_ts"] = time.time() - _DASHBOARD_TTL - 10
+
+    # Stale read — should schedule background refresh
+    result = await get_trading_dashboard(
+        mode="swing", fetch_fresh_data=counting_fetch, allow_stale=True
+    )
+    assert result["from_cache"] is True
+
+    # Background refresh should complete
+    await _asyncio.sleep(0.3)
+    assert build_count[0] >= 2
+
+    clear_dashboard_cache()
+    print("test_stale_while_revalidate_schedules_refresh PASSED")
+
+
+async def test_allow_stale_false_builds_fresh():
+    """allow_stale=False triggers synchronous fresh build."""
+    clear_dashboard_cache()
+    build_count = [0]
+
+    async def counting_fetch():
+        build_count[0] += 1
+        return fixtures()
+
+    # Build fresh
+    result = await get_trading_dashboard(
+        mode="swing", fetch_fresh_data=counting_fetch, allow_stale=False
+    )
+    assert result["from_cache"] is False
+    assert build_count[0] == 1
+
+    # Expire it
+    key = "trading_dashboard_swing"
+    from services.trading_dashboard_service import _cache as _td_cache
+    _td_cache[key]["_ts"] = time.time() - _DASHBOARD_TTL - 10
+
+    # allow_stale=False → does synchronous build
+    result2 = await get_trading_dashboard(
+        mode="swing", fetch_fresh_data=counting_fetch, allow_stale=False
+    )
+    assert result2["from_cache"] is False
+    assert build_count[0] == 2
+
+    clear_dashboard_cache()
+    print("test_allow_stale_false_builds_fresh PASSED")
+
+
+async def test_force_ignores_stale_policy():
+    """force=True builds fresh regardless of allow_stale."""
+    clear_dashboard_cache()
+    build_count = [0]
+
+    async def counting_fetch():
+        build_count[0] += 1
+        return fixtures()
+
+    # Build fresh first
+    await get_trading_dashboard(mode="swing", fetch_fresh_data=counting_fetch, allow_stale=False)
+
+    # force=True → fresh build even with fresh cache
+    result = await get_trading_dashboard(
+        mode="swing", force=True, fetch_fresh_data=counting_fetch, allow_stale=True
+    )
+    assert result["from_cache"] is False
+    assert build_count[0] == 2
+
+    clear_dashboard_cache()
+    print("test_force_ignores_stale_policy PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Refresh timestamps and status distinction
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def test_last_successful_refresh_set_on_build():
+    """Successful fresh build sets last_successful_refresh timestamp."""
+    clear_dashboard_cache()
+
+    async def fetch():
+        return fixtures()
+
+    await get_trading_dashboard(mode="swing", fetch_fresh_data=fetch, allow_stale=False)
+    snap = get_trading_dashboard_snapshot("swing")
+    assert snap.get("last_successful_refresh") is not None
+    assert isinstance(snap["last_successful_refresh"], float)
+
+    clear_dashboard_cache()
+    print("test_last_successful_refresh_set_on_build PASSED")
+
+
+async def test_last_attempted_refresh_set():
+    """Scheduling a refresh sets last_attempted_refresh."""
+    clear_dashboard_cache()
+
+    async def fetch():
+        return fixtures()
+
+    from services.trading_dashboard_service import schedule_trading_dashboard_refresh
+    schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=fetch)
+    await _asyncio.sleep(0.2)
+
+    snap = get_trading_dashboard_snapshot("swing")
+    assert snap.get("last_attempted_refresh") is not None
+
+    clear_dashboard_cache()
+    print("test_last_attempted_refresh_set PASSED")
+
+
+async def test_successful_refresh_clears_error_and_failure():
+    """Successful build clears refresh_error and resets failure count."""
+    clear_dashboard_cache()
+
+    async def failing_fetch():
+        raise RuntimeError("test failure")
+
+    # Force a failure
+    from services.trading_dashboard_service import (
+        schedule_trading_dashboard_refresh, _refresh_outcome, _refresh_failure_count,
+        _refresh_error, _refresh_last_attempt,
+    )
+    schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=failing_fetch)
+    await _asyncio.sleep(0.2)
+
+    snap_fail = get_trading_dashboard_snapshot("swing")
+    assert snap_fail["refresh_failure_count"] >= 1
+    assert snap_fail["refresh_error"] is not None
+
+    # Now succeed — manually reset backoff
+    _refresh_outcome["swing"] = "failed"
+    _refresh_last_attempt["swing"] = 0
+
+    async def success_fetch():
+        return fixtures()
+
+    schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=success_fetch)
+    await _asyncio.sleep(0.5)
+
+    snap_ok = get_trading_dashboard_snapshot("swing")
+    assert snap_ok["status"] == "available"
+    assert snap_ok["refresh_error"] is None
+    assert snap_ok["refresh_failure_count"] == 0
+    assert snap_ok.get("last_successful_refresh") is not None
+
+    clear_dashboard_cache()
+    print("test_successful_refresh_clears_error_and_failure PASSED")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test persistence isolation verification
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_mocked_persistence_uses_test_key():
+    """Mocked persistence writes to test namespaced key, not production."""
+    assert _original_lkg_key == "trading_dashboard:swing"
+    from services.trading_dashboard_service import _TD_HIST_KEY
+    assert _TD_HIST_KEY == "trading_dashboard:swing:test"
+    print("test_mocked_persistence_uses_test_key PASSED")
+
+
+async def test_persistence_mock_captures_payload():
+    """Mocked persistence captures the written payload correctly."""
+    clear_dashboard_cache()
+
+    async def fetch():
+        return fixtures()
+
+    result = await get_trading_dashboard(mode="swing", fetch_fresh_data=fetch, allow_stale=False)
+    stored = _TEST_LKG_STORE.get("trading_dashboard:swing:test")
+    assert stored is not None
+    assert len(stored) == 1
+    assert isinstance(stored[0], dict)
+    assert stored[0].get("market_quality_score") == result["market_quality_score"]
+
+    clear_dashboard_cache()
+    print("test_persistence_mock_captures_payload PASSED")
+
+
+def test_no_real_neon_import_in_mock():
+    """Mock setup replaced strategy_hist_write/read before any test ran."""
+    import data.pg_storage as _pgs
+    assert hasattr(_pgs, "_real_strategy_hist_write"), "Real function backup missing"
+    assert _pgs.strategy_hist_write("test-key", [{"x": 1}], "test", 1)
+    assert _TEST_LKG_STORE.get("test-key") == [{"x": 1}]
+    _TEST_LKG_STORE.clear()
+    print("test_no_real_neon_import_in_mock PASSED")
 
 if __name__ == "__main__":
     test_baseline_swing_mode_shape()

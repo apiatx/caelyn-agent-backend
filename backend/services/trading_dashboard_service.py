@@ -790,6 +790,7 @@ async def get_trading_dashboard(
     mode: str,
     force: bool = False,
     fetch_fresh_data=None,
+    allow_stale: bool = True,
 ) -> dict:
     """Return the Trading Dashboard from cache or build fresh.
 
@@ -798,12 +799,16 @@ async def get_trading_dashboard(
     mode : str
         "swing" or "day".
     force : bool
-        If True, skip cache and rebuild immediately.
+        If True, skip cache and rebuild immediately (blocking).
     fetch_fresh_data : async callable | None
         Called when a fresh build is needed.
         Must return a tuple:
           (risk_data, macro_data, calendar_data, sector_perf_raw,
            spy_qqq_extended, vix_history)
+    allow_stale : bool
+        If True and fetch_fresh_data is provided, return expired cache
+        immediately and schedule a nonblocking background refresh.
+        Only does a blocking fresh build when cache is empty or force=True.
 
     Returns
     -------
@@ -821,6 +826,16 @@ async def get_trading_dashboard(
             result["from_cache"] = True
             return result
 
+        if entry and allow_stale:
+            result = _defensive_copy(entry)
+            result.pop("_ts", None)
+            result["from_cache"] = True
+            if fetch_fresh_data is not None:
+                schedule_trading_dashboard_refresh(
+                    mode=mode, fetch_fresh_data=fetch_fresh_data
+                )
+            return result
+
     if fetch_fresh_data is None:
         from_cache_entry = _cache.get(key)
         if from_cache_entry:
@@ -832,6 +847,7 @@ async def get_trading_dashboard(
             "Trading Dashboard: no fetch_fresh_data callback and cache empty"
         )
 
+    _refresh_last_attempt[mode] = _time.time()
     risk_data, macro_data, calendar_data, sector_perf_raw, spy_qqq_extended, vix_history = (
         await fetch_fresh_data()
     )
@@ -850,6 +866,11 @@ async def get_trading_dashboard(
     result_copy = _defensive_copy(result)
     result_copy["from_cache"] = False
 
+    _refresh_outcome[mode] = "succeeded"
+    _refresh_failure_count.pop(mode, None)
+    _refresh_error.pop(mode, None)
+    _last_successful_refresh[mode] = _time.time()
+
     _persist_lkg_later(mode, result)
 
     return result_copy
@@ -859,6 +880,14 @@ async def get_trading_dashboard(
 
 _LKG_PERSIST_SCHEDULED: dict[str, bool] = {}
 _TD_HIST_KEY = "trading_dashboard:swing"
+
+
+def _set_lkg_key_for_test(key: str) -> str:
+    """Override the persistence key for test isolation. Returns the old key."""
+    global _TD_HIST_KEY
+    old = _TD_HIST_KEY
+    _TD_HIST_KEY = key
+    return old
 
 
 def _persist_lkg_later(mode: str, result: dict) -> None:
@@ -919,6 +948,8 @@ def clear_dashboard_cache() -> list[str]:
     _refresh_failure_count.clear()
     _refresh_last_attempt.clear()
     _refresh_error.clear()
+    _last_successful_refresh.clear()
+    _last_attempted_refresh.clear()
     _LKG_HYDRATION_DONE = True
     return cleared
 
@@ -965,6 +996,8 @@ def get_trading_dashboard_snapshot(
             "refresh_state": _refresh_state(mode),
             "refresh_failure_count": _refresh_failure_count.get(mode, 0),
             "refresh_error": _refresh_error.get(mode),
+            "last_successful_refresh": _last_successful_refresh.get(mode),
+            "last_attempted_refresh": _last_attempted_refresh.get(mode),
         }
 
     age = _time.time() - entry.get("_ts", _time.time())
@@ -986,6 +1019,8 @@ def get_trading_dashboard_snapshot(
         "refresh_state": _refresh_state(mode),
         "refresh_failure_count": _refresh_failure_count.get(mode, 0),
         "refresh_error": _refresh_error.get(mode),
+        "last_successful_refresh": _last_successful_refresh.get(mode),
+        "last_attempted_refresh": _last_attempted_refresh.get(mode),
     }
 
 
@@ -996,6 +1031,8 @@ _refresh_outcome: dict[str, str] = {}
 _refresh_failure_count: dict[str, int] = {}
 _refresh_last_attempt: dict[str, float] = {}
 _refresh_error: dict[str, str] = {}
+_last_successful_refresh: dict[str, float] = {}
+_last_attempted_refresh: dict[str, float] = {}
 _FAILURE_BACKOFF = 30
 _REFRESH_DEADLINE = 25
 _MAX_FAILURES_BEFORE_SUPPRESS = 5
@@ -1082,6 +1119,7 @@ def schedule_trading_dashboard_refresh(
 
     _inflight[mode] = asyncio.ensure_future(_refresh())
     _refresh_outcome.pop(mode, None)
+    _last_attempted_refresh[mode] = _time.time()
     return {"status": "scheduled", "mode": mode}
 
 
