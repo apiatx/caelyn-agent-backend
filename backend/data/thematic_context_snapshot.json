@@ -1,329 +1,75 @@
 {
   "macro_regime": "inflationary",
-  "active_themes": [
-    {
-      "name": "Cybersecurity",
-      "score": 81.8,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Top-percentile RS (82/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +4.3%, QQQ -2."
-      ],
-      "related_etfs": [
-        "AKAM",
-        "BUG",
-        "CIBR",
-        "CRWD"
-      ],
-      "related_tickers": [
-        "ZS"
-      ]
-    },
-    {
-      "name": "Copper Miners",
-      "score": 77.2,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Top-percentile RS (77/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +3.8%, QQQ -2."
-      ],
-      "related_etfs": [
-        "COPX",
-        "CPER",
-        "DBB"
-      ],
-      "related_tickers": [
-        "HBM",
-        "TECK",
-        "FCX"
-      ]
-    },
-    {
-      "name": "Metals & Mining",
-      "score": 76.3,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Top-percentile RS (76/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +9.6%, QQQ +3."
-      ],
-      "related_etfs": [
-        "CLF",
-        "PICK",
-        "SLX",
-        "XME"
-      ],
-      "related_tickers": [
-        "FCX",
-        "AA",
-        "NUE"
-      ]
-    },
-    {
-      "name": "Technology",
-      "score": 76.1,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Top-percentile RS (76/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +4.9%, QQQ -1.",
-        "X consensus: 1 ticker mentioned"
-      ],
-      "related_etfs": [
-        "XLK",
-        "VGT"
-      ],
-      "related_tickers": [
-        "CRM",
-        "AAPL"
-      ]
-    },
-    {
-      "name": "Oil Services",
-      "score": 73.3,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Top-percentile RS (73/100) vs theme universe with broad participation (83% advancing). Outperforming SPY +5.3%, QQQ -1.3"
-      ],
-      "related_etfs": [
-        "OIH",
-        "XES",
-        "IEZ"
-      ],
-      "related_tickers": [
-        "BKR",
-        "NE",
-        "HAL"
-      ]
-    },
-    {
-      "name": "Cloud Software",
-      "score": 71.6,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Top-percentile RS (71/100) vs theme universe. Outperforming SPY +0.3%, QQQ -6.3%. Breadth N/A.",
-        "X consensus: 1 ticker mentioned"
-      ],
-      "related_etfs": [
-        "AMZN",
-        "CLOU",
-        "DDOG",
-        "GOOGL"
-      ],
-      "related_tickers": []
-    }
-  ],
+  "active_themes": [],
   "emerging_themes": [
     {
-      "name": "Insurance",
-      "score": 66.2,
-      "source": "theme_rs_service",
+      "name": "AI Networking",
+      "score": 4.5,
+      "source": "x_consensus",
       "evidence": [
-        "Rising RS (66/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+        "X consensus: 3 tickers \u2014 AAOI, LITE, COHR"
       ],
       "related_etfs": [
-        "IAK",
-        "KIE",
-        "OSCR"
+        "ANET",
+        "AVGO",
+        "MRVL"
       ],
       "related_tickers": [
-        "ALL",
-        "PGR",
-        "CB"
+        "AAOI",
+        "LITE",
+        "COHR"
       ]
     },
     {
-      "name": "Oil & Gas",
-      "score": 65.7,
-      "source": "theme_rs_service",
+      "name": "Photonics / Lasers",
+      "score": 4.5,
+      "source": "x_consensus",
       "evidence": [
-        "Rising RS (66/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+        "X consensus: 3 tickers \u2014 AAOI, LITE, COHR"
       ],
       "related_etfs": [
-        "CRT",
-        "LB",
-        "OIH",
-        "PBT"
+        "IPGP",
+        "COHR",
+        "LITE"
       ],
       "related_tickers": [
-        "COP",
-        "EOG",
-        "SLB"
+        "AAOI",
+        "LITE",
+        "COHR"
       ]
     },
     {
-      "name": "Biotech",
-      "score": 65.2,
-      "source": "theme_rs_service",
+      "name": "Memory & Storage",
+      "score": 3.0,
+      "source": "x_consensus",
       "evidence": [
-        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+        "X consensus: 2 tickers \u2014 MU, AEHR"
       ],
       "related_etfs": [
-        "ABCL",
-        "ABSI",
-        "ACOG",
-        "ADPT"
+        "DRAM",
+        "SMH",
+        "SOXX"
       ],
       "related_tickers": [
-        "REGN",
-        "MRNA",
-        "BIIB"
-      ]
-    },
-    {
-      "name": "Energy",
-      "score": 64.2,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (64/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
-      ],
-      "related_etfs": [
-        "XLE",
-        "VDE",
-        "XOP"
-      ],
-      "related_tickers": [
-        "COP",
-        "CVX",
-        "XOM"
-      ]
-    },
-    {
-      "name": "Banks",
-      "score": 63.8,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (64/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
-      ],
-      "related_etfs": [
-        "KBE",
-        "XLF"
-      ],
-      "related_tickers": [
-        "MS",
-        "GS",
-        "WFC"
+        "MU",
+        "AEHR"
       ]
     }
   ],
-  "dead_zones": [
-    {
-      "name": "Quantum Computing",
-      "score": 11.5,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Bottom-quartile RS (12/100) vs 51-theme universe. SPY delta -5.7%, QQQ delta -12.3%. Breadth N/A \u2014 minimal buying pressu"
-      ],
-      "related_etfs": [
-        "ARQQ",
-        "IBM",
-        "INFQ",
-        "IONQ"
-      ],
-      "related_tickers": []
-    },
-    {
-      "name": "Lithium & Battery Tech",
-      "score": 16.1,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Bottom-quartile RS (16/100) vs 51-theme universe. SPY delta -4.2%, QQQ delta -10.8%. Breadth 100% \u2014 minimal buying press"
-      ],
-      "related_etfs": [
-        "ALB",
-        "AMPX",
-        "BATT",
-        "ENVX"
-      ],
-      "related_tickers": [
-        "SQM"
-      ]
-    },
-    {
-      "name": "Space Economy",
-      "score": 18.3,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Bottom-quartile RS (18/100) vs 51-theme universe. SPY delta -6.7%, QQQ delta -13.3%. Breadth N/A \u2014 minimal buying pressu"
-      ],
-      "related_etfs": [
-        "ARKX",
-        "ASTS",
-        "BKSY",
-        "GILT"
-      ],
-      "related_tickers": []
-    },
-    {
-      "name": "Software",
-      "score": 19.8,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Bottom-quartile RS (20/100) vs 51-theme universe. SPY delta -5.2%, QQQ delta -11.8%. Breadth 100% \u2014 minimal buying press"
-      ],
-      "related_etfs": [
-        "DUOT",
-        "IGV",
-        "ORCL",
-        "PLTR"
-      ],
-      "related_tickers": [
-        "NOW",
-        "CRM"
-      ]
-    },
-    {
-      "name": "Defense",
-      "score": 27.1,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Bottom-quartile RS (27/100) vs 51-theme universe. SPY delta -4.3%, QQQ delta -10.9%. Breadth 67% \u2014 minimal buying pressu"
-      ],
-      "related_etfs": [
-        "AIR",
-        "AVAV",
-        "AVEX",
-        "AXON"
-      ],
-      "related_tickers": [
-        "LMT",
-        "NOC",
-        "RTX"
-      ]
-    }
-  ],
-  "sector_leaders": [
-    {
-      "sector": "Technology",
-      "ticker": "XLK",
-      "score": 75.6,
-      "posture": "leading"
-    },
-    {
-      "sector": "Energy",
-      "ticker": "XLE",
-      "score": 64.2,
-      "posture": "improving"
-    },
-    {
-      "sector": "Financials",
-      "ticker": "XLF",
-      "score": 62.3,
-      "posture": "improving"
-    },
-    {
-      "sector": "Communication Services",
-      "ticker": "IRDM",
-      "score": 56.4,
-      "posture": "improving"
-    }
-  ],
+  "dead_zones": [],
+  "sector_leaders": [],
   "sector_laggards": [],
   "risk_notes": [],
-  "last_updated": "2026-08-05T05:06:35.770624+00:00",
+  "last_updated": "2026-08-05T05:21:55.937659+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
     "regime": "fallback",
-    "sector_rotation": "ok",
+    "sector_rotation": "fallback",
     "theme_rs_service": "ok",
     "theme_rotation": "ok",
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1785906395.770688
+  "_saved_at": 1785907315.9377644
 }
