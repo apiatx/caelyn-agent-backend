@@ -57,19 +57,81 @@
     }
   ],
   "dead_zones": [],
-  "sector_leaders": [],
-  "sector_laggards": [],
+  "sector_leaders": [
+    {
+      "sector": "Energy",
+      "ticker": "XLE",
+      "score": 80.6,
+      "posture": "leading"
+    },
+    {
+      "sector": "Technology",
+      "ticker": "XLK",
+      "score": 72.5,
+      "posture": "leading"
+    },
+    {
+      "sector": "Financials",
+      "ticker": "XLF",
+      "score": 62.9,
+      "posture": "improving"
+    },
+    {
+      "sector": "Industrials",
+      "ticker": "XLI",
+      "score": 62.9,
+      "posture": "improving"
+    },
+    {
+      "sector": "Real Estate",
+      "ticker": "XLRE",
+      "score": 52.3,
+      "posture": "improving"
+    }
+  ],
+  "sector_laggards": [
+    {
+      "sector": "Materials",
+      "ticker": "XLB",
+      "score": 47.4,
+      "posture": "weakening"
+    },
+    {
+      "sector": "Consumer Staples",
+      "ticker": "XLP",
+      "score": 44.4,
+      "posture": "weakening"
+    },
+    {
+      "sector": "Communication Services",
+      "ticker": "XLC",
+      "score": 40.6,
+      "posture": "weakening"
+    },
+    {
+      "sector": "Consumer Discretionary",
+      "ticker": "XLY",
+      "score": 36.9,
+      "posture": "weakening"
+    },
+    {
+      "sector": "Health Care",
+      "ticker": "XLV",
+      "score": 36.7,
+      "posture": "weakening"
+    }
+  ],
   "risk_notes": [],
-  "last_updated": "2026-08-05T05:21:55.937659+00:00",
+  "last_updated": "2026-08-05T05:51:57.465336+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
     "regime": "fallback",
-    "sector_rotation": "fallback",
+    "sector_rotation": "ok",
     "theme_rs_service": "ok",
     "theme_rotation": "ok",
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1785907315.9377644
+  "_saved_at": 1785909117.4656026
 }

@@ -1,0 +1,274 @@
+You are working inside the current CaelynAI BACKEND Replit workspace at:
+
+`/home/runner/workspace`
+
+This is a READ-ONLY performance investigation.
+
+Do not change code, configuration, caches, data files, environment variables, or database state.
+Do not create a commit.
+Do not push.
+Do not restart the full application merely for inspection if the existing application process is available.
+
+Read `AGENTS.md` before beginning and follow it.
+
+## Problem reported by the user
+
+Since the recent DeepSeek backend work, the entire website feels frozen for approximately one minute. This happens even when navigating between unrelated frontend pages or tabs.
+
+The leading suspected regression is commit:
+
+`b7964131c06852bf5cab9f0b52fb7aa8d0c4915f`
+
+That commit added request-time calls to:
+
+`get_comparison_closes_bulk(tickers)`
+
+from:
+
+`_load_cached_watchlist_market_data(tickers)`
+
+The concern is that the Primary Watchlist request now opens, decompresses, parses, and scans one full canonical-history `.json.gz` file for every Watchlist symbol on every request.
+
+The frontend globally prefetches the Primary Watchlist when the authenticated application mounts, even when the user is viewing another page. Therefore, an expensive Watchlist request may saturate the backend and delay unrelated API requests.
+
+Do not assume this is the root cause. Prove or disprove it using the current Replit runtime and repository.
+
+## Required workspace verification
+
+Before investigating, report:
+
+1. `git rev-parse --show-toplevel`
+2. `git branch --show-current`
+3. `git status -sb`
+4. Current HEAD SHA and message
+5. Whether `b7964131c06852bf5cab9f0b52fb7aa8d0c4915f` is an ancestor of HEAD
+6. Any uncommitted source changes that could make Git differ from the running Replit code
+
+Preserve all existing work.
+
+## Part 1 — Trace the exact current request path
+
+Trace and document the current production path for the full Primary Watchlist response:
+
+1. Exact frontend-consumed endpoint
+2. Router endpoint function
+3. Watchlist loading function
+4. `_enrich_store_with_quotes`
+5. `_load_cached_watchlist_market_data`
+6. `get_volume_metrics_bulk`
+7. `get_comparison_closes_bulk`
+8. Canonical-history file location
+9. Final row construction
+10. Final serialization and response
+
+Confirm:
+
+* whether `get_comparison_closes_bulk` is invoked on every full Watchlist request
+* whether it opens one `.json.gz` file per unique symbol
+* whether it parses the complete `bars` array
+* whether results survive only for the duration of that request
+* whether repeated warm requests reopen and reparse the same files
+* whether `get_volume_metrics_bulk` can perform an additional full-file pass when index metadata is incomplete
+* whether internal comparison-close fields reach the serialized response
+* whether any other newly added request-time canonical-history scan exists
+
+## Part 2 — Establish the authoritative Primary Watchlist universe
+
+Using the existing canonical Watchlist source only, report:
+
+* Primary Watchlist ID
+* total ticker count
+* unique normalized ticker count
+* number of matching canonical-history `.json.gz` files
+* number of missing files
+* total compressed bytes of the matching files
+* minimum, median, average, p90, and maximum compressed file size
+* total bar count represented by the matching files
+* approximate uncompressed JSON bytes actually parsed during one full pass
+
+Do not use CSV membership as authoritative.
+
+Do not modify or regenerate any file.
+
+## Part 3 — Isolated function timings
+
+Using a temporary one-off Python command or script executed from the shell without saving it into the repository, time these current production functions for the full authoritative Primary Watchlist:
+
+1. `get_volume_metrics_bulk(tickers)`
+2. `get_comparison_closes_bulk(tickers)`
+3. `_load_cached_watchlist_market_data(tickers)`
+
+For each function, run at least three consecutive iterations in the same process and report:
+
+* iteration number
+* wall-clock elapsed time
+* CPU time
+* unique symbols processed
+* number of `gzip.open` calls
+* total compressed bytes opened
+* total bars parsed
+* whether the second and third calls still reopen every file
+* peak memory if reasonably measurable
+
+Use temporary monkeypatching or wrappers inside the one-off process to count `gzip.open` calls. Do not edit the production source.
+
+Use `cProfile` or an equivalent built-in profiler for at least one full `_load_cached_watchlist_market_data` invocation. Report the top cumulative-time functions, including:
+
+* gzip decompression
+* file reads
+* `json.loads`
+* `_completed_daily_bars`
+* `_select_comparison_closes`
+* any other dominant operation
+
+## Part 4 — Real endpoint timing
+
+Use the currently running backend if available.
+
+Call the actual full Primary Watchlist endpoint consumed by the frontend at least three times.
+
+For every call, report:
+
+* exact URL path, excluding secrets
+* HTTP status
+* total elapsed time
+* time to first byte if available
+* response bytes
+* ticker/row count
+* server log timing from `[WATCHLIST_ENRICH]`
+* quote count
+* fundamentals snapshot count
+* history metric count
+* whether canonical-history files were reopened
+* whether the request was cold or warm
+
+Do not validate only an internal helper.
+
+If authentication is required, use the existing safe local method without exposing tokens.
+
+## Part 5 — Concurrent-request impact
+
+Determine whether a full Primary Watchlist request delays unrelated endpoints.
+
+While one full Primary Watchlist request is running, concurrently call at least:
+
+1. `/api/home/risk-intelligence`
+2. one lightweight health or status endpoint already present
+3. one other ordinary page endpoint that normally responds quickly
+
+Capture baseline latency for each endpoint when no Watchlist request is active.
+
+Then capture latency while the Watchlist request is active.
+
+Report:
+
+| Endpoint | Baseline | During Watchlist request | Added latency | HTTP status |
+| -------- | -------: | -----------------------: | ------------: | ----------: |
+
+Also capture process CPU and memory during the test using available read-only operating-system tools.
+
+Do not intentionally launch an excessive number of requests. One controlled concurrent Watchlist request is sufficient.
+
+## Part 6 — Frontend coupling verification
+
+Read the current frontend repository only as reference. Do not modify it.
+
+Verify whether `GlobalDataContext.tsx`:
+
+* mounts globally for authenticated routes
+* fetches `/api/watchlist/list`
+* makes a second direct `/api/watchlist/list` request to identify Primary
+* prefetches `/api/watchlist/{primaryId}`
+* does this regardless of the currently selected page
+* retries the Primary Watchlist request
+* uses a two-minute stale time
+
+Explain whether this could cause an expensive Watchlist backend request to begin while the user is navigating another page.
+
+Do not blame the frontend merely for requesting an endpoint that should be fast.
+
+## Part 7 — Compare with the pre-regression path
+
+Compare current HEAD with the parent of `b7964131`.
+
+Document exactly:
+
+* request-time work added by `b7964131`
+* request-time file-read count before the commit
+* request-time file-read count after the commit
+* whether comparison closes previously came from metadata
+* whether correctness was improved at the cost of request latency
+* whether the commit’s tests measured full endpoint elapsed time
+* whether its final validation measured concurrent request impact
+
+Do not check out or reset to the older commit. Use Git diff and read-only comparisons.
+
+## Required conclusion
+
+Give one of these conclusions:
+
+1. `PROVEN PRIMARY ROOT CAUSE`
+2. `PROVEN MATERIAL CONTRIBUTOR`
+3. `NOT THE CAUSE`
+4. `INCONCLUSIVE`
+
+Do not use confident root-cause language without measurements.
+
+If it is proven, identify the first exact divergence that created the latency.
+
+## Recommended correction — report only
+
+Do not implement the correction yet.
+
+Recommend the smallest architecture-preserving fix that satisfies all of these constraints:
+
+* preserve the current displayed-price numerator
+* preserve canonical history as the historical denominator source
+* preserve the final Watchlist field contract
+* no new endpoint
+* no new provider request
+* no new database table
+* no duplicate data pipeline
+* no request-time scan of hundreds of full ten-year history files
+* no stale persisted percentage overwriting the dynamically calculated value
+* no frontend change unless backend evidence proves one is necessary
+* reuse an existing metadata, append, startup, or off-request path where possible
+* comparison data should be precomputed or made available without full request-time decompression
+* repeated Watchlist requests should perform zero or near-zero canonical-history file reads
+* maintain New York market-date correctness
+* account for weekday, weekend, and holiday target-date changes
+* preserve missing/null behavior when history is insufficient
+
+Compare at least these possible approaches:
+
+A. Persist the selected comparison dates/closes in the existing canonical-history index during the existing save/append/metadata-repair path.
+
+B. Preserve a minimal recent completed-bar tail in the existing index so current-date comparison closes can be selected in memory.
+
+C. Combine existing metric work into one pass and memoize it in the existing canonical metadata, invalidated by file modification and New York market date.
+
+D. Another smaller existing-path solution proven by repository evidence.
+
+Do not recommend merely moving the same full scan to another request thread. That hides blocking but does not eliminate the CPU and I/O cost.
+
+## Final report format
+
+Return:
+
+1. Completion status
+2. Git/workspace state
+3. Exact request path
+4. Primary Watchlist and canonical-file statistics
+5. Isolated function timing table
+6. Profiler results
+7. Real endpoint timing table
+8. Concurrent endpoint impact table
+9. Frontend global-prefetch coupling
+10. Before-versus-after commit comparison
+11. Proven conclusion
+12. Smallest recommended correction
+13. Exact production files likely required for a future fix
+14. Risks and behavior that must be preserved
+15. Final `git status -sb`
+
+Do not edit, commit, or push anything.
