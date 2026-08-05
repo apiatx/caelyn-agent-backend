@@ -1,0 +1,468 @@
+You are working inside the current CaelynAI BACKEND Replit workspace:
+
+`/home/runner/workspace`
+
+This is the final architecture-hardening task following:
+
+* performance fix commit `59e3ca97bb724747d80b1a49757b7140fba5cc9e`
+* published deployment commit `60f75fd3c1ae598900355c5650f01a1f26dd1a2d`
+* deployment-durability audit recorded in the latest report commit
+
+Read the current `AGENTS.md` before editing and follow it exactly.
+
+Work only in the existing Replit workspace and current local `main`.
+
+Do not create a branch, clone, worktree, or pull request.
+
+Do not reset, rebase, clean, stash, pull, merge, or discard existing work.
+
+Do not push or publish. The user will push and publish personally.
+
+## Current proven state
+
+The Watchlist regression itself is fixed.
+
+`get_comparison_closes_bulk()` now reads compact 64-session comparison tails from the in-memory canonical `_INDEX` and performs:
+
+* zero request-time gzip opens
+* zero full-history JSON loads
+* zero provider calls
+* zero database calls
+
+The published deployment currently contains an `_index.json` with valid comparison tails for 426 canonical symbols.
+
+However, the durability audit proved:
+
+1. Older canonical gzip payloads generally do not contain `comparison_close_tail`.
+2. `_rebuild_index_from_gz()` cannot recreate tails from those payload metadata alone.
+3. If `_index.json` is lost, rolled back to the pre-repair state, or reconstructed from older gzip payloads, comparison closes return null.
+4. There is no automatic off-request migration that repairs missing tails.
+5. Autoscale filesystem-write persistence across every instance lifecycle remains unproven.
+
+The goal is to add a small, idempotent, post-yield self-healing path.
+
+## Important data-quality finding
+
+Do not alter the comparison selector, calendar-date logic, or `max_gap_days=10`.
+
+The audit explained the missing 7D comparisons:
+
+* they are primarily established symbols whose latest canonical bars are materially stale relative to the 7D target
+* the selector correctly returns null rather than publishing a stale percentage
+* foreign-prefixed Watchlist entries and symbols never ingested into canonical history are separate expected null categories
+
+Do not attempt to force 100% Watchlist field coverage.
+
+Do not:
+
+* increase `max_gap_days`
+* fabricate a comparison value
+* use the last available bar regardless of age
+* introduce provider calls at request time
+* map foreign exchange symbols into US canonical files
+* treat a semantically correct null as a failure
+
+## Authorized production scope
+
+Expected production files:
+
+1. `backend/services/canonical_history_service.py`
+2. `backend/main.py`
+
+Tests may be added or updated in existing relevant backend test files.
+
+Do not modify frontend code.
+
+Stop and report before editing if repository evidence proves another production file is required.
+
+## Required design
+
+### Part 1 — Add a canonical tail validator
+
+In `canonical_history_service.py`, add one narrowly scoped internal validator for `comparison_close_tail`.
+
+A valid tail must:
+
+* be a non-empty list
+* have no more than `_COMPARISON_TAIL_SESSIONS` entries
+* contain entries shaped as `[date_string, positive_finite_close]`
+* use valid ISO dates
+* be chronological
+* contain no duplicate dates
+* contain only dates strictly before the current New York market date when newly generated
+
+The validator must not perform disk I/O or provider calls.
+
+Do not make request-time comparison selection depend on expensive validation of every entry. This validator is for metadata maintenance and repair selection.
+
+### Part 2 — Tighten the existing repair skip condition
+
+The current `backfill_volume_metrics_metadata()` skip condition accepts any entry merely containing the `comparison_close_tail` key.
+
+Change it so the repair skips a symbol only when:
+
+* all required existing Watchlist market metric fields are present
+* the comparison tail passes the validator
+
+An empty, malformed, oversized, nonchronological, duplicate-date, or otherwise invalid tail must be repaired.
+
+Preserve its existing behavior:
+
+* existing canonical gzip files only
+* no providers
+* no database
+* no new table
+* no new endpoint
+* no alteration of historical bar values
+* one `_write_index()` after successful updates
+* normal no-op behavior when nothing needs repair
+
+### Part 3 — Add an idempotent self-heal helper
+
+Add one public service helper with a clear name such as:
+
+```python
+ensure_comparison_close_tails()
+```
+
+Use the repository’s naming conventions if another name fits better.
+
+This helper must:
+
+1. Ensure `_INDEX` has been preloaded using the existing path.
+2. Select only canonical symbols eligible for repair.
+3. Call the existing `backfill_volume_metrics_metadata(symbols=...)` path only for those selected symbols.
+4. Return structured counts suitable for bootstrap logging and tests.
+
+A symbol is eligible for startup tail repair only when:
+
+* it has an `_INDEX` metadata dictionary
+* its canonical metadata indicates at least `_RECENT_MIN` usable bars
+* its status is usable under the existing canonical-history contract
+* its canonical `{SYMBOL}.json.gz` file exists
+* its tail is missing or invalid
+
+Do not select:
+
+* `TEST_*` artifacts unless they independently meet the real canonical eligibility contract
+* dotted legacy keys
+* foreign-prefixed symbols
+* excluded symbols
+* `fetch_failed`
+* `not_yet_backfilled`
+* `insufficient_history`
+* `cache_corrupt_needs_rebuild`
+* entries without a canonical gzip file
+* metadata-only placeholders
+* symbols already holding a valid tail
+
+Do not hard-code a list of 426 symbols.
+
+The helper should return at least:
+
+```python
+{
+    "selected": int,
+    "updated": int,
+    "file_reads": int,
+    "skipped": int,
+    "missing_after": int,
+    "elapsed_ms": int,
+    "status": "noop" | "repaired" | "partial" | "error",
+}
+```
+
+Additional useful fields are allowed if kept compact.
+
+### Part 4 — Wire it into the existing post-yield bootstrap
+
+In `backend/main.py`, use the existing `_post_yield_bootstrap()` path.
+
+The repair must run:
+
+* after canonical `preload_index()` succeeds
+* after the FastAPI lifespan has yielded
+* through `asyncio.to_thread(...)`
+* without blocking the event loop
+* without delaying the health/root endpoint from becoming available
+* before the bootstrap declares itself complete
+
+Do not add a second startup framework or scheduler.
+
+Add an isolated bootstrap step similar to the existing timed steps.
+
+Recommended behavior:
+
+```python
+from services.canonical_history_service import ensure_comparison_close_tails
+
+result = await asyncio.to_thread(ensure_comparison_close_tails)
+_BOOTSTRAP_STATE["steps"]["comparison_tail_repair"] = {
+    "ok": result["status"] != "error",
+    **result,
+}
+```
+
+Follow the existing bootstrap logging and error-isolation conventions rather than copying this literally if local code differs.
+
+A repair failure must:
+
+* be logged clearly
+* be recorded in `_BOOTSTRAP_STATE`
+* remain nonfatal to application startup
+* not abort unrelated bootstrap steps
+* not restore request-time gzip scanning
+
+### Part 5 — Avoid repeated and competing work
+
+The normal current deployment already has 426 valid tails.
+
+On that state, startup repair must:
+
+* select zero symbols
+* open zero gzip files
+* write no index file
+* finish as a fast no-op
+
+Do not run `backfill_volume_metrics_metadata()` blindly against all 496 index entries.
+
+Do not run the repair once per HTTP request.
+
+Do not add a repeating timer.
+
+Do not add a daily repair when all tails are valid.
+
+Do not create a separate global cache.
+
+If the canonical maintenance scheduler can begin concurrently with the post-yield repair, inspect its actual startup timing.
+
+Ensure the repair does not create unsafe duplicate work with:
+
+* incremental canonical append
+* missing-history catch-up
+* full canonical backfill
+* `_write_index()`
+
+Prefer sequencing the one-time repair immediately after canonical index preload, before other canonical maintenance performs writes.
+
+Do not introduce a broad new locking architecture unless repository evidence proves it is required.
+
+If a narrow existing lock or sequencing mechanism already exists, reuse it.
+
+## Required tests
+
+Use real production functions wherever possible.
+
+At minimum, add deterministic tests proving:
+
+### Validator
+
+1. A normal 64-session tail is valid.
+2. Empty tail is invalid.
+3. Malformed entry is invalid.
+4. Nonpositive or nonfinite close is invalid.
+5. Invalid date is invalid.
+6. Duplicate dates are invalid.
+7. Nonchronological dates are invalid.
+8. Oversized tail is invalid.
+
+### Repair selection
+
+9. Valid canonical entries with valid tails are not selected.
+10. Missing-tail canonical entries with an existing gzip file are selected.
+11. Empty or malformed tails are selected.
+12. Entries without gzip files are not selected.
+13. Excluded, failed, insufficient, corrupt, and placeholder entries are not selected.
+14. Foreign-prefixed and dotted legacy entries are not selected.
+15. A current valid 426-tail-style index produces a no-op with zero gzip opens.
+
+### Repair behavior
+
+16. A missing-tail symbol is repaired from its existing gzip bars.
+17. The resulting tail is valid and bounded.
+18. `get_comparison_closes_bulk()` returns populated 7D/30D comparisons after repair.
+19. The repair performs no provider calls.
+20. The repair performs no database calls.
+21. Repeating the helper immediately becomes a no-op with zero additional gzip reads.
+22. Partial failure is reported accurately without deleting valid existing tails.
+
+### Bootstrap behavior
+
+23. The post-yield bootstrap calls the self-heal helper after canonical preload.
+24. It invokes synchronous repair through `asyncio.to_thread`.
+25. A repair exception is recorded and remains nonfatal.
+26. `_BOOTSTRAP_STATE["steps"]["comparison_tail_repair"]` records useful counts.
+27. The bootstrap health-serving contract remains unchanged.
+
+### Existing regression invariants
+
+28. `get_comparison_closes_bulk()` still performs zero gzip reads during normal Watchlist requests.
+29. The live displayed price remains the 7D/30D numerator.
+30. No `_comparison_*` keys leak into serialized Watchlist rows.
+31. The 10-day staleness guard remains unchanged.
+32. Materially stale canonical data still produces null.
+
+Tests must not make real provider requests.
+
+Use temporary directories and isolated `_INDEX` state.
+
+## Required focused validation
+
+Run:
+
+* relevant canonical-history service tests
+* relevant Watchlist market-data tests
+* relevant application bootstrap/startup tests
+* `git diff --check`
+
+Clearly distinguish task-related failures from unrelated pre-existing failures.
+
+## Required recovery simulation
+
+Using a temporary canonical-history directory outside the repository:
+
+1. Create representative valid canonical gzip payloads whose metadata lacks `comparison_close_tail`.
+2. Create or load an index with the same missing-tail condition.
+3. Run the real self-heal helper.
+4. Confirm:
+
+   * only eligible symbols are read
+   * valid tails are written into the isolated index
+   * `get_comparison_closes_bulk()` produces correct values
+   * a second helper call performs zero gzip reads
+   * no provider or database call occurs
+
+Include at least:
+
+* one normal established US symbol
+* one short-history but usable US symbol
+* one materially stale US symbol
+* one missing-file entry
+* one foreign-prefixed symbol
+* one invalid-tail symbol
+* one already-valid symbol
+
+The materially stale symbol may receive a valid compact tail while still returning null from the selector due to `max_gap_days=10`. That is expected and must be asserted.
+
+## Required current-workspace validation
+
+Against the current actual workspace index:
+
+* count total `_INDEX` entries
+* count usable canonical entries
+* count valid comparison tails
+* count missing/invalid eligible tails
+* run the self-heal helper once
+* report selected, updated, file_reads, skipped, missing_after, elapsed_ms
+* confirm the expected current state is a no-op or explain exactly why it is not
+
+Do not deliberately remove tails from the real workspace index.
+
+Do not alter or stage runtime canonical files during this validation.
+
+## Runtime validation
+
+After focused tests pass, restart the backend once using the existing Replit workflow.
+
+Do not publish.
+
+Confirm startup logs contain a comparison-tail repair step.
+
+Report:
+
+* root/health endpoint availability before deferred repair completes
+* canonical preload timing
+* comparison-tail repair timing
+* selected count
+* updated count
+* gzip reads
+* bootstrap completion
+* whether the server remained responsive
+
+Call the Primary Watchlist endpoint once after bootstrap.
+
+Report:
+
+* status
+* row count
+* TTFB
+* total elapsed time
+* history enrichment time
+* request-time comparison gzip opens
+* leaked `_comparison_*` fields
+* populated/null `change_7d`
+* populated/null `change_30d`
+
+Do not treat expected stale-history, foreign-symbol, missing-canonical, or missing-price nulls as startup-repair failures.
+
+## Git requirements
+
+Before editing:
+
+1. confirm repository root
+2. confirm branch is `main`
+3. run `git status -sb`
+4. show recent commits
+5. confirm `59e3ca97` is an ancestor
+6. confirm `60f75fd3` is an ancestor
+7. preserve all pre-existing runtime modifications
+8. confirm local `main` is not behind or diverged from `origin/main`
+
+Before committing:
+
+1. run `git diff --check`
+2. stage exact source and test paths only
+3. never use `git add .` or `git add -A`
+4. show staged file names
+5. show staged diff
+6. ensure none of these are staged:
+
+   * `_index.json`
+   * canonical `.json.gz` files
+   * runtime caches
+   * logs
+   * report files
+   * deployment metadata
+
+Create exactly one descriptive local commit after validation passes.
+
+Suggested message:
+
+`fix(startup): self-heal missing comparison-close tails`
+
+Do not push.
+
+Do not publish.
+
+## Final report
+
+Write the report to the location required by `AGENTS.md`.
+
+Include:
+
+1. Completion status
+2. Current HEAD and workspace state
+3. Exact production and test files changed
+4. Why the current published deployment is already functioning
+5. Remaining durability gap corrected
+6. Tail-validator contract
+7. Exact repair eligibility rules
+8. Exact post-yield bootstrap placement
+9. Why the repair cannot run on every request
+10. Why the 10-day staleness guard was preserved
+11. No-op current-workspace results
+12. Isolated recovery simulation results
+13. Focused test commands and results
+14. Startup timing and responsiveness
+15. Primary Watchlist endpoint timing
+16. Request-time gzip-open count
+17. Provider/database effects
+18. Runtime files deliberately not committed
+19. Risks or remaining limitations
+20. Final `git status -sb`
+21. Commit SHA and message
+22. Complete committed task diff
+
+Stop after the local commit and report.
+
+Do not push or publish.
