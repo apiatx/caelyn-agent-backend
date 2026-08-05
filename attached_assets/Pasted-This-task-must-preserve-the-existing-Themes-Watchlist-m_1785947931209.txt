@@ -1,0 +1,269 @@
+This task must preserve the existing Themes, Watchlist, membership, resolver, cache, and Neon architecture. Do not create a new endpoint, table, provider path, cache, mapper, resolver, or source of truth.
+
+The live Replit workspace is authoritative. GitHub may be slightly behind.
+
+Goal
+
+Extend the existing canonical theme registry so it can represent:
+
+sectors
+parent themes
+subthemes under parent themes
+themes/subthemes that roll up under more than one sector
+stocks that belong directly to a parent theme without requiring a subtheme
+stocks with one primary theme plus additional theme memberships
+
+The eventual Watchlist behavior must be:
+
+Sector selected:
+include stocks whose canonical sector matches the selected sector
+also include stocks belonging to themes/subthemes whose rollup_sector_ids include the selected sector
+Parent theme selected:
+include direct members of that theme
+include members of every descendant subtheme
+Subtheme selected:
+include only exact members of that subtheme
+
+Do not implement frontend behavior in this backend task.
+
+Required initial audit
+
+Before editing, inspect and trace the existing path through at least:
+
+backend/services/theme_rs_universe.py
+backend/services/theme_merge_layer.py
+backend/services/theme_resolver.py
+backend/services/theme_ticker_mapper.py
+backend/routes/themes.py
+the current Watchlist response builder and serializer
+current theme-membership Neon helpers
+relevant existing tests
+
+Prove:
+
+Which file is the canonical registry.
+Which existing endpoints expose theme metadata.
+Which existing Watchlist response fields currently expose:
+canonical sector
+primary theme ID
+all active theme memberships
+subtheme memberships
+Whether additional memberships are already available without new database work.
+Whether the existing /api/themes/list and /api/themes/relative-strength response paths can expose new metadata additively.
+Whether any current consumer depends on parent_sector, sector_tags, or existing classifications.
+
+Do not infer this from comments alone. Inspect the actual writers, readers, and response serialization.
+
+Required canonical metadata
+
+Within the existing canonical registry, add additive metadata using the existing registry path:
+
+parent_theme_id: str | None
+rollup_sector_ids: list[str]
+
+Meanings:
+
+parent_theme_id
+null for sectors and parent themes
+canonical parent-theme ID for subthemes
+must reference an existing theme-classified registry node
+rollup_sector_ids
+canonical sector IDs under which this node should appear in inclusive sector filtering
+may contain multiple sectors
+must only reference existing sector-classified registry nodes
+
+Preserve parent_sector and sector_tags for backward compatibility. Do not silently change or remove current response fields.
+
+Do not add a database column for this metadata unless repository evidence proves the canonical registry is already database-backed and cannot support the metadata statically. If a schema change would be necessary, stop and report instead of creating it.
+
+Initial hierarchy corrections
+
+Implement only mappings that can be made confidently from the current canonical registry and existing IDs.
+
+Required corrections:
+
+Metals & Mining
+
+Make metals_mining a parent theme.
+
+Assign existing nodes where present:
+
+gold → parent metals_mining
+silver → parent metals_mining
+copper_miners → parent metals_mining
+rare_earth → parent metals_mining
+
+Display-label changes:
+
+Copper Miners → Copper
+Rare Earth Metals → Rare Earth Elements
+
+Preserve all frozen IDs and add prior labels as aliases. Do not rename IDs.
+
+Semiconductors
+
+Make semiconductors a parent theme.
+
+Assign existing semiconductor-related nodes where they currently exist and the relationship is unambiguous:
+
+memory_storage → parent semiconductors
+semicap_equipment → parent semiconductors
+substrates_packaging → parent semiconductors
+semiconductor-specific photonics node, if the current registry clearly treats it as part of the semiconductor value chain
+
+Do not invent missing subtheme IDs such as test, foundry, analog, or power semiconductors during this task. Report them as proposed future nodes.
+
+Preserve the existing semicap_equipment ID and all historical aliases.
+
+Oil & Gas
+
+Make oil_gas a parent theme.
+
+Assign existing nodes where present:
+
+lng_gas → parent oil_gas
+oil_services → parent oil_gas
+
+Do not invent E&P, midstream, refining, or integrated-oil nodes in this task.
+
+Software
+
+Use the existing broad Software node as the parent only if it already exists canonically.
+
+Where present and unambiguous:
+
+cloud_software → Software
+cybersecurity → Software
+
+If no canonical Software parent exists, stop short of inventing one and report the exact missing registry node.
+
+Defense / Aerospace
+
+Use the existing Defense node as a parent theme only if its current ID and downstream consumers can safely support classification promotion.
+
+Where present:
+
+drones → Defense
+space → Defense only if repository evidence shows the intended canonical relationship
+
+If Space is intentionally independent today, leave it independent and report the design decision rather than forcing it.
+
+Clean Energy
+
+Keep Clean Energy as a cross-sector parent theme.
+
+At minimum, its rollup_sector_ids should reflect its current explicit sector exposure, using canonical sector IDs instead of labels.
+
+Do not automatically place every battery, lithium, grid, or nuclear node under Clean Energy. Report ambiguous nodes separately.
+
+Rollup-sector rules
+
+The following principles must be encoded in data rather than frontend label heuristics:
+
+Semiconductors primarily rolls up to Technology.
+Semiconductor Materials may also roll up to Materials when that subtheme exists.
+Semiconductor Equipment/Test may also roll up to Industrials when those nodes exist.
+Clean Energy may roll up to Utilities, Industrials, Energy, Technology, and Materials where supported by existing metadata.
+Metals & Mining rolls up to Materials.
+Oil & Gas rolls up to Energy.
+Defense rolls up to Industrials.
+Software rolls up to Technology.
+Data Center Infrastructure may roll up to Technology, Utilities, Industrials, and Real Estate where supported by its existing sector metadata.
+
+Use canonical sector IDs, not display labels.
+
+Hierarchy validation
+
+Add focused validation using the existing test structure.
+
+Validate:
+
+Every parent_theme_id references an existing node.
+The referenced parent has classification theme.
+Every rollup_sector_ids entry references an existing sector node.
+No theme can be its own parent.
+No hierarchy cycles exist.
+Every canonical ID remains unique.
+Legacy aliases do not become separate nodes.
+Copper and Rare Earth display-label changes preserve the prior labels as aliases.
+Existing endpoint fields remain present.
+Existing theme counts and baskets are not accidentally lost.
+
+Prefer a pure validation helper in an existing appropriate module. Do not create generalized infrastructure.
+
+Watchlist payload audit
+
+After the registry work, inspect the existing Watchlist response.
+
+The frontend eventually needs additive per-row identifiers equivalent to:
+
+{
+  "sector_id": "technology",
+  "primary_theme_id": "semiconductors",
+  "theme_ids": ["semiconductors", "memory_storage"],
+  "subtheme_ids": ["memory_storage"]
+}
+
+Do not add these blindly.
+
+If equivalent fields already exist, document their exact names and source.
+If they are absent and can be added through the existing Watchlist response builder in one existing data path without new persistence or provider work, add them additively.
+Populate them only from the existing canonical resolver and existing active membership records.
+Never infer additional memberships from ETF proxies, candidate baskets, labels, or substring matching.
+Never replace public.watchlist.tickers as authoritative Watchlist membership.
+If this requires more than the allowed production scope or a new persistence path, stop and report the exact missing contract for the frontend task.
+Explicitly preserve
+Existing primary-theme resolver precedence
+Existing additional-membership behavior
+Existing Neon theme_ticker_overrides
+Existing category overrides
+Existing Watchlist membership authority
+Existing relative-strength calculations and baskets
+Existing theme IDs
+Existing caches and invalidation paths
+Existing providers and rate limits
+Existing endpoint URLs
+Existing query consumers
+Validation examples
+
+Prove behavior or metadata for at least:
+
+Materials → Metals & Mining → Gold
+Materials → Metals & Mining → Copper
+Technology → Semiconductors → Memory & Storage
+Energy → Oil & Gas → LNG & Natural Gas
+A direct parent-theme member with no subtheme
+A ticker with a primary theme and an additional theme membership
+A malformed or cyclic hierarchy fixture rejected by validation
+
+Run focused tests, git diff --check, and relevant existing broader tests.
+
+Do not start the full application merely for inspection when startup jobs could mutate persistent state.
+
+Completion
+
+If the existing path can satisfy the task without prohibited architecture changes:
+
+implement it
+create exactly one local commit
+do not push
+overwrite /home/runner/workspace/.opencode-reports/latest.md
+
+The report must include:
+
+proven current architecture
+whether the Watchlist payload already exposed all memberships
+exact taxonomy metadata added
+exact classifications changed
+exact aliases preserved
+exact files changed
+endpoint response examples
+tests and results
+behavior deliberately preserved
+unresolved taxonomy ambiguities
+proposed future nodes, especially semiconductor value-chain nodes
+final git status -sb
+commit SHA and message
+complete committed diff
+
+If the existing path cannot support the task without a new endpoint, table, column, cache, or replacement resolver, do not invent one. Stop and report the narrowest required architecture decision.
