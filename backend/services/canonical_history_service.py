@@ -564,6 +564,73 @@ def _apply_watchlist_market_metrics_to_meta(meta: dict, bars: list[dict]) -> dic
     return {**meta, **_compute_watchlist_market_metrics_from_bars(bars)}
 
 
+# ── Comparison-close tail validator ──────────────────────────────────────────
+
+def _is_valid_comparison_close_tail(tail: object, ny_today: Optional[date] = None) -> bool:
+    """Validate a comparison_close_tail for metadata maintenance and repair selection.
+
+    A valid tail:
+    • is a non-empty list
+    • has no more than _COMPARISON_TAIL_SESSIONS entries
+    • each entry is shaped [date_string, positive_finite_close]
+    • all dates are valid ISO date strings
+    • dates are strictly chronological (ascending, no duplicates)
+    • when ny_today is provided, all dates are strictly before it
+
+    No disk I/O or provider calls.  This validator is for metadata maintenance
+    and repair-eligibility selection; request-time comparison selection in
+    _select_from_tail() does not call it (too expensive per-entry).
+    """
+    if not isinstance(tail, list) or not tail:
+        return False
+    if len(tail) > _COMPARISON_TAIL_SESSIONS:
+        return False
+
+    prev_d: Optional[date] = None
+    seen: set[str] = set()
+
+    for entry in tail:
+        if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+            return False
+        date_str, close = entry[0], entry[1]
+
+        # Date must be a valid ISO string
+        if not isinstance(date_str, str):
+            return False
+        try:
+            d = date.fromisoformat(date_str)
+        except (ValueError, TypeError):
+            return False
+
+        # Duplicate dates
+        if date_str in seen:
+            return False
+        seen.add(date_str)
+
+        # Must be strictly chronological
+        if prev_d is not None and d <= prev_d:
+            return False
+        prev_d = d
+
+        # When ny_today provided, every date must be strictly before it
+        if ny_today is not None and d >= ny_today:
+            return False
+
+        # Close must be strictly positive and finite
+        if close is None or isinstance(close, bool):
+            return False
+        try:
+            f = float(close)
+        except (TypeError, ValueError):
+            return False
+        if f != f or f in (float("inf"), float("-inf")):  # NaN / ±inf
+            return False
+        if f <= 0.0:
+            return False
+
+    return True
+
+
 def _write_index() -> None:
     """Write index atomically, merging with existing disk content."""
     try:
@@ -892,7 +959,10 @@ def backfill_volume_metrics_metadata(symbols: Optional[list[str]] = None) -> dic
         if not meta:
             skipped += 1
             continue
-        if all(field in meta for field in _WATCHLIST_MARKET_METRIC_FIELDS) and "comparison_close_tail" in meta:
+        if (
+            all(field in meta for field in _WATCHLIST_MARKET_METRIC_FIELDS)
+            and _is_valid_comparison_close_tail(meta.get("comparison_close_tail"))
+        ):
             skipped += 1
             continue
         bar_path = _bar_file(sym)
@@ -911,6 +981,135 @@ def backfill_volume_metrics_metadata(symbols: Optional[list[str]] = None) -> dic
     if updated:
         _write_index()
     return {"updated": updated, "file_reads": file_reads, "skipped": skipped}
+
+
+def ensure_comparison_close_tails() -> dict:
+    """Idempotent startup self-heal: repair missing or invalid comparison-close tails.
+
+    Selects only canonical symbols that are currently eligible for repair:
+    • status in _ALWAYS_USABLE (excludes fetch_failed / not_yet_backfilled /
+      insufficient_history / excluded_prefixed_symbol / cache_corrupt_needs_rebuild)
+    • bar_count >= _RECENT_MIN
+    • canonical {SYMBOL}.json.gz exists on disk
+    • no dotted legacy key or colon-prefixed (foreign) symbol
+    • comparison_close_tail is absent or fails _is_valid_comparison_close_tail()
+
+    Delegates to backfill_volume_metrics_metadata() for the actual gz reads and
+    _INDEX / disk updates.  Symbols already holding a valid tail are skipped
+    by that path, so this function performs zero gz opens in the normal state
+    where all 426 tails are present and valid.
+
+    Returns structured counts for bootstrap logging:
+        selected    — symbols identified as needing repair
+        updated     — symbols successfully repaired (from backfill)
+        file_reads  — gz files opened during repair
+        skipped     — symbols skipped by backfill (already valid or no file)
+        missing_after — eligible symbols still lacking a valid tail after repair
+        elapsed_ms  — wall-clock time of this call
+        status      — "noop" | "repaired" | "partial" | "error"
+    """
+    import time as _t_mod
+    t0 = _t_mod.monotonic()
+
+    if not _INDEX:
+        try:
+            preload_index()
+        except Exception as exc:
+            elapsed_ms = round((_t_mod.monotonic() - t0) * 1000)
+            print(f"[CANON_HIST] ensure_comparison_close_tails: preload failed: {exc}")
+            return {
+                "selected": 0, "updated": 0, "file_reads": 0,
+                "skipped": 0, "missing_after": 0,
+                "elapsed_ms": elapsed_ms, "status": "error", "error": str(exc),
+            }
+
+    eligible: list[str] = []
+    for sym, meta in list(_INDEX.items()):
+        # Dotted legacy keys (already excluded by preload_index filter, but guard anyway)
+        if "." in sym:
+            continue
+        # Foreign-prefixed / colon symbols (status=excluded_prefixed_symbol covers most,
+        # but explicit colon check is belt-and-suspenders)
+        if ":" in sym:
+            continue
+        # Must be in a usable status (eliminates fetch_failed, not_yet_backfilled,
+        # insufficient_history, excluded_prefixed_symbol, cache_corrupt_needs_rebuild)
+        status = meta.get("history_status", "")
+        if status not in _ALWAYS_USABLE:
+            continue
+        # Must have enough bars to produce a meaningful tail
+        bar_count = int(meta.get("bar_count") or 0)
+        if bar_count < _RECENT_MIN:
+            continue
+        # gz file must exist (no file → cannot repair)
+        if not _bar_file(sym).exists():
+            continue
+        # Skip if tail is already valid — the hot path
+        if _is_valid_comparison_close_tail(meta.get("comparison_close_tail")):
+            continue
+        eligible.append(sym)
+
+    if not eligible:
+        elapsed_ms = round((_t_mod.monotonic() - t0) * 1000)
+        return {
+            "selected": 0, "updated": 0, "file_reads": 0,
+            "skipped": 0, "missing_after": 0,
+            "elapsed_ms": elapsed_ms, "status": "noop",
+        }
+
+    print(
+        f"[CANON_HIST] ensure_comparison_close_tails: "
+        f"{len(eligible)} symbol(s) need repair"
+    )
+    try:
+        result = backfill_volume_metrics_metadata(symbols=eligible)
+    except Exception as exc:
+        elapsed_ms = round((_t_mod.monotonic() - t0) * 1000)
+        print(f"[CANON_HIST] ensure_comparison_close_tails: repair failed: {exc}")
+        return {
+            "selected": len(eligible), "updated": 0, "file_reads": 0,
+            "skipped": 0, "missing_after": len(eligible),
+            "elapsed_ms": elapsed_ms, "status": "error", "error": str(exc),
+        }
+
+    # Count how many eligible symbols still lack a valid tail after the repair pass
+    missing_after = sum(
+        1 for sym in eligible
+        if not _is_valid_comparison_close_tail(
+            _INDEX.get(sym, {}).get("comparison_close_tail")
+        )
+    )
+
+    updated    = result.get("updated", 0)
+    file_reads = result.get("file_reads", 0)
+    skipped    = result.get("skipped", 0)
+    elapsed_ms = round((_t_mod.monotonic() - t0) * 1000)
+
+    if missing_after == 0 and updated > 0:
+        repair_status = "repaired"
+    elif missing_after > 0 and updated > 0:
+        repair_status = "partial"
+    elif updated == 0 and missing_after == 0:
+        # backfill skipped all (shouldn't reach here — we pre-filtered; counts as noop)
+        repair_status = "noop"
+    else:
+        repair_status = "error"
+
+    print(
+        f"[CANON_HIST] ensure_comparison_close_tails: "
+        f"selected={len(eligible)} updated={updated} file_reads={file_reads} "
+        f"skipped={skipped} missing_after={missing_after} "
+        f"elapsed_ms={elapsed_ms} status={repair_status}"
+    )
+    return {
+        "selected":     len(eligible),
+        "updated":      updated,
+        "file_reads":   file_reads,
+        "skipped":      skipped,
+        "missing_after": missing_after,
+        "elapsed_ms":   elapsed_ms,
+        "status":       repair_status,
+    }
 
 
 def is_fresh(symbol: str, max_age_h: Optional[float] = None) -> bool:

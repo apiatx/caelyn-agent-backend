@@ -1088,6 +1088,35 @@ async def lifespan(app):
             print(f"[BOOTSTRAP] Canonical history index preload error: {_e}")
             _BOOTSTRAP_STATE["steps"]["canon_preload"] = {"ok": False, "error": str(_e)}
 
+        # 2a. Comparison-close tail self-heal — idempotent, runs immediately after
+        #     canon_preload so _INDEX is populated.  Selects only symbols with a
+        #     missing or invalid tail; fast no-op (zero gz reads) when all 426 tails
+        #     are already valid.  A repair failure is non-fatal to other steps.
+        _t = _bst.monotonic()
+        try:
+            from services.canonical_history_service import (
+                ensure_comparison_close_tails as _tail_repair,
+            )
+            _tail_result = await asyncio.to_thread(_tail_repair)
+            _BOOTSTRAP_STATE["steps"]["comparison_tail_repair"] = {
+                "ok": _tail_result.get("status") != "error",
+                **_tail_result,
+            }
+            print(
+                f"[BOOTSTRAP] comparison_tail_repair: "
+                f"status={_tail_result.get('status')} "
+                f"selected={_tail_result.get('selected')} "
+                f"updated={_tail_result.get('updated')} "
+                f"file_reads={_tail_result.get('file_reads')} "
+                f"missing_after={_tail_result.get('missing_after')} "
+                f"elapsed_ms={_tail_result.get('elapsed_ms')}"
+            )
+        except Exception as _e:
+            print(f"[BOOTSTRAP] Comparison-close tail repair error (non-fatal): {_e}")
+            _BOOTSTRAP_STATE["steps"]["comparison_tail_repair"] = {
+                "ok": False, "error": str(_e),
+            }
+
         # 3. Watchlist Stage 2 — load disk LKG then start gentle warmup.
         _t = _bst.monotonic()
         try:

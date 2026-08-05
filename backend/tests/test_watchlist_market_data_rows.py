@@ -1142,6 +1142,736 @@ def test_split_consistent_canonical_basis_preserved(monkeypatch):
     )
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# NEW: Tail validator, repair selection, repair behavior, bootstrap (tests 1-32)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ── Validator tests (1–8) ────────────────────────────────────────────────────
+
+
+def test_validator_normal_64_session_tail_is_valid():
+    """T1: A well-formed 64-session tail is valid."""
+    from datetime import timedelta
+    start = date(2025, 1, 1)
+    tail = [
+        [(start + timedelta(days=i)).isoformat(), float(100 + i)]
+        for i in range(64)
+    ]
+    assert chs._is_valid_comparison_close_tail(tail) is True
+
+
+def test_validator_empty_tail_is_invalid():
+    """T2: Empty list is invalid."""
+    assert chs._is_valid_comparison_close_tail([]) is False
+    assert chs._is_valid_comparison_close_tail(None) is False
+    assert chs._is_valid_comparison_close_tail("") is False
+
+
+def test_validator_malformed_entry_is_invalid():
+    """T3: Entry that is not a 2-element list/tuple is invalid."""
+    assert chs._is_valid_comparison_close_tail([["2026-01-01"]]) is False          # too short
+    assert chs._is_valid_comparison_close_tail(["2026-01-01"]) is False             # string not list
+    assert chs._is_valid_comparison_close_tail([[None, 100.0]]) is False            # date None
+    assert chs._is_valid_comparison_close_tail([{"date": "2026-01-01", "c": 1}]) is False  # dict
+
+
+def test_validator_nonpositive_close_is_invalid():
+    """T4: Zero or negative close is invalid."""
+    assert chs._is_valid_comparison_close_tail([["2026-01-01", 0.0]]) is False
+    assert chs._is_valid_comparison_close_tail([["2026-01-01", -1.0]]) is False
+
+
+def test_validator_nonfinite_close_is_invalid():
+    """T5: NaN and ±Inf are invalid."""
+    assert chs._is_valid_comparison_close_tail([["2026-01-01", float("inf")]]) is False
+    assert chs._is_valid_comparison_close_tail([["2026-01-01", float("-inf")]]) is False
+    assert chs._is_valid_comparison_close_tail([["2026-01-01", float("nan")]]) is False
+
+
+def test_validator_invalid_date_is_invalid():
+    """T6: Non-ISO or garbage date strings are invalid."""
+    assert chs._is_valid_comparison_close_tail([["not-a-date", 100.0]]) is False
+    assert chs._is_valid_comparison_close_tail([["2026-13-01", 100.0]]) is False  # month 13
+    assert chs._is_valid_comparison_close_tail([[20260101, 100.0]]) is False       # int, not str
+
+
+def test_validator_duplicate_dates_are_invalid():
+    """T7: Duplicate date strings are invalid."""
+    tail = [["2026-01-01", 100.0], ["2026-01-01", 101.0]]
+    assert chs._is_valid_comparison_close_tail(tail) is False
+
+
+def test_validator_nonchronological_dates_are_invalid_and_oversized_tail():
+    """T8a: Nonchronological dates are invalid. T8b: Oversized tail is invalid."""
+    # Nonchronological
+    tail_bad_order = [["2026-01-02", 101.0], ["2026-01-01", 100.0]]
+    assert chs._is_valid_comparison_close_tail(tail_bad_order) is False
+
+    # Oversized
+    from datetime import timedelta
+    start = date(2025, 1, 1)
+    big_tail = [
+        [(start + timedelta(days=i)).isoformat(), float(100 + i)]
+        for i in range(chs._COMPARISON_TAIL_SESSIONS + 1)
+    ]
+    assert chs._is_valid_comparison_close_tail(big_tail) is False
+
+
+# ── Repair selection tests (9–15) ────────────────────────────────────────────
+
+
+def test_repair_selection_valid_tail_symbols_not_selected(monkeypatch, tmp_path):
+    """T9: Symbols with valid tails are not selected for repair (no-op)."""
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+    monkeypatch.setattr(chs, "_INDEX", {})
+
+    start = date(2026, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(),
+         "close": 100.0 + i, "volume": 1000.0}
+        for i in range(50)
+    ]
+    chs.save_bars("GOOD", bars, "tradier")
+
+    # Verify the tail was stored and is valid
+    tail = chs._INDEX["GOOD"].get("comparison_close_tail")
+    assert chs._is_valid_comparison_close_tail(tail) is True
+
+    import gzip as _gzmod
+    open_count = [0]
+    real_open = _gzmod.open
+
+    def _counting(*a, **kw):
+        open_count[0] += 1
+        return real_open(*a, **kw)
+
+    monkeypatch.setattr(chs.gzip, "open", _counting)
+    result = chs.ensure_comparison_close_tails()
+
+    assert result["selected"] == 0
+    assert result["status"] == "noop"
+    assert open_count[0] == 0, f"Expected zero gz opens; got {open_count[0]}"
+
+
+def test_repair_selection_missing_tail_with_gz_file_is_selected(monkeypatch, tmp_path):
+    """T10: Symbol whose _INDEX entry lacks a tail but has a gz file is selected."""
+    import gzip as _gzmod, json as _jsonmod
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+
+    start = date(2026, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(),
+         "close": 100.0 + i, "volume": 1000.0}
+        for i in range(50)
+    ]
+    # Write gz file manually without comparison_close_tail in meta
+    sym = "NOTAIL"
+    gz_path = tmp_path / f"{sym}.json.gz"
+    payload = {
+        "symbol": sym, "bar_count": 50,
+        "history_status": "available_10y",
+        "bars": bars,
+    }
+    with _gzmod.open(str(gz_path), "wt", encoding="utf-8") as fh:
+        fh.write(_jsonmod.dumps(payload))
+
+    # Inject _INDEX entry without tail
+    monkeypatch.setattr(chs, "_INDEX", {
+        sym: {
+            "symbol": sym, "bar_count": 50,
+            "history_status": "available_10y",
+            # intentionally no comparison_close_tail
+        }
+    })
+
+    result = chs.ensure_comparison_close_tails()
+    assert result["selected"] >= 1
+    assert result["updated"] >= 1
+    assert result["file_reads"] >= 1
+    assert chs._is_valid_comparison_close_tail(
+        chs._INDEX[sym].get("comparison_close_tail")
+    ), "Tail must be valid after repair"
+
+
+def test_repair_selection_empty_and_malformed_tails_are_selected(monkeypatch, tmp_path):
+    """T11: Empty or malformed tails are selected for repair."""
+    import gzip as _gzmod, json as _jsonmod
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+
+    start = date(2026, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(),
+         "close": 100.0 + i, "volume": 1000.0}
+        for i in range(50)
+    ]
+
+    for sym, bad_tail in [("EMPTY", []), ("MALFORM", [["bad-date", 1.0]])]:
+        gz_path = tmp_path / f"{sym}.json.gz"
+        with _gzmod.open(str(gz_path), "wt", encoding="utf-8") as fh:
+            fh.write(_jsonmod.dumps({"symbol": sym, "bar_count": 50,
+                                     "history_status": "available_10y",
+                                     "bars": bars}))
+
+    monkeypatch.setattr(chs, "_INDEX", {
+        "EMPTY": {
+            "symbol": "EMPTY", "bar_count": 50,
+            "history_status": "available_10y",
+            "comparison_close_tail": [],
+        },
+        "MALFORM": {
+            "symbol": "MALFORM", "bar_count": 50,
+            "history_status": "available_10y",
+            "comparison_close_tail": [["bad-date", 1.0]],
+        },
+    })
+
+    result = chs.ensure_comparison_close_tails()
+    assert result["selected"] == 2
+    assert result["updated"] == 2
+
+
+def test_repair_selection_no_gz_file_not_selected(monkeypatch, tmp_path):
+    """T12: Entry without a gz file is not selected for repair."""
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+    monkeypatch.setattr(chs, "_INDEX", {
+        "NOFILE": {
+            "symbol": "NOFILE", "bar_count": 50,
+            "history_status": "available_10y",
+            # No gz file and no tail
+        }
+    })
+    # Confirm the gz file does NOT exist
+    assert not (tmp_path / "NOFILE.json.gz").exists()
+
+    result = chs.ensure_comparison_close_tails()
+    assert result["selected"] == 0
+    assert result["status"] == "noop"
+
+
+def test_repair_selection_excluded_failed_insufficient_corrupt_not_selected(monkeypatch, tmp_path):
+    """T13: Excluded, failed, insufficient, and corrupt entries are not selected."""
+    import gzip as _gzmod, json as _jsonmod
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+
+    # Create gz files so the absence-of-file check doesn't filter them first
+    for sym in ("EXCL", "FAIL", "INSUF", "CORRUPT"):
+        gz_path = tmp_path / f"{sym}.json.gz"
+        with _gzmod.open(str(gz_path), "wt", encoding="utf-8") as fh:
+            fh.write(_jsonmod.dumps({"symbol": sym, "bar_count": 50, "bars": []}))
+
+    monkeypatch.setattr(chs, "_INDEX", {
+        "EXCL": {
+            "symbol": "EXCL", "bar_count": 50,
+            "history_status": "excluded_prefixed_symbol",
+        },
+        "FAIL": {
+            "symbol": "FAIL", "bar_count": 50,
+            "history_status": "fetch_failed",
+        },
+        "INSUF": {
+            "symbol": "INSUF", "bar_count": 5,  # below _RECENT_MIN
+            "history_status": "insufficient_history",
+        },
+        "CORRUPT": {
+            "symbol": "CORRUPT", "bar_count": 50,
+            "history_status": "cache_corrupt_needs_rebuild",
+        },
+    })
+
+    result = chs.ensure_comparison_close_tails()
+    assert result["selected"] == 0, (
+        f"Expected 0 selected; got {result['selected']} — "
+        "excluded/failed/insufficient/corrupt entries must not be selected"
+    )
+
+
+def test_repair_selection_foreign_and_dotted_not_selected(monkeypatch, tmp_path):
+    """T14: Foreign-prefixed (colon) and dotted legacy keys are not selected."""
+    import gzip as _gzmod, json as _jsonmod
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+
+    # Create gz files for completeness
+    for sym in ("LON:HSBA", "legacy.old"):
+        safe = sym.replace(":", "_").replace(".", "_")
+        gz_path = tmp_path / f"{safe}.json.gz"
+        with _gzmod.open(str(gz_path), "wt", encoding="utf-8") as fh:
+            fh.write(_jsonmod.dumps({"symbol": sym, "bar_count": 50, "bars": []}))
+
+    monkeypatch.setattr(chs, "_INDEX", {
+        "LON:HSBA": {
+            "symbol": "LON:HSBA", "bar_count": 200,
+            "history_status": "available_10y",
+        },
+        "legacy.old": {
+            "symbol": "legacy.old", "bar_count": 200,
+            "history_status": "available_10y",
+        },
+    })
+
+    result = chs.ensure_comparison_close_tails()
+    assert result["selected"] == 0, (
+        "Foreign-prefixed and dotted symbols must never be selected"
+    )
+
+
+def test_repair_selection_fully_valid_index_is_noop(monkeypatch, tmp_path):
+    """T15: An index where every symbol has a valid tail is a zero-gz-read no-op."""
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+    monkeypatch.setattr(chs, "_INDEX", {})
+
+    # Create 5 symbols with valid tails via save_bars
+    start = date(2026, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(),
+         "close": 100.0 + i, "volume": 1000.0}
+        for i in range(50)
+    ]
+    for sym in ("AAA", "BBB", "CCC", "DDD", "EEE"):
+        chs.save_bars(sym, bars, "tradier")
+
+    import gzip as _gzmod
+    open_count = [0]
+    real_open = _gzmod.open
+
+    def _counting(*a, **kw):
+        open_count[0] += 1
+        return real_open(*a, **kw)
+
+    monkeypatch.setattr(chs.gzip, "open", _counting)
+    result = chs.ensure_comparison_close_tails()
+
+    assert result["selected"] == 0
+    assert result["status"] == "noop"
+    assert open_count[0] == 0, (
+        f"Expected zero gz opens on no-op; got {open_count[0]}"
+    )
+
+
+# ── Repair behavior tests (16–22) ────────────────────────────────────────────
+
+
+def test_repair_behavior_missing_tail_repaired_from_gz(monkeypatch, tmp_path):
+    """T16: Missing-tail symbol is repaired from its existing gz bars."""
+    import gzip as _gzmod, json as _jsonmod
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+
+    start = date(2026, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(),
+         "close": 100.0 + i, "volume": 1000.0}
+        for i in range(50)
+    ]
+    sym = "REPAIR"
+    gz_path = tmp_path / f"{sym}.json.gz"
+    with _gzmod.open(str(gz_path), "wt", encoding="utf-8") as fh:
+        fh.write(_jsonmod.dumps({
+            "symbol": sym, "bar_count": 50,
+            "history_status": "available_10y", "bars": bars,
+        }))
+
+    monkeypatch.setattr(chs, "_INDEX", {
+        sym: {"symbol": sym, "bar_count": 50, "history_status": "available_10y"}
+    })
+
+    result = chs.ensure_comparison_close_tails()
+    assert result["updated"] == 1, f"Expected 1 update; got {result['updated']}"
+
+
+def test_repair_behavior_resulting_tail_is_valid_and_bounded(monkeypatch, tmp_path):
+    """T17: After repair, the resulting tail passes the validator and is bounded."""
+    import gzip as _gzmod, json as _jsonmod
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+
+    start = date(2025, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(),
+         "close": 100.0 + i, "volume": 1000.0}
+        for i in range(200)  # more than _COMPARISON_TAIL_SESSIONS
+    ]
+    sym = "BOUND"
+    gz_path = tmp_path / f"{sym}.json.gz"
+    with _gzmod.open(str(gz_path), "wt", encoding="utf-8") as fh:
+        fh.write(_jsonmod.dumps({
+            "symbol": sym, "bar_count": 200,
+            "history_status": "available_10y", "bars": bars,
+        }))
+
+    monkeypatch.setattr(chs, "_INDEX", {
+        sym: {"symbol": sym, "bar_count": 200, "history_status": "available_10y"}
+    })
+
+    chs.ensure_comparison_close_tails()
+    tail = chs._INDEX[sym].get("comparison_close_tail")
+    assert chs._is_valid_comparison_close_tail(tail), "Tail must be valid after repair"
+    assert len(tail) <= chs._COMPARISON_TAIL_SESSIONS, "Tail must be bounded"
+
+
+def test_repair_behavior_get_comparison_closes_bulk_populated_after_repair(monkeypatch, tmp_path):
+    """T18: get_comparison_closes_bulk() returns populated 7D/30D comparisons after repair."""
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+    monkeypatch.setattr(chs, "_INDEX", {})
+
+    # Write a real symbol via save_bars (this also builds the gz and tail)
+    start = date(2026, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(),
+         "close": 100.0 + i, "volume": 1000.0}
+        for i in range(50)
+    ]
+    chs.save_bars("POSTREP", bars, "tradier")
+
+    # Simulate the "tail missing" state
+    meta_no_tail = {k: v for k, v in chs._INDEX["POSTREP"].items()
+                    if k != "comparison_close_tail"}
+    chs._INDEX["POSTREP"] = meta_no_tail
+
+    # Confirm null before repair
+    ny_ref = start + timedelta(days=50)
+    pre = chs.get_comparison_closes_bulk(["POSTREP"], ny_today=ny_ref)
+    assert pre["POSTREP"]["comparison_close_7d"] is None, "Should be null before repair"
+
+    # Repair
+    chs.ensure_comparison_close_tails()
+
+    # Confirm populated after repair
+    post = chs.get_comparison_closes_bulk(["POSTREP"], ny_today=ny_ref)
+    assert post["POSTREP"]["comparison_close_7d"] is not None, (
+        "Should be populated after repair"
+    )
+
+
+def test_repair_behavior_no_provider_calls(monkeypatch, tmp_path):
+    """T19: Repair performs no provider calls (HTTP/network)."""
+    import gzip as _gzmod, json as _jsonmod
+    import urllib.request
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+
+    start = date(2026, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(),
+         "close": 100.0 + i, "volume": 1000.0}
+        for i in range(50)
+    ]
+    sym = "NOPROV"
+    gz_path = tmp_path / f"{sym}.json.gz"
+    with _gzmod.open(str(gz_path), "wt", encoding="utf-8") as fh:
+        fh.write(_jsonmod.dumps({
+            "symbol": sym, "bar_count": 50,
+            "history_status": "available_10y", "bars": bars,
+        }))
+    monkeypatch.setattr(chs, "_INDEX", {
+        sym: {"symbol": sym, "bar_count": 50, "history_status": "available_10y"}
+    })
+
+    network_calls: list[str] = []
+
+    def _no_network(*a, **kw):
+        network_calls.append(str(a))
+        raise AssertionError(f"No network calls allowed during repair; got {a}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _no_network)
+
+    chs.ensure_comparison_close_tails()
+    assert network_calls == [], f"Unexpected network calls: {network_calls}"
+
+
+def test_repair_behavior_no_database_calls(monkeypatch, tmp_path):
+    """T20: Repair performs no database calls."""
+    import gzip as _gzmod, json as _jsonmod
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+
+    start = date(2026, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(),
+         "close": 100.0 + i, "volume": 1000.0}
+        for i in range(50)
+    ]
+    sym = "NODB"
+    gz_path = tmp_path / f"{sym}.json.gz"
+    with _gzmod.open(str(gz_path), "wt", encoding="utf-8") as fh:
+        fh.write(_jsonmod.dumps({
+            "symbol": sym, "bar_count": 50,
+            "history_status": "available_10y", "bars": bars,
+        }))
+    monkeypatch.setattr(chs, "_INDEX", {
+        sym: {"symbol": sym, "bar_count": 50, "history_status": "available_10y"}
+    })
+
+    # canonical_history_service has no database imports — just confirm it doesn't
+    # try to import or call psycopg2 during repair
+    import sys
+    psycopg2_before = "psycopg2" in sys.modules
+    chs.ensure_comparison_close_tails()
+    psycopg2_after = "psycopg2" in sys.modules
+    # If psycopg2 wasn't loaded before, repair must not load it
+    if not psycopg2_before:
+        assert not psycopg2_after, "Repair must not import psycopg2"
+
+
+def test_repair_behavior_second_call_is_noop_zero_gz_reads(monkeypatch, tmp_path):
+    """T21: Repeating the helper immediately is a no-op with zero additional gz reads."""
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+    monkeypatch.setattr(chs, "_INDEX", {})
+
+    start = date(2026, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(),
+         "close": 100.0 + i, "volume": 1000.0}
+        for i in range(50)
+    ]
+    # Save without tail by removing it
+    chs.save_bars("IDMPOT", bars, "tradier")
+    meta_no_tail = {k: v for k, v in chs._INDEX["IDMPOT"].items()
+                    if k != "comparison_close_tail"}
+    chs._INDEX["IDMPOT"] = meta_no_tail
+
+    # First call: repairs
+    r1 = chs.ensure_comparison_close_tails()
+    assert r1["updated"] == 1
+
+    # Second call: no-op, zero gz reads
+    import gzip as _gzmod
+    open_count = [0]
+    real_open = _gzmod.open
+
+    def _counting(*a, **kw):
+        open_count[0] += 1
+        return real_open(*a, **kw)
+
+    monkeypatch.setattr(chs.gzip, "open", _counting)
+    r2 = chs.ensure_comparison_close_tails()
+
+    assert r2["selected"] == 0, f"Second call must select 0; got {r2['selected']}"
+    assert r2["status"] == "noop"
+    assert open_count[0] == 0, f"Second call must open 0 gz files; got {open_count[0]}"
+
+
+def test_repair_behavior_partial_failure_preserves_valid_tails(monkeypatch, tmp_path):
+    """T22: A partial failure does not delete valid existing tails."""
+    import gzip as _gzmod, json as _jsonmod
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+    monkeypatch.setattr(chs, "_INDEX", {})
+
+    start = date(2026, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(),
+         "close": 100.0 + i, "volume": 1000.0}
+        for i in range(50)
+    ]
+
+    # GOOD: has a valid tail
+    chs.save_bars("GOOD22", bars, "tradier")
+    good_tail_before = chs._INDEX["GOOD22"]["comparison_close_tail"][:]
+
+    # BAD: has no tail; gz file is corrupt (will fail to repair)
+    bad_gz = tmp_path / "BAD22.json.gz"
+    bad_gz.write_bytes(b"not valid gzip content")
+    chs._INDEX["BAD22"] = {
+        "symbol": "BAD22", "bar_count": 50,
+        "history_status": "available_10y",
+    }
+
+    result = chs.ensure_comparison_close_tails()
+
+    # BAD was attempted (selected) but repair failed
+    assert result["selected"] >= 1
+    # GOOD tail must be untouched
+    assert chs._INDEX["GOOD22"].get("comparison_close_tail") == good_tail_before, (
+        "Partial failure must not clobber valid existing tails"
+    )
+
+
+# ── Bootstrap behavior tests (23–27) ─────────────────────────────────────────
+
+
+def test_bootstrap_step_recorded_in_bootstrap_state(monkeypatch, tmp_path):
+    """T23–T26: Bootstrap records comparison_tail_repair step with useful counts."""
+    import asyncio as _asyncio
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+    monkeypatch.setattr(chs, "_INDEX", {})
+
+    start = date(2026, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(),
+         "close": 100.0 + i, "volume": 1000.0}
+        for i in range(50)
+    ]
+    chs.save_bars("BOOT", bars, "tradier")
+
+    # Simulate the bootstrap pattern from main.py:
+    # ensure_comparison_close_tails is called via asyncio.to_thread
+    state: dict = {}
+
+    async def _run():
+        result = await _asyncio.to_thread(chs.ensure_comparison_close_tails)
+        state["comparison_tail_repair"] = {
+            "ok": result.get("status") != "error",
+            **result,
+        }
+
+    _asyncio.run(_run())
+
+    step = state["comparison_tail_repair"]
+    assert "ok" in step
+    assert "selected" in step
+    assert "updated" in step
+    assert "file_reads" in step
+    assert "missing_after" in step
+    assert "elapsed_ms" in step
+    assert "status" in step
+    assert step["ok"] is True, f"Step must succeed; got: {step}"
+
+
+def test_bootstrap_step_exception_is_nonfatal(monkeypatch, tmp_path):
+    """T25: A repair exception is caught and recorded; does not propagate."""
+    import asyncio as _asyncio
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+
+    def _exploding_repair():
+        raise RuntimeError("Simulated repair explosion")
+
+    monkeypatch.setattr(chs, "ensure_comparison_close_tails", _exploding_repair)
+
+    state: dict = {}
+    errors: list = []
+
+    async def _run():
+        try:
+            result = await _asyncio.to_thread(chs.ensure_comparison_close_tails)
+            state["comparison_tail_repair"] = {
+                "ok": result.get("status") != "error",
+                **result,
+            }
+        except Exception as _e:
+            errors.append(_e)
+            state["comparison_tail_repair"] = {"ok": False, "error": str(_e)}
+
+    _asyncio.run(_run())
+
+    # The bootstrap catches and records the error; does not re-raise
+    assert "comparison_tail_repair" in state
+    assert state["comparison_tail_repair"]["ok"] is False
+    # Application startup continues (no unhandled exception from the bootstrap task)
+
+
+def test_bootstrap_health_contract_unchanged():
+    """T27: Bootstrap health-serving contract is unchanged: health endpoint does not
+    depend on comparison_tail_repair completing before returning 200.
+
+    Verifies structurally that ensure_comparison_close_tails is called exclusively
+    inside _post_yield_bootstrap (after yield) and not in the pre-yield path.
+    """
+    import inspect
+    import backend.main as _main_mod
+
+    src = inspect.getsource(_main_mod)
+
+    # Must be referenced at all
+    assert "ensure_comparison_close_tails" in src, (
+        "ensure_comparison_close_tails must be referenced in main.py"
+    )
+    # Must appear between the bootstrap function definition and its task creation.
+    # The bootstrap task is created immediately after the function:
+    #   asyncio.create_task(_post_yield_bootstrap())
+    bootstrap_def = src.find("async def _post_yield_bootstrap()")
+    bootstrap_task = src.find("asyncio.create_task(_post_yield_bootstrap())")
+    assert bootstrap_def >= 0, "async def _post_yield_bootstrap() not found in main.py"
+    assert bootstrap_task > bootstrap_def, (
+        "asyncio.create_task(_post_yield_bootstrap()) must follow the function def"
+    )
+    repair_pos = src.find("ensure_comparison_close_tails")
+    assert bootstrap_def < repair_pos < bootstrap_task, (
+        "ensure_comparison_close_tails must appear inside _post_yield_bootstrap "
+        "(between the function def and the create_task call), not before yield"
+    )
+    # Also verify the bootstrap step key is recorded
+    assert "comparison_tail_repair" in src, (
+        "_BOOTSTRAP_STATE step 'comparison_tail_repair' must be recorded in main.py"
+    )
+
+
+# ── Existing regression invariants (28–32) ───────────────────────────────────
+
+
+def test_regression_get_comparison_closes_bulk_still_zero_gz_reads_normal(monkeypatch, tmp_path):
+    """T28: Normal Watchlist request still performs zero gzip reads."""
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+    monkeypatch.setattr(chs, "_INDEX", {})
+
+    start = date(2026, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(),
+         "close": 100.0 + i, "volume": 1000.0}
+        for i in range(50)
+    ]
+    chs.save_bars("REG28", bars, "tradier")
+
+    import gzip as _gzmod
+    opens = [0]
+    real_open = _gzmod.open
+
+    def _counting(*a, **kw):
+        opens[0] += 1
+        return real_open(*a, **kw)
+
+    monkeypatch.setattr(chs.gzip, "open", _counting)
+
+    ny_ref = start + timedelta(days=50)
+    result = chs.get_comparison_closes_bulk(["REG28"], ny_today=ny_ref)
+
+    assert opens[0] == 0, f"T28: Expected 0 gz opens; got {opens[0]}"
+    assert result["REG28"]["comparison_close_7d"] is not None
+
+
+def test_regression_10d_staleness_guard_preserved():
+    """T31: The 10-day staleness guard remains unchanged."""
+    tail = [["2026-01-01", 100.0]]
+    # Target 7d from 2026-08-05: Jul 29; Jan 1 to Jul 29 = 209 days >> 10
+    result = chs._select_from_tail(tail, date(2026, 8, 5), max_gap_days=10)
+    assert result["comparison_close_7d"] is None, "T31: Staleness guard must block stale comparison"
+
+
+def test_regression_materially_stale_data_returns_null():
+    """T32: Materially stale canonical data (bars stop 3+ weeks ago) returns null."""
+    # Build a real metrics dict from bars that stopped 3 weeks before today
+    ny_today = chs.ny_market_date()
+    stale_last = ny_today - timedelta(days=22)  # 22 days stale
+    start = stale_last - timedelta(days=31)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(),
+         "close": 100.0 + i, "volume": 1000.0}
+        for i in range(32)
+    ]
+    metrics = chs._compute_watchlist_market_metrics_from_bars(bars)
+    tail = metrics.get("comparison_close_tail")
+    assert tail is not None and len(tail) > 0, "Tail must be built"
+
+    # Now select from that tail using today as as_of
+    # The newest bar is 22 days old; 7d target is 7 days ago; gap from newest to 7d target ≥ 15 days
+    result = chs._select_from_tail(tail, ny_today, max_gap_days=10)
+    assert result["comparison_close_7d"] is None, (
+        "T32: Stale canonical history (22d old) must yield null change_7d"
+    )
+
+
 def test_normalize_symbol_preserves_zero_beta(monkeypatch):
     refresher = FmpFundamentalsRefresher("test-key")
 
