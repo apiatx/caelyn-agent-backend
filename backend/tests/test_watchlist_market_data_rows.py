@@ -711,6 +711,437 @@ def test_watchlist_endpoint_field_contract_includes_7d_30d():
         assert field in null_out, f"Null metrics missing field: {field}"
 
 
+# ── NEW: Compact comparison-close tail — performance and correctness ──────────
+
+
+def test_comparison_tail_is_built_and_stored_on_save(monkeypatch, tmp_path):
+    """save_bars must populate comparison_close_tail in _INDEX."""
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+    monkeypatch.setattr(chs, "_INDEX", {})
+
+    start = date(2026, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(), "close": 100.0 + i, "volume": 1000.0}
+        for i in range(40)
+    ]
+    chs.save_bars("TAIL", bars, "tradier")
+
+    tail = chs._INDEX["TAIL"].get("comparison_close_tail")
+    assert tail is not None, "comparison_close_tail must be in _INDEX after save_bars"
+    assert isinstance(tail, list), "comparison_close_tail must be a list"
+    assert len(tail) <= chs._COMPARISON_TAIL_SESSIONS, "tail must be bounded by constant"
+    for entry in tail:
+        assert len(entry) == 2, "each entry must be [date_str, close]"
+        assert isinstance(entry[0], str), "date must be a string"
+        assert isinstance(entry[1], float), "close must be a float"
+        assert entry[1] > 0, "close must be strictly positive"
+
+
+def test_comparison_closes_bulk_zero_gzip_opens_with_populated_tail(monkeypatch, tmp_path):
+    """get_comparison_closes_bulk performs ZERO gzip.open calls when tail is in _INDEX."""
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+    monkeypatch.setattr(chs, "_INDEX", {})
+
+    start = date(2026, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(), "close": 100.0 + i, "volume": 1000.0}
+        for i in range(50)
+    ]
+    chs.save_bars("PERF", bars, "tradier")
+
+    # Instrument gzip.open AFTER save_bars has already written the file
+    import gzip as _real_gzip_mod
+    _open_count = [0]
+    _real_open = _real_gzip_mod.open
+
+    def _counting_open(*a, **kw):
+        _open_count[0] += 1
+        return _real_open(*a, **kw)
+
+    monkeypatch.setattr(chs.gzip, "open", _counting_open)
+
+    ny_ref = start + timedelta(days=50)
+    result = chs.get_comparison_closes_bulk(["PERF"], ny_today=ny_ref)
+
+    assert _open_count[0] == 0, (
+        f"Expected zero gzip.open calls; got {_open_count[0]}. "
+        "Normal path must read from _INDEX tail, not the gz file."
+    )
+    assert result["PERF"]["comparison_close_7d"] is not None
+
+
+def test_comparison_closes_bulk_zero_gzip_opens_repeated_calls(monkeypatch, tmp_path):
+    """Three consecutive calls all perform zero gzip.open calls."""
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+    monkeypatch.setattr(chs, "_INDEX", {})
+
+    start = date(2026, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(), "close": 200.0 + i, "volume": 1000.0}
+        for i in range(50)
+    ]
+    chs.save_bars("RPT", bars, "tradier")
+
+    import gzip as _real_gzip_mod
+    _open_count = [0]
+    _real_open = _real_gzip_mod.open
+
+    def _counting_open(*a, **kw):
+        _open_count[0] += 1
+        return _real_open(*a, **kw)
+
+    monkeypatch.setattr(chs.gzip, "open", _counting_open)
+
+    ny_ref = start + timedelta(days=50)
+    for _ in range(3):
+        chs.get_comparison_closes_bulk(["RPT"], ny_today=ny_ref)
+
+    assert _open_count[0] == 0, (
+        f"Expected zero gzip.open calls across 3 calls; got {_open_count[0]}."
+    )
+
+
+def test_comparison_closes_bulk_date_roll_changes_selection_without_file_read(monkeypatch, tmp_path):
+    """A different ny_today changes the selected comparison bar with zero file reads."""
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+    monkeypatch.setattr(chs, "_INDEX", {})
+
+    # Mon–Fri bars for 3 weeks: each day has a unique close
+    trading_days = [
+        date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7), date(2026, 1, 8), date(2026, 1, 9),
+        date(2026, 1, 12), date(2026, 1, 13), date(2026, 1, 14), date(2026, 1, 15), date(2026, 1, 16),
+        date(2026, 1, 19), date(2026, 1, 20), date(2026, 1, 21), date(2026, 1, 22), date(2026, 1, 23),
+    ]
+    bars = [
+        {"date": d.isoformat(), "close": float(i + 100), "volume": 1000.0}
+        for i, d in enumerate(trading_days)
+    ]
+    chs.save_bars("ROLL", bars, "tradier")
+
+    import gzip as _real_gzip_mod
+    _open_count = [0]
+    _real_open = _real_gzip_mod.open
+
+    def _counting_open(*a, **kw):
+        _open_count[0] += 1
+        return _real_open(*a, **kw)
+
+    monkeypatch.setattr(chs.gzip, "open", _counting_open)
+
+    # Jan 20 − 7 = Jan 13 (Tue, index 6 → close=106.0)
+    # Jan 21 − 7 = Jan 14 (Wed, index 7 → close=107.0)
+    r1 = chs.get_comparison_closes_bulk(["ROLL"], ny_today=date(2026, 1, 20))
+    r2 = chs.get_comparison_closes_bulk(["ROLL"], ny_today=date(2026, 1, 21))
+
+    assert _open_count[0] == 0, (
+        f"Expected zero file reads when ny_today changes; got {_open_count[0]}"
+    )
+    assert r1["ROLL"]["comparison_date_7d"] == "2026-01-13", (
+        f"Jan 20 − 7d = Jan 13; got {r1['ROLL']['comparison_date_7d']}"
+    )
+    assert r2["ROLL"]["comparison_date_7d"] == "2026-01-14", (
+        f"Jan 21 − 7d = Jan 14; got {r2['ROLL']['comparison_date_7d']}"
+    )
+    assert r1["ROLL"]["comparison_close_7d"] != r2["ROLL"]["comparison_close_7d"]
+
+
+def test_comparison_close_tail_bounded_to_constant(monkeypatch, tmp_path):
+    """Tail must never exceed _COMPARISON_TAIL_SESSIONS entries, always the most-recent ones."""
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+    monkeypatch.setattr(chs, "_INDEX", {})
+
+    start = date(2025, 1, 1)
+    bars = [
+        {"date": (start + timedelta(days=i)).isoformat(), "close": 100.0 + i, "volume": 1000.0}
+        for i in range(400)
+    ]
+    chs.save_bars("BIG", bars, "tradier")
+
+    tail = chs._INDEX["BIG"]["comparison_close_tail"]
+    assert len(tail) <= chs._COMPARISON_TAIL_SESSIONS, (
+        f"Tail must be ≤ {chs._COMPARISON_TAIL_SESSIONS} entries; got {len(tail)}"
+    )
+    assert len(tail) == chs._COMPARISON_TAIL_SESSIONS, (
+        f"With 400 bars, tail should be exactly {chs._COMPARISON_TAIL_SESSIONS}"
+    )
+    # Must be the MOST RECENT completed sessions (chronologically latest)
+    last_date = (start + timedelta(days=399)).isoformat()
+    assert tail[-1][0] == last_date, (
+        f"Tail must end with the most-recent completed session; "
+        f"got {tail[-1][0]}, expected {last_date}"
+    )
+
+
+def test_comparison_closes_bulk_missing_tail_returns_null_without_file_read(monkeypatch, tmp_path):
+    """When comparison_close_tail is absent from _INDEX, return null without any file I/O."""
+    import gzip as _real_gzip_mod, json as _json
+
+    # Directly inject _INDEX entry without tail (simulates pre-repair metadata)
+    monkeypatch.setattr(chs, "_CANON_DIR", tmp_path)
+    monkeypatch.setattr(chs, "_INDEX_FILE", tmp_path / "_index.json")
+    monkeypatch.setattr(chs, "_INDEX", {
+        "OLD": {
+            "symbol": "OLD",
+            "bar_count": 200,
+            "history_status": "available_10y",
+            "change_7d": 5.0,
+            "change_30d": 10.0,
+            # intentionally absent: "comparison_close_tail"
+        }
+    })
+    # Create a dummy gz file — the old code would open it; the new code must not
+    dummy_gz = tmp_path / "OLD.json.gz"
+    with _real_gzip_mod.open(str(dummy_gz), "wt", encoding="utf-8") as fh:
+        fh.write(_json.dumps({"bars": [], "symbol": "OLD"}))
+
+    _open_count = [0]
+    _real_open = _real_gzip_mod.open
+
+    def _counting_open(*a, **kw):
+        _open_count[0] += 1
+        return _real_open(*a, **kw)
+
+    monkeypatch.setattr(chs.gzip, "open", _counting_open)
+
+    result = chs.get_comparison_closes_bulk(["OLD"], ny_today=date(2026, 8, 5))
+
+    assert _open_count[0] == 0, (
+        f"Expected zero file reads for missing tail; got {_open_count[0]}"
+    )
+    assert result["OLD"]["comparison_close_7d"]  is None
+    assert result["OLD"]["comparison_close_30d"] is None
+
+
+# ── NEW: _select_from_tail unit tests ─────────────────────────────────────────
+
+
+def test_select_from_tail_7d_selection():
+    """_select_from_tail returns the most recent session on or before as_of − 7 days."""
+    tail = [
+        ["2026-01-01", 100.0],
+        ["2026-01-08", 110.0],
+        ["2026-01-15", 120.0],
+    ]
+    # as_of = Jan 15; 7d target = Jan 8 → close = 110.0
+    result = chs._select_from_tail(tail, date(2026, 1, 15))
+    assert result["comparison_close_7d"] == 110.0
+    assert result["comparison_date_7d"]  == "2026-01-08"
+
+
+def test_select_from_tail_30d_selection():
+    """_select_from_tail returns the most recent session on or before as_of − 30 days."""
+    tail = [
+        ["2026-01-01", 100.0],
+        ["2026-01-08", 110.0],
+        ["2026-02-05", 120.0],
+    ]
+    # as_of = Feb 5; 30d target = Jan 6 → most recent ≤ Jan 6 = Jan 1 → 100.0
+    result = chs._select_from_tail(tail, date(2026, 2, 5))
+    assert result["comparison_close_30d"] == 100.0
+    assert result["comparison_date_30d"]  == "2026-01-01"
+
+
+def test_select_from_tail_weekend_target_selects_prior_trading_session():
+    """When the 7d target falls on a weekend, use the most recent prior session."""
+    tail = [
+        ["2026-01-05", 100.0],  # Mon
+        ["2026-01-06", 101.0],  # Tue
+        ["2026-01-07", 102.0],  # Wed
+        ["2026-01-08", 103.0],  # Thu
+        ["2026-01-09", 104.0],  # Fri
+        ["2026-01-12", 105.0],  # Mon
+    ]
+    # as_of = Jan 17 (Sat); 7d target = Jan 10 (Sat, no bar)
+    # Most recent on/before Jan 10 = Jan 9 (Fri) → 104.0
+    result = chs._select_from_tail(tail, date(2026, 1, 17))
+    assert result["comparison_date_7d"]  == "2026-01-09"
+    assert result["comparison_close_7d"] == 104.0
+
+
+def test_select_from_tail_holiday_gap_within_max_gap_days():
+    """A multi-day gap smaller than max_gap_days resolves to the prior session."""
+    tail = [
+        ["2026-01-01", 100.0],
+        ["2026-01-02", 101.0],
+        # Jan 3–9 missing (7-day holiday gap)
+        ["2026-01-10", 110.0],
+        ["2026-01-15", 120.0],
+    ]
+    # as_of = Jan 17; 7d target = Jan 10; bar present → 110.0
+    result = chs._select_from_tail(tail, date(2026, 1, 17))
+    assert result["comparison_close_7d"] == 110.0
+    assert result["comparison_date_7d"]  == "2026-01-10"
+
+
+def test_select_from_tail_materially_stale_returns_null():
+    """When the best available bar is > max_gap_days before the target, return None."""
+    tail = [["2026-01-01", 100.0]]
+    # as_of = Aug 5, 2026; 7d target = Jul 29; gap from Jan 1 to Jul 29 ≫ 10 → None
+    result = chs._select_from_tail(tail, date(2026, 8, 5), max_gap_days=10)
+    assert result["comparison_close_7d"]  is None
+    assert result["comparison_close_30d"] is None
+
+
+def test_select_from_tail_empty_returns_null_contract():
+    """Empty tail must return null for all four keys (no KeyError, no exception)."""
+    result = chs._select_from_tail([], date(2026, 8, 5))
+    assert result["comparison_close_7d"]  is None
+    assert result["comparison_close_30d"] is None
+    assert result["comparison_date_7d"]   is None
+    assert result["comparison_date_30d"]  is None
+
+
+def test_build_tail_excludes_current_ny_day(monkeypatch):
+    """_build_comparison_close_tail_from_completed must not include today's NY session."""
+    monkeypatch.setattr(chs, "ny_market_date", lambda: date(2026, 7, 15))
+    bars = [
+        {"date": "2026-07-14", "close": 100.0, "volume": 1000.0},
+        {"date": "2026-07-15", "close": 999.0, "volume": 9999.0},  # today in NY — must be excluded
+    ]
+    completed = chs._completed_daily_bars(bars)
+    tail = chs._build_comparison_close_tail_from_completed(completed)
+    dates_in_tail = [e[0] for e in tail]
+    assert "2026-07-15" not in dates_in_tail, "Today's NY bar must not appear in comparison tail"
+    assert "2026-07-14" in dates_in_tail, "Yesterday's bar must appear in comparison tail"
+
+
+def test_build_tail_handles_duplicate_dates_via_completed():
+    """Completed bars (already filtered) produce a tail with unique dates per canonical contract."""
+    # _completed_daily_bars preserves whatever order comes from the payload.
+    # In production, bars is sorted by date, so duplicates survive as-is.
+    # Verify _build_comparison_close_tail_from_completed passes through correctly.
+    completed = [
+        ("2026-01-01", 100.0, 1000.0),
+        ("2026-01-02", 101.0, 1000.0),
+        ("2026-01-03", 102.0, 1000.0),
+    ]
+    tail = chs._build_comparison_close_tail_from_completed(completed)
+    dates = [e[0] for e in tail]
+    assert dates == sorted(dates), "Tail must be in chronological order"
+    assert len(dates) == 3
+
+
+# ── NEW: Final row correctness — no leaked internal keys, correct split basis ─
+
+
+def test_no_comparison_keys_leaked_to_serialized_row(monkeypatch):
+    """No _comparison_* key must appear in any serialized Watchlist row after enrichment."""
+    async def _fake_quotes(_symbols):
+        return {
+            "LEAK": {
+                "price": 50.0, "change_pct_1d": 1.0,
+                "volume": 1000, "average_volume": 500,
+                "quote_source": "tradier", "quote_updated_at": "2026-08-01T20:00:00Z",
+            }
+        }
+
+    monkeypatch.setattr(
+        "services.canonical_history_service.get_volume_metrics_bulk",
+        lambda tickers: {
+            "LEAK": {
+                "volume_change_1d_pct": 10.0, "volume_change_7d_pct": 5.0,
+                "volume_change_30d_pct": 3.0, "volume_acceleration_pp": 2.0,
+                "volume_metrics_as_of": "2026-07-31", "volume_metrics_status": "ok",
+                "change_7d": 99.9, "change_30d": 88.8,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "services.canonical_history_service.get_comparison_closes_bulk",
+        lambda tickers, **kw: {
+            "LEAK": {
+                "comparison_close_7d": 45.0, "comparison_date_7d": "2026-07-25",
+                "comparison_close_30d": 40.0, "comparison_date_30d": "2026-07-01",
+            }
+        },
+    )
+    monkeypatch.setattr("services.watchlist_quote_cache.get_watchlist_quotes", _fake_quotes)
+    monkeypatch.setattr("services.name_overrides.get_name_overrides", lambda scope: {})
+    monkeypatch.setattr("data.watchlist_fundamentals_store.get_snapshots_bulk", lambda syms: {})
+    monkeypatch.setattr(wr, "_get_stage2_breakout",
+                        lambda sym: {"score": None, "label": None, "reason": None})
+
+    store = {
+        "id": "wl-leak", "tickers": ["LEAK"], "csv_data": [],
+        "analysis": {"sections": [{"name": "T", "tickers": [{"symbol": "LEAK", "name": None}]}]},
+    }
+    enriched = asyncio.run(wr._enrich_store_with_quotes(store))
+    row = enriched["analysis"]["sections"][0]["tickers"][0]
+
+    leaked = [k for k in row if k.startswith("_comparison_")]
+    assert leaked == [], (
+        f"Internal _comparison_* keys must not appear in serialized row; found: {leaked}"
+    )
+    # change_7d / change_30d must use live price 50.0 as numerator
+    assert row["change_7d"]  == round((50.0 / 45.0 - 1) * 100.0, 6)
+    assert row["change_30d"] == round((50.0 / 40.0 - 1) * 100.0, 6)
+    # Public volume fields must still be present
+    assert row["volume_change_1d_pct"] == 10.0
+    assert row["volume_metrics_status"] == "ok"
+
+
+def test_split_consistent_canonical_basis_preserved(monkeypatch):
+    """Split-adjusted canonical history close is used as denominator (basis preserved)."""
+    # Pre-split price 200 → post-split canonical bar close = 100 (split-adjusted).
+    # Live price 110; change_7d = (110 / 100 − 1) × 100 = 10%.
+    async def _fake_quotes(_symbols):
+        return {
+            "SPLT": {
+                "price": 110.0, "change_pct_1d": 0.0,
+                "volume": 1000, "average_volume": 500,
+                "quote_source": "tradier", "quote_updated_at": "2026-08-01T20:00:00Z",
+            }
+        }
+
+    monkeypatch.setattr(
+        "services.canonical_history_service.get_volume_metrics_bulk",
+        lambda tickers: {
+            "SPLT": {
+                "volume_change_1d_pct": 0.0, "volume_change_7d_pct": 0.0,
+                "volume_change_30d_pct": 0.0, "volume_acceleration_pp": 0.0,
+                "volume_metrics_as_of": "2026-07-31", "volume_metrics_status": "ok",
+                "change_7d": 0.0, "change_30d": 0.0,
+            }
+        },
+    )
+    # Split-adjusted canonical close (already reflected in canonical bar history)
+    monkeypatch.setattr(
+        "services.canonical_history_service.get_comparison_closes_bulk",
+        lambda tickers, **kw: {
+            "SPLT": {
+                "comparison_close_7d": 100.0, "comparison_date_7d": "2026-07-25",
+                "comparison_close_30d": 90.0,  "comparison_date_30d": "2026-07-01",
+            }
+        },
+    )
+    monkeypatch.setattr("services.watchlist_quote_cache.get_watchlist_quotes", _fake_quotes)
+    monkeypatch.setattr("services.name_overrides.get_name_overrides", lambda scope: {})
+    monkeypatch.setattr("data.watchlist_fundamentals_store.get_snapshots_bulk", lambda syms: {})
+    monkeypatch.setattr(wr, "_get_stage2_breakout",
+                        lambda sym: {"score": None, "label": None, "reason": None})
+
+    store = {
+        "id": "wl-split", "tickers": ["SPLT"], "csv_data": [],
+        "analysis": {"sections": [{"name": "T", "tickers": [{"symbol": "SPLT", "name": None}]}]},
+    }
+    enriched = asyncio.run(wr._enrich_store_with_quotes(store))
+    row = enriched["analysis"]["sections"][0]["tickers"][0]
+
+    expected_7d  = round((110.0 / 100.0 - 1) * 100.0, 6)   # = 10.0
+    expected_30d = round((110.0 / 90.0  - 1) * 100.0, 6)   # ≈ 22.222222
+    assert abs(row["change_7d"]  - expected_7d)  < 1e-4, (
+        f"Split-consistent 7D basis failed: {row['change_7d']} != {expected_7d}"
+    )
+    assert abs(row["change_30d"] - expected_30d) < 1e-4, (
+        f"Split-consistent 30D basis failed: {row['change_30d']} != {expected_30d}"
+    )
+
+
 def test_normalize_symbol_preserves_zero_beta(monkeypatch):
     refresher = FmpFundamentalsRefresher("test-key")
 

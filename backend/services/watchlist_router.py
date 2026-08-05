@@ -1345,7 +1345,14 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             pass  # non-fatal: fundamentals simply absent from this ticker row
 
         enriched["beta"] = _beta
-        enriched.update(_volume_metrics)
+        # Extract internal comparison-close denominators before merging public fields.
+        # These keys (_comparison_close_7d / _30d) are ephemeral transport values
+        # set by _load_cached_watchlist_market_data; they must never appear in the
+        # serialized Watchlist response sent to the frontend.
+        _c7  = _volume_metrics.get("_comparison_close_7d")
+        _c30 = _volume_metrics.get("_comparison_close_30d")
+        # Merge only public Watchlist market fields — skip any _comparison_* internal keys
+        enriched.update({k: v for k, v in _volume_metrics.items() if not k.startswith("_comparison_")})
 
         # ── Live-price change_7d / change_30d override ─────────────────────────
         # _volume_metrics contains pre-computed change_7d/change_30d that use
@@ -1354,9 +1361,9 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         #
         # Correct formula:  (displayed_price / historical_comparison_close − 1) × 100
         #
-        # The comparison closes (historical denominators) were loaded from disk
-        # bar files by _load_cached_watchlist_market_data without any provider
-        # call.  They are passed as internal keys _comparison_close_7d / _30d.
+        # The comparison closes (historical denominators) come from the compact
+        # comparison_close_tail stored in _INDEX — zero disk reads, zero provider
+        # calls.  _c7 / _c30 were extracted above before the public-only merge.
         # We only compute the percentage here, after the authoritative price
         # is known.  Stale pre-computed values from _volume_metrics are always
         # overridden — they must never reach the frontend as the final answer.
@@ -1365,8 +1372,6 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         except Exception:
             _live_px_f = None
         if _live_px_f is not None and _live_px_f > 0:
-            _c7  = _volume_metrics.get("_comparison_close_7d")
-            _c30 = _volume_metrics.get("_comparison_close_30d")
             try:
                 _c7f = float(_c7) if _c7 is not None else None
                 enriched["change_7d"] = (

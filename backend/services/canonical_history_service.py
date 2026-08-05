@@ -143,6 +143,11 @@ _PRICE_METRIC_FIELDS = (
 
 _WATCHLIST_MARKET_METRIC_FIELDS = _VOLUME_METRIC_FIELDS + _PRICE_METRIC_FIELDS
 
+# Number of recent completed sessions retained in the compact comparison-close tail.
+# Must safely cover: 30 cal-day lookback + weekends + holidays + max_gap_days=10 buffer.
+# 30 + 10 = 40 cal days ≈ 29 trading days worst-case; 64 provides ~14-session safety margin.
+_COMPARISON_TAIL_SESSIONS = 64
+
 
 # ── Status helpers ─────────────────────────────────────────────────────────────
 
@@ -401,6 +406,33 @@ def _completed_daily_bars(bars: list[dict]) -> list[tuple[str, float | None, flo
     return completed
 
 
+def _build_comparison_close_tail_from_completed(
+    completed: list[tuple[str, float | None, float | None]],
+    n: int = _COMPARISON_TAIL_SESSIONS,
+) -> list[list]:
+    """Build compact comparison-close tail for _INDEX storage.
+
+    Returns [[date_str, close], ...] in chronological order, retaining only the
+    most recent *n* completed sessions with valid finite positive closes.
+
+    This tail is stored in _INDEX metadata so that get_comparison_closes_bulk()
+    can select the 7D/30D comparison close entirely from memory — zero disk reads,
+    zero gzip.open calls, zero provider calls — on every Watchlist request.
+
+    Requirements:
+    • Uses already-filtered completed bars (no partial-day bar enters via _completed_daily_bars).
+    • Excludes None closes and non-positive closes (guards against division-by-zero).
+    • Preserves chronological order inherited from _completed_daily_bars.
+    • No provider calls, no file I/O, no new global state.
+    """
+    tail = [
+        [date_str, close]
+        for date_str, close, _ in completed
+        if close is not None and close > 0
+    ]
+    return tail[-n:]
+
+
 def _compute_volume_metrics_from_completed(
     completed: list[tuple[str, float | None, float | None]],
 ) -> dict[str, object]:
@@ -502,11 +534,17 @@ def _compute_price_metrics_from_completed(
 
 
 def _compute_watchlist_market_metrics_from_bars(bars: list[dict]) -> dict[str, object]:
-    """Compute all Watchlist history metrics from one completed-bar pass."""
+    """Compute all Watchlist history metrics from one completed-bar pass.
+
+    Now also builds and returns comparison_close_tail so that every save_bars /
+    append_bars / backfill pass stores the compact tail in _INDEX.  This makes
+    get_comparison_closes_bulk() index-only (zero disk reads) on all future calls.
+    """
     completed = _completed_daily_bars(bars)
     return {
         **_compute_volume_metrics_from_completed(completed),
         **_compute_price_metrics_from_completed(completed),
+        "comparison_close_tail": _build_comparison_close_tail_from_completed(completed),
     }
 
 
@@ -664,20 +702,75 @@ def _select_comparison_closes(
     return result
 
 
+def _select_from_tail(
+    tail: list[list],
+    as_of_date: date,
+    max_gap_days: int = 10,
+) -> dict[str, object]:
+    """Select 7D and 30D comparison closes from the compact in-memory tail.
+
+    Operates on [[date_str, close], ...] (chronological order) stored in _INDEX.
+    Algorithm is identical to _select_comparison_closes — same target logic,
+    same staleness guard, same null contract — but works entirely in memory with
+    zero file I/O.  This allows get_comparison_closes_bulk() to be index-only.
+
+    The tail is written at bar-write time (save_bars / append_bars) and covers
+    the most recent _COMPARISON_TAIL_SESSIONS completed sessions, which safely
+    spans any 30-calendar-day lookback including weekends, holidays, and the
+    max_gap_days=10 staleness buffer.  Changing as_of_date selects a different
+    comparison bar without touching any file — date-roll behavior is correct.
+    """
+    result: dict[str, object] = {
+        "comparison_close_7d":  None,
+        "comparison_date_7d":   None,
+        "comparison_close_30d": None,
+        "comparison_date_30d":  None,
+    }
+    if not tail:
+        return result
+
+    for label, cal_days in (("7d", 7), ("30d", 30)):
+        target = as_of_date - timedelta(days=cal_days)
+        for entry in reversed(tail):
+            try:
+                bar_date_str = entry[0]
+                close        = entry[1]
+                bd = date.fromisoformat(bar_date_str)
+            except (ValueError, TypeError, IndexError):
+                continue
+            if bd > target:
+                continue
+            # Reject when the best available bar is too far before the target
+            if (target - bd).days > max_gap_days:
+                break
+            if close is not None and close > 0:
+                result[f"comparison_close_{label}"] = close
+                result[f"comparison_date_{label}"]  = bar_date_str
+            break
+    return result
+
+
 def get_comparison_closes_bulk(
     symbols: list[str],
     ny_today: date | None = None,
 ) -> dict[str, dict[str, object]]:
-    """
-    Return 7D and 30D calendar-day comparison closes for the given symbols.
+    """Return 7D and 30D calendar-day comparison closes from the in-memory _INDEX tail.
 
     These are the *historical denominators* for the Watchlist change_7d and
     change_30d fields.  The numerator (current displayed price) is supplied
-    by the caller after it resolves the live quote — this function never
-    makes a provider request.
+    by the caller after it resolves the live quote.
+
+    Performance contract (post-repair):
+      • ZERO gzip.open calls in the normal path
+      • ZERO full JSON history loads
+      • ZERO provider calls
+      • ZERO database calls
+      The compact comparison_close_tail in _INDEX is the sole source.
 
     ny_today: effective New York market date (defaults to current NY date).
               Pass an explicit value in tests to avoid real-clock dependency.
+              Changing ny_today changes the selected session in memory — no file
+              rebuild or date-keyed cache invalidation is required.
 
     Keys per symbol:
       comparison_close_7d  — close of the most recent session ≤ (ny_today − 7d)
@@ -686,9 +779,11 @@ def get_comparison_closes_bulk(
       comparison_date_30d  — that session's ISO date string
 
     Any value may be None when:
-      • no canonical bar file exists for the symbol
-      • the bar file has insufficient or materially stale history
-      • the comparison bar's close is missing or non-positive
+      • the symbol has no _INDEX entry (not yet backfilled)
+      • comparison_close_tail is absent (metadata predates this build; run repair)
+      • the tail has insufficient history for the requested lookback
+      • the closest available session is more than max_gap_days before the target
+      • the comparison close is missing or non-positive
     """
     effective_today = ny_today if ny_today is not None else ny_market_date()
     if not _INDEX:
@@ -710,17 +805,20 @@ def get_comparison_closes_bulk(
         if not sym or sym in seen:
             continue
         seen.add(sym)
-        bar_path = _bar_file(sym)
-        if not bar_path.exists():
+        meta = _INDEX.get(sym)
+        if not meta:
+            out[sym] = dict(_null)
+            continue
+        tail = meta.get("comparison_close_tail")
+        if not tail:
+            # Tail absent — metadata predates this build; run backfill_volume_metrics_metadata.
+            # Return null rather than opening the gz file to avoid request-time disk scans.
             out[sym] = dict(_null)
             continue
         try:
-            with gzip.open(str(bar_path), "rt", encoding="utf-8") as fh:
-                payload = json.loads(fh.read())
-            completed = _completed_daily_bars(payload.get("bars") or [])
-            out[sym] = _select_comparison_closes(completed, effective_today)
+            out[sym] = _select_from_tail(tail, effective_today)
         except Exception as exc:
-            print(f"[CANON_HIST] comparison closes read failed {sym}: {exc}")
+            print(f"[CANON_HIST] comparison tail selection failed {sym}: {exc}")
             out[sym] = dict(_null)
     return out
 
@@ -794,7 +892,7 @@ def backfill_volume_metrics_metadata(symbols: Optional[list[str]] = None) -> dic
         if not meta:
             skipped += 1
             continue
-        if all(field in meta for field in _WATCHLIST_MARKET_METRIC_FIELDS):
+        if all(field in meta for field in _WATCHLIST_MARKET_METRIC_FIELDS) and "comparison_close_tail" in meta:
             skipped += 1
             continue
         bar_path = _bar_file(sym)
