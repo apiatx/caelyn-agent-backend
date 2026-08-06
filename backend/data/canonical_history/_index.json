@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-08-06T04:33:35.346760+00:00",
+  "updated_at": "2026-08-06T15:09:22.898769+00:00",
   "symbols": {
     "TEST_MARA": {
       "symbol": "TEST_MARA",
@@ -17701,44 +17701,40 @@
     },
     "CEG": {
       "symbol": "CEG",
-      "provider": "tradier",
-      "canonical_history_provider": "tradier",
-      "canonical_history_provider_rank": 1,
+      "provider": "tradier_reaction",
+      "canonical_history_provider": "tradier_reaction",
+      "canonical_history_provider_rank": 3,
       "canonical_history_quality": "available_lifetime_under_10y",
       "canonical_history_adjusted_status": "unknown",
       "canonical_history_refresh_mode": "incremental_daily_append",
-      "bar_count": 1138,
+      "bar_count": 1140,
       "oldest_bar_date": "2022-01-19",
-      "newest_bar_date": "2026-08-04",
+      "newest_bar_date": "2026-08-06",
       "years_available": 4.5,
-      "fetched_at": "2026-08-05T05:46:38.536356+00:00",
-      "stale_after": "2026-08-09T05:46:38.536367+00:00",
+      "fetched_at": "2026-08-06T13:48:45.854288+00:00",
+      "stale_after": "2026-08-10T13:48:45.854297+00:00",
       "history_status": "available_lifetime_under_10y",
       "base_history_status": "available_lifetime_under_10y",
       "error_reason": null,
-      "source_priority": 1,
+      "source_priority": 3,
       "is_actual_limit": false,
       "is_lifetime_under_10y": true,
       "is_provider_cap": false,
       "depth_confidence": 0.85,
       "fib_scope": "multi_year",
-      "last_attempt_at": "2026-08-05T05:46:38.536356+00:00",
-      "next_retry_at": "2026-08-09T05:46:38.536367+00:00",
+      "last_attempt_at": "2026-08-06T13:48:45.854288+00:00",
+      "next_retry_at": "2026-08-10T13:48:45.854297+00:00",
       "cache_usable": true,
       "is_10y_complete": true,
-      "volume_change_1d_pct": 63.876513,
-      "volume_change_7d_pct": 9.337583,
-      "volume_change_30d_pct": -24.727747,
-      "volume_acceleration_pp": 34.06533,
-      "volume_metrics_as_of": "2026-08-04",
+      "volume_change_1d_pct": -17.370537,
+      "volume_change_7d_pct": 8.407983,
+      "volume_change_30d_pct": -25.168093,
+      "volume_acceleration_pp": 33.576076,
+      "volume_metrics_as_of": "2026-08-05",
       "volume_metrics_status": "ok",
-      "change_7d": 2.859672,
-      "change_30d": 11.703239,
+      "change_7d": 2.779608,
+      "change_30d": 7.829341,
       "comparison_close_tail": [
-        [
-          "2026-05-04",
-          321.05
-        ],
         [
           "2026-05-05",
           320.42
@@ -17990,6 +17986,10 @@
         [
           "2026-08-04",
           267.25
+        ],
+        [
+          "2026-08-05",
+          265.12
         ]
       ]
     },
@@ -70811,44 +70811,40 @@
     },
     "QBTS": {
       "symbol": "QBTS",
-      "provider": "tradier",
-      "canonical_history_provider": "tradier",
-      "canonical_history_provider_rank": 1,
+      "provider": "tradier_reaction",
+      "canonical_history_provider": "tradier_reaction",
+      "canonical_history_provider_rank": 3,
       "canonical_history_quality": "available_lifetime_under_10y",
       "canonical_history_adjusted_status": "unknown",
       "canonical_history_refresh_mode": "incremental_daily_append",
-      "bar_count": 1001,
+      "bar_count": 1003,
       "oldest_bar_date": "2022-08-08",
-      "newest_bar_date": "2026-08-04",
+      "newest_bar_date": "2026-08-06",
       "years_available": 4.0,
-      "fetched_at": "2026-08-05T06:07:55.239562+00:00",
-      "stale_after": "2026-08-09T06:07:55.239573+00:00",
+      "fetched_at": "2026-08-06T13:48:17.617634+00:00",
+      "stale_after": "2026-08-10T13:48:17.617642+00:00",
       "history_status": "available_lifetime_under_10y",
       "base_history_status": "available_lifetime_under_10y",
       "error_reason": null,
-      "source_priority": 1,
+      "source_priority": 3,
       "is_actual_limit": false,
       "is_lifetime_under_10y": true,
       "is_provider_cap": false,
       "depth_confidence": 0.8,
       "fib_scope": "multi_year",
-      "last_attempt_at": "2026-08-05T06:07:55.239562+00:00",
-      "next_retry_at": "2026-08-09T06:07:55.239573+00:00",
+      "last_attempt_at": "2026-08-06T13:48:17.617634+00:00",
+      "next_retry_at": "2026-08-10T13:48:17.617642+00:00",
       "cache_usable": true,
       "is_10y_complete": true,
-      "volume_change_1d_pct": -3.195426,
-      "volume_change_7d_pct": 64.028374,
-      "volume_change_30d_pct": -46.932597,
-      "volume_acceleration_pp": 110.960971,
-      "volume_metrics_as_of": "2026-08-04",
+      "volume_change_1d_pct": -28.455582,
+      "volume_change_7d_pct": 6.164025,
+      "volume_change_30d_pct": -50.753838,
+      "volume_acceleration_pp": 56.917863,
+      "volume_metrics_as_of": "2026-08-05",
       "volume_metrics_status": "ok",
-      "change_7d": 23.787922,
-      "change_30d": -3.106968,
+      "change_7d": 32.200247,
+      "change_30d": -5.18617,
       "comparison_close_tail": [
-        [
-          "2026-05-04",
-          20.92
-        ],
         [
           "2026-05-05",
           21.54
@@ -71100,6 +71096,10 @@
         [
           "2026-08-04",
           21.83
+        ],
+        [
+          "2026-08-05",
+          21.39
         ]
       ]
     },
@@ -86781,44 +86781,40 @@
     },
     "TARS": {
       "symbol": "TARS",
-      "provider": "tradier",
-      "canonical_history_provider": "tradier",
-      "canonical_history_provider_rank": 1,
+      "provider": "tradier_reaction",
+      "canonical_history_provider": "tradier_reaction",
+      "canonical_history_provider_rank": 3,
       "canonical_history_quality": "available_lifetime_under_10y",
       "canonical_history_adjusted_status": "unknown",
       "canonical_history_refresh_mode": "incremental_daily_append",
-      "bar_count": 1455,
+      "bar_count": 1457,
       "oldest_bar_date": "2020-10-16",
-      "newest_bar_date": "2026-08-04",
+      "newest_bar_date": "2026-08-06",
       "years_available": 5.8,
-      "fetched_at": "2026-08-05T06:15:15.401972+00:00",
-      "stale_after": "2026-08-09T06:15:15.401984+00:00",
+      "fetched_at": "2026-08-06T13:48:19.041127+00:00",
+      "stale_after": "2026-08-10T13:48:19.041135+00:00",
       "history_status": "available_lifetime_under_10y",
       "base_history_status": "available_lifetime_under_10y",
       "error_reason": null,
-      "source_priority": 1,
+      "source_priority": 3,
       "is_actual_limit": false,
       "is_lifetime_under_10y": true,
       "is_provider_cap": false,
       "depth_confidence": 0.85,
       "fib_scope": "multi_year",
-      "last_attempt_at": "2026-08-05T06:15:15.401972+00:00",
-      "next_retry_at": "2026-08-09T06:15:15.401984+00:00",
+      "last_attempt_at": "2026-08-06T13:48:19.041127+00:00",
+      "next_retry_at": "2026-08-10T13:48:19.041135+00:00",
       "cache_usable": true,
       "is_10y_complete": true,
-      "volume_change_1d_pct": -34.819475,
-      "volume_change_7d_pct": -41.263394,
-      "volume_change_30d_pct": 86.73189,
-      "volume_acceleration_pp": -127.995284,
-      "volume_metrics_as_of": "2026-08-04",
+      "volume_change_1d_pct": -34.558615,
+      "volume_change_7d_pct": -39.903228,
+      "volume_change_30d_pct": 79.642105,
+      "volume_acceleration_pp": -119.545333,
+      "volume_metrics_as_of": "2026-08-05",
       "volume_metrics_status": "ok",
-      "change_7d": 3.664122,
-      "change_30d": -6.616748,
+      "change_7d": 4.733424,
+      "change_30d": -8.590604,
       "comparison_close_tail": [
-        [
-          "2026-05-04",
-          64.57
-        ],
         [
           "2026-05-05",
           65.04
@@ -87070,6 +87066,10 @@
         [
           "2026-08-04",
           61.11
+        ],
+        [
+          "2026-08-05",
+          61.29
         ]
       ]
     },
@@ -119831,7 +119831,7 @@
       "years_available": 0.0,
       "fetched_at": "2026-08-06T02:17:20.865981+00:00",
       "stale_after": "2026-08-10T02:17:20.865991+00:00",
-      "history_status": "actual_ticker_history_limit",
+      "history_status": "cache_corrupt_needs_rebuild",
       "base_history_status": "actual_ticker_history_limit",
       "error_reason": null,
       "source_priority": 1,
