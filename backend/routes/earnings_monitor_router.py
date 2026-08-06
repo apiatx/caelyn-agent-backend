@@ -228,12 +228,14 @@ async def get_live_events(
 
     import asyncio as _aio
 
-    rows = get_user_event_feed(
-        user_id      = user_id,
-        symbols      = universe,
-        since_iso    = since,
-        unread_only  = unread_only,
-        limit        = limit,
+    # Run the blocking psycopg2 call in a thread so the event loop stays free.
+    rows = await _aio.to_thread(
+        get_user_event_feed,
+        user_id,
+        universe,
+        since,
+        unread_only,
+        limit,
     )
 
     if not rows:

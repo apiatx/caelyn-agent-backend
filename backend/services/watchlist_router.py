@@ -3924,8 +3924,12 @@ async def earnings_by_symbols_endpoint(body: EarningsBySymbolsRequest):
             from_date = from_date,
             to_date   = to_date,
             fmp_key   = _fmp_key_bys,
-            sync_on_miss            = body.wait_for_sync,
-            background_sync_on_miss = not body.wait_for_sync,
+            # Never block the request on FMP — always return immediately and
+            # fire a background sync on cache miss.  wait_for_sync is preserved
+            # in the request schema for backward compat but no longer drives
+            # synchronous FMP work from a user-facing request handler.
+            sync_on_miss            = False,
+            background_sync_on_miss = True,
         )
     except Exception as _e_bys:
         print(f"[EARNINGS_BY_SYMS] get_upcoming_earnings_for_symbols error: {_e_bys}")
