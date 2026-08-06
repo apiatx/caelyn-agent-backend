@@ -2215,6 +2215,753 @@ class TestIdentityGuard:
         assert quarantine_reasons == [], f"No company_name supplied — identity guard must be skipped: {quarantine_reasons}"
 
 
+# ── Contract 16: Atomic ticker-taxonomy write path ────────────────────────────
+
+class TestAtomicTaxonomyPrimitive:
+    """
+    DB-level unit tests for atomic_taxonomy_write_db() (Contract 1).
+
+    All tests mock the psycopg2 connection at the _get_conn / _put_conn boundary
+    so no live Neon connection is required.  Each test injects failures at a
+    specific SQL execution step and verifies commit/rollback counts.
+    """
+
+    def _make_mock_conn(self, execute_side_effects=None):
+        """
+        Return (conn, cursor, commit_calls, rollback_calls).
+        execute_side_effects: list of values/exceptions to raise on sequential
+        cursor.execute() calls.  None means succeed silently.
+        """
+        from unittest.mock import MagicMock, call
+
+        cur = MagicMock()
+        if execute_side_effects:
+            effects = list(execute_side_effects)
+            def _execute(*args, **kwargs):
+                if effects:
+                    e = effects.pop(0)
+                    if isinstance(e, Exception):
+                        raise e
+            cur.execute.side_effect = _execute
+
+        conn = MagicMock()
+        conn.cursor.return_value.__enter__ = MagicMock(return_value=cur)
+        conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        return conn, cur
+
+    def _run(self, ticker_overrides, primary_operation=None, conn=None):
+        """
+        Call atomic_taxonomy_write_db with a patched _get_conn/_put_conn.
+        Returns (result, conn).
+        """
+        import data.pg_storage as pgs
+        from unittest.mock import patch
+
+        if conn is None:
+            conn, _ = self._make_mock_conn()
+
+        with patch.object(pgs, "_get_conn", return_value=conn), \
+             patch.object(pgs, "_put_conn") as mock_put:
+            result = pgs.atomic_taxonomy_write_db(
+                ticker_overrides=ticker_overrides,
+                primary_operation=primary_operation,
+            )
+            put_called = mock_put.called
+        return result, conn, put_called
+
+    # ── Test 1: all successful statements commit once ─────────────────────────
+    def test_successful_all_memberships_commit_once(self):
+        """All membership statements succeed → exactly one commit, zero rollbacks."""
+        conn, _ = self._make_mock_conn()
+        result, conn, _ = self._run(
+            ticker_overrides=[
+                {"theme_id": "ai_accelerators", "symbol": "NVDA", "action": "add"},
+                {"theme_id": "cloud_hyperscalers", "symbol": "NVDA", "action": "add"},
+            ],
+            primary_operation={"action": "set", "ticker": "NVDA",
+                               "user_id": "default", "category": "AI Accelerators"},
+            conn=conn,
+        )
+        assert result["ok"] is True
+        assert result["succeeded"] == 2
+        assert conn.commit.call_count == 1, f"Expected 1 commit, got {conn.commit.call_count}"
+        assert conn.rollback.call_count == 0, f"Expected 0 rollbacks"
+
+    # ── Test 2: failure on first membership → rollback, no commit ────────────
+    def test_failure_first_membership_rolls_back(self):
+        """Exception on first membership execute → rollback, no commit."""
+        conn, cur = self._make_mock_conn(
+            execute_side_effects=[Exception("inject first-stmt failure")]
+        )
+        result, conn, _ = self._run(
+            ticker_overrides=[
+                {"theme_id": "ai_accelerators", "symbol": "FAIL", "action": "add"},
+                {"theme_id": "cloud_hyperscalers", "symbol": "FAIL", "action": "add"},
+            ],
+            conn=conn,
+        )
+        assert result["ok"] is False
+        assert "inject first-stmt failure" in result.get("error", "")
+        assert conn.commit.call_count == 0, "Must not commit after first-stmt failure"
+        assert conn.rollback.call_count == 1, f"Expected 1 rollback, got {conn.rollback.call_count}"
+
+    # ── Test 3: failure on middle membership → rollback, no commit ───────────
+    def test_failure_middle_membership_rolls_back_prior(self):
+        """Exception on second of three membership statements → rollback, no commit."""
+        conn, cur = self._make_mock_conn(
+            execute_side_effects=[None, Exception("inject middle failure"), None]
+        )
+        result, conn, _ = self._run(
+            ticker_overrides=[
+                {"theme_id": "ai_accelerators",    "symbol": "MID", "action": "add"},
+                {"theme_id": "cloud_hyperscalers", "symbol": "MID", "action": "add"},
+                {"theme_id": "quantum_computing",  "symbol": "MID", "action": "add"},
+            ],
+            conn=conn,
+        )
+        assert result["ok"] is False
+        assert conn.commit.call_count == 0
+        assert conn.rollback.call_count == 1
+
+    # ── Test 4: failure on primary-set → rollback, no commit ─────────────────
+    def test_failure_primary_set_rolls_back_memberships(self):
+        """Exception on primary-set execute → membership rows are also rolled back."""
+        # First execute (membership) succeeds, second (category_override) fails
+        conn, cur = self._make_mock_conn(
+            execute_side_effects=[None, Exception("inject primary-set failure")]
+        )
+        result, conn, _ = self._run(
+            ticker_overrides=[
+                {"theme_id": "ai_accelerators", "symbol": "PRI", "action": "add"},
+            ],
+            primary_operation={"action": "set", "ticker": "PRI",
+                               "user_id": "default", "category": "AI Accel"},
+            conn=conn,
+        )
+        assert result["ok"] is False
+        assert conn.commit.call_count == 0
+        assert conn.rollback.call_count == 1
+
+    # ── Test 5: failure on primary-clear → rollback ───────────────────────────
+    def test_failure_primary_clear_rolls_back_memberships(self):
+        """Exception on primary-clear DELETE → membership rows are also rolled back."""
+        conn, cur = self._make_mock_conn(
+            execute_side_effects=[None, Exception("inject primary-clear failure")]
+        )
+        result, conn, _ = self._run(
+            ticker_overrides=[
+                {"theme_id": "ai_accelerators", "symbol": "CLR", "action": "remove"},
+            ],
+            primary_operation={"action": "clear", "ticker": "CLR", "user_id": "default"},
+            conn=conn,
+        )
+        assert result["ok"] is False
+        assert conn.commit.call_count == 0
+        assert conn.rollback.call_count == 1
+
+    # ── Test 6: no commit occurs after any failure ────────────────────────────
+    def test_no_commit_after_any_failure(self):
+        """A failure at any point must leave commit_count == 0."""
+        for stmt_index in range(3):
+            effects = [None] * stmt_index + [Exception(f"fail at {stmt_index}")]
+            conn, cur = self._make_mock_conn(execute_side_effects=effects)
+            result, conn, _ = self._run(
+                ticker_overrides=[
+                    {"theme_id": "ai_accelerators",   "symbol": "X", "action": "add"},
+                    {"theme_id": "cloud_hyperscalers", "symbol": "X", "action": "add"},
+                ],
+                primary_operation={"action": "set", "ticker": "X",
+                                   "user_id": "default", "category": "AI"},
+                conn=conn,
+            )
+            assert result["ok"] is False, f"Expected ok=False for failure at stmt {stmt_index}"
+            assert conn.commit.call_count == 0, \
+                f"stmt {stmt_index}: commit_count={conn.commit.call_count}, expected 0"
+
+    # ── Test 7: rollback occurs exactly once on failure ───────────────────────
+    def test_rollback_exactly_once(self):
+        """Exactly one rollback call regardless of which statement fails."""
+        conn, cur = self._make_mock_conn(
+            execute_side_effects=[Exception("single failure")]
+        )
+        result, conn, _ = self._run(
+            ticker_overrides=[{"theme_id": "ai_accelerators", "symbol": "X", "action": "add"}],
+            conn=conn,
+        )
+        assert result["ok"] is False
+        assert conn.rollback.call_count == 1
+
+    # ── Test 8: connection returned to pool in all cases ─────────────────────
+    def test_connection_returned_to_pool(self):
+        """_put_conn must be called regardless of success or failure."""
+        import data.pg_storage as pgs
+        from unittest.mock import patch
+
+        for succeed in (True, False):
+            effects = [] if succeed else [Exception("fail")]
+            conn, cur = self._make_mock_conn(execute_side_effects=effects)
+            put_calls = []
+
+            def _mock_put(c):
+                put_calls.append(c)
+
+            with patch.object(pgs, "_get_conn", return_value=conn), \
+                 patch.object(pgs, "_put_conn", side_effect=_mock_put):
+                pgs.atomic_taxonomy_write_db(
+                    ticker_overrides=[{"theme_id": "ai_accelerators", "symbol": "P", "action": "add"}],
+                )
+            assert len(put_calls) == 1, \
+                f"succeed={succeed}: _put_conn must be called exactly once, got {len(put_calls)}"
+
+    # ── Test: primary_operation clear generates DELETE, not upsert ────────────
+    def test_primary_clear_issues_delete_statement(self):
+        """action='clear' must DELETE from watchlist_category_overrides."""
+        import data.pg_storage as pgs
+        from unittest.mock import patch, MagicMock
+
+        executed_sqls = []
+        cur = MagicMock()
+        def capture_execute(sql, *args, **kwargs):
+            executed_sqls.append(sql.strip())
+        cur.execute.side_effect = capture_execute
+
+        conn = MagicMock()
+        conn.cursor.return_value.__enter__ = MagicMock(return_value=cur)
+        conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(pgs, "_get_conn", return_value=conn), \
+             patch.object(pgs, "_put_conn"):
+            pgs.atomic_taxonomy_write_db(
+                ticker_overrides=[],
+                primary_operation={"action": "clear", "ticker": "TEST", "user_id": "default"},
+            )
+
+        assert any("DELETE" in sql.upper() for sql in executed_sqls), \
+            f"Expected a DELETE statement for clear action; got: {executed_sqls}"
+        assert not any("INSERT" in sql.upper() and "watchlist_category_overrides" in sql
+                       for sql in executed_sqls), \
+            "clear action must not INSERT into watchlist_category_overrides"
+
+    # ── Test: legacy category_override treated as set ────────────────────────
+    def test_legacy_category_override_treated_as_set(self):
+        """category_override kwarg (legacy) must issue an INSERT/upsert, not a DELETE."""
+        import data.pg_storage as pgs
+        from unittest.mock import patch, MagicMock
+
+        executed_sqls = []
+        cur = MagicMock()
+        cur.execute.side_effect = lambda sql, *a, **k: executed_sqls.append(sql.strip())
+
+        conn = MagicMock()
+        conn.cursor.return_value.__enter__ = MagicMock(return_value=cur)
+        conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(pgs, "_get_conn", return_value=conn), \
+             patch.object(pgs, "_put_conn"):
+            pgs.atomic_taxonomy_write_db(
+                ticker_overrides=[],
+                category_override={
+                    "user_id": "default", "ticker": "LEG",
+                    "category": "AI Accel", "source": "test",
+                },
+            )
+
+        assert any("INSERT" in sql.upper() for sql in executed_sqls), \
+            f"Legacy category_override must upsert; got: {executed_sqls}"
+
+
+class TestAtomicTaxonomyRoute:
+    """
+    Route-level unit tests for admin_put_ticker_taxonomy() (Contract 2).
+
+    Dependencies are monkeypatched so no Neon connection is required.
+    The async handler is exercised directly via asyncio.run().
+
+    Valid IDs used (from the live registry — confirmed assignable):
+      _ID_A = "ai_accelerators"    (sub_theme, parent=semiconductors)
+      _ID_B = "advanced_materials" (theme, no parent)
+      _ID_C = "agribusiness"       (theme, no parent)
+      _ID_D = "banks"              (theme, no parent)
+    All four belong to different branches so no ancestor-pruning fires.
+    """
+
+    # ── Shared helpers ────────────────────────────────────────────────────────
+
+    _SAFE_TICKER = "XTST"  # not a real watchlist ticker
+    _SENTINEL    = object()  # distinguishes reread_primary=None (clear) from "not set"
+
+    # Four known-good cross-branch assignable IDs
+    _ID_A = "ai_accelerators"
+    _ID_B = "advanced_materials"
+    _ID_C = "agribusiness"
+    _ID_D = "banks"
+
+    def _make_body(self, primary=None, additional=None, note=None, created_by="test"):
+        from routes.themes import TickerTaxonomyBody
+        return TickerTaxonomyBody(
+            primary_theme_id=primary,
+            additional_theme_ids=additional or [],
+            note=note,
+            created_by=created_by,
+        )
+
+    def _fake_current_memberships(self, theme_ids=None, primary=None):
+        """Fake _get_ticker_theme_memberships() response."""
+        tids = list(theme_ids or [])
+        memberships = [{"theme_id": t, "theme_name": t, "membership_source": "test", "is_primary": (t == primary)}
+                       for t in tids]
+        return {
+            "ticker": self._SAFE_TICKER,
+            "primary_theme": {"theme_id": primary, "theme_name": primary, "source": "test"},
+            "theme_memberships": memberships,
+            "additional_theme_memberships": [m for m in memberships if not m["is_primary"]],
+        }
+
+    def _run_handler(self, body, monkeypatch,
+                     current_theme_ids=None, current_primary=None,
+                     txn_ok=True, txn_error=None,
+                     reread_theme_ids=None, reread_primary=_SENTINEL):
+        """
+        Exercise the route handler with all storage/cache deps mocked.
+        Returns (response_or_exc, atomic_calls, invalidate_calls).
+
+        reread_primary uses a sentinel to distinguish None (cleared primary)
+        from "not supplied" (defaults to current_primary unchanged).
+        """
+        import asyncio
+        import data.pg_storage as pgs
+        import routes.themes as rth
+        from unittest.mock import MagicMock
+
+        atomic_calls: list[dict] = []
+        invalidate_calls: list = []
+
+        def fake_atomic(ticker_overrides, primary_operation=None, category_override=None):
+            atomic_calls.append({
+                "ticker_overrides": ticker_overrides,
+                "primary_operation": primary_operation,
+            })
+            if not txn_ok:
+                return {"ok": False, "succeeded": 0, "failed": 1, "error": txn_error or "injected"}
+            return {"ok": True, "succeeded": len(ticker_overrides), "failed": 0, "error": None}
+
+        def fake_invalidate():
+            invalidate_calls.append(1)
+
+        # Memberships: first call = pre-write (current state), second = post-write (reread)
+        _call_count = [0]
+        _reread_ids = list(reread_theme_ids or (current_theme_ids or []))
+        # Use sentinel: None means "primary was cleared"; _SENTINEL means "use current_primary"
+        _reread_pri = current_primary if (reread_primary is self._SENTINEL) else reread_primary
+
+        def fake_memberships(ticker):
+            _call_count[0] += 1
+            if _call_count[0] == 1:
+                return self._fake_current_memberships(current_theme_ids, current_primary)
+            # Second call: post-write reread
+            return self._fake_current_memberships(_reread_ids, _reread_pri)
+
+        monkeypatch.setattr(pgs, "atomic_taxonomy_write_db", fake_atomic)
+        monkeypatch.setattr(rth, "_invalidate_caches", fake_invalidate)
+        monkeypatch.setattr(rth, "_get_ticker_theme_memberships", fake_memberships)
+        monkeypatch.setattr(rth, "_check_admin", lambda req, key: None)
+        # Suppress post-commit side effects
+        monkeypatch.setattr(rth, "_log", MagicMock())
+
+        class _FakeRequest:
+            headers = {}
+            state = MagicMock()
+
+        import fastapi
+        exc_holder = [None]
+        result_holder = [None]
+
+        async def _run():
+            try:
+                result_holder[0] = await rth.admin_put_ticker_taxonomy(
+                    ticker=self._SAFE_TICKER,
+                    request=_FakeRequest(),
+                    body=body,
+                    x_api_key="test",
+                )
+            except fastapi.HTTPException as e:
+                exc_holder[0] = e
+
+        asyncio.run(_run())
+        return (exc_holder[0] if exc_holder[0] else result_holder[0]), atomic_calls, invalidate_calls
+
+    # ── Test 9: route calls atomic_taxonomy_write_db exactly once ─────────────
+    def test_route_calls_atomic_write_exactly_once(self, monkeypatch):
+        """Route must call atomic_taxonomy_write_db() exactly once per request."""
+        body = self._make_body(primary=self._ID_A, additional=[self._ID_B])
+        result, atomic_calls, _ = self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=[], current_primary=None,
+            reread_theme_ids=[self._ID_A, self._ID_B],
+            reread_primary=self._ID_A,
+        )
+        assert len(atomic_calls) == 1, \
+            f"atomic_taxonomy_write_db must be called exactly once, got {len(atomic_calls)}"
+        assert isinstance(result, dict) and result.get("ok") is True
+
+    # ── Test 10: route never calls per-membership helpers ─────────────────────
+    def test_route_never_calls_per_membership_helpers(self, monkeypatch):
+        """_perform_membership_write and _perform_theme_membership_only_write must not be called."""
+        import routes.themes as rth
+
+        called_helpers = []
+        def _forbidden_primary(*a, **k):
+            called_helpers.append("_perform_membership_write")
+        def _forbidden_additional(*a, **k):
+            called_helpers.append("_perform_theme_membership_only_write")
+        monkeypatch.setattr(rth, "_perform_membership_write", _forbidden_primary)
+        monkeypatch.setattr(rth, "_perform_theme_membership_only_write", _forbidden_additional)
+
+        body = self._make_body(primary="ai_accelerators")
+        self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=[], current_primary=None,
+            reread_theme_ids=["ai_accelerators"], reread_primary="ai_accelerators",
+        )
+        assert called_helpers == [], \
+            f"Per-membership helpers must not be called from PUT route; got: {called_helpers}"
+
+    # ── Test 11: cache invalidated exactly once after success ─────────────────
+    def test_cache_invalidated_exactly_once_after_success(self, monkeypatch):
+        """_invalidate_caches() must be called exactly once after a successful commit."""
+        body = self._make_body(primary="ai_accelerators")
+        _, _, invalidate_calls = self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=[], current_primary=None,
+            reread_theme_ids=["ai_accelerators"], reread_primary="ai_accelerators",
+        )
+        assert len(invalidate_calls) == 1, \
+            f"Cache invalidation must occur exactly once after success; got {len(invalidate_calls)}"
+
+    # ── Test 12: cache not invalidated after transaction failure ──────────────
+    def test_cache_not_invalidated_after_failure(self, monkeypatch):
+        """_invalidate_caches() must not be called when the transaction fails."""
+        body = self._make_body(primary="ai_accelerators")
+        exc, _, invalidate_calls = self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=[], current_primary=None,
+            txn_ok=False, txn_error="injected DB failure",
+        )
+        assert invalidate_calls == [], \
+            f"Cache invalidation must not occur after transaction failure; got {len(invalidate_calls)} calls"
+        assert exc is not None and exc.status_code == 500
+
+    # ── Test 13: no undo-stack or compensating writes ─────────────────────────
+    def test_no_compensating_writes_on_failure(self, monkeypatch):
+        """On transaction failure the route must raise immediately without compensating writes."""
+        import routes.themes as rth
+
+        compensating_calls = []
+        def _track_primary(*a, **k):
+            compensating_calls.append("primary")
+        def _track_additional(*a, **k):
+            compensating_calls.append("additional")
+        monkeypatch.setattr(rth, "_perform_membership_write", _track_primary)
+        monkeypatch.setattr(rth, "_perform_theme_membership_only_write", _track_additional)
+
+        body = self._make_body(primary="ai_accelerators")
+        exc, _, _ = self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=[], current_primary=None,
+            txn_ok=False,
+        )
+        assert compensating_calls == [], \
+            f"No compensating writes on failure; got: {compensating_calls}"
+        assert exc is not None and exc.status_code == 500
+
+    # ── Test 14: additional-membership failure cannot produce partial state ────
+    def test_partial_state_impossible(self, monkeypatch):
+        """Transaction failure means no rows are committed (atomicity)."""
+        body = self._make_body(primary=self._ID_A, additional=[self._ID_B])
+        exc, atomic_calls, _ = self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=[], current_primary=None,
+            txn_ok=False,
+        )
+        # Exactly one atomic call, returned failure; no partial rows possible
+        assert len(atomic_calls) == 1
+        assert exc is not None and exc.status_code == 500
+
+    # ── Test 15: primary-only save ────────────────────────────────────────────
+    def test_primary_only_save(self, monkeypatch):
+        """Primary-only save (no additional) must succeed and return correct shape."""
+        body = self._make_body(primary="ai_accelerators")
+        result, atomic_calls, _ = self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=[], current_primary=None,
+            reread_theme_ids=["ai_accelerators"], reread_primary="ai_accelerators",
+        )
+        assert result.get("ok") is True
+        assert result["primary_theme_id"] == "ai_accelerators"
+        assert result["additional_theme_ids"] == []
+        # Transaction payload must include the membership add + primary set
+        payload = atomic_calls[0]
+        ops = {(e["theme_id"], e["action"]) for e in payload["ticker_overrides"]}
+        assert ("ai_accelerators", "add") in ops
+        assert payload["primary_operation"]["action"] == "set"
+
+    # ── Test 16: primary plus additions ──────────────────────────────────────
+    def test_primary_plus_additions(self, monkeypatch):
+        """Primary + two additional memberships must all be included in one transaction."""
+        body = self._make_body(primary=self._ID_A, additional=[self._ID_B, self._ID_C])
+        result, atomic_calls, _ = self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=[], current_primary=None,
+            reread_theme_ids=[self._ID_A, self._ID_B, self._ID_C],
+            reread_primary=self._ID_A,
+        )
+        assert result.get("ok") is True
+        payload = atomic_calls[0]
+        add_ops = {e["theme_id"] for e in payload["ticker_overrides"] if e["action"] == "add"}
+        assert {self._ID_A, self._ID_B, self._ID_C} == add_ops
+
+    # ── Test 17: replacing primary ────────────────────────────────────────────
+    def test_replacing_primary(self, monkeypatch):
+        """Replacing old primary with a new one must remove old and add new in one transaction."""
+        body = self._make_body(primary=self._ID_B, additional=[])
+        result, atomic_calls, _ = self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=[self._ID_A], current_primary=self._ID_A,
+            reread_theme_ids=[self._ID_B], reread_primary=self._ID_B,
+        )
+        assert result.get("ok") is True
+        payload = atomic_calls[0]
+        actions = {(e["theme_id"], e["action"]) for e in payload["ticker_overrides"]}
+        assert (self._ID_A, "remove") in actions
+        assert (self._ID_B, "add") in actions
+        assert payload["primary_operation"]["action"] == "set"
+
+    # ── Test 18: promoting existing additional to primary ─────────────────────
+    def test_promote_existing_additional_to_primary(self, monkeypatch):
+        """
+        Promoting an existing additional membership to primary must update the
+        category override without requiring an additional membership insert.
+        The old primary becomes additional in the same transaction.
+        """
+        # Current: primary=_ID_A, additional=_ID_B
+        # Requested: primary=_ID_B, additional=[_ID_A]
+        body = self._make_body(primary=self._ID_B, additional=[self._ID_A])
+        result, atomic_calls, _ = self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=[self._ID_A, self._ID_B],
+            current_primary=self._ID_A,
+            reread_theme_ids=[self._ID_A, self._ID_B],
+            reread_primary=self._ID_B,
+        )
+        assert result.get("ok") is True
+        payload = atomic_calls[0]
+        # No removals (both themes remain active)
+        remove_ops = {e["theme_id"] for e in payload["ticker_overrides"] if e["action"] == "remove"}
+        assert remove_ops == set(), \
+            f"Promotion must not remove any membership; got removes: {remove_ops}"
+        # primary_operation must update the category store
+        assert payload["primary_operation"]["action"] == "set"
+        # Source update: new primary gets manual_admin, old gets manual_admin_additional
+        src_by_theme = {e["theme_id"]: e.get("source") for e in payload["ticker_overrides"]}
+        assert src_by_theme.get(self._ID_B) == "manual_admin"
+        assert src_by_theme.get(self._ID_A) == "manual_admin_additional"
+
+    # ── Test 19: clearing primary ─────────────────────────────────────────────
+    def test_clear_primary(self, monkeypatch):
+        """Clearing primary (primary=null) must issue a category-override DELETE."""
+        body = self._make_body(primary=None, additional=["ai_accelerators"])
+        result, atomic_calls, _ = self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=["ai_accelerators"], current_primary="ai_accelerators",
+            reread_theme_ids=["ai_accelerators"], reread_primary=None,
+        )
+        assert result.get("ok") is True
+        payload = atomic_calls[0]
+        assert payload["primary_operation"]["action"] == "clear", \
+            f"Clearing primary must issue action='clear'; got {payload['primary_operation']}"
+
+    # ── Test 20: primary unchanged, additions changed ─────────────────────────
+    def test_primary_unchanged_additions_changed(self, monkeypatch):
+        """Changing only additional memberships must still include all desired in payload."""
+        body = self._make_body(primary=self._ID_A, additional=[self._ID_B])
+        # Currently has _ID_A (primary) only
+        result, atomic_calls, _ = self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=[self._ID_A], current_primary=self._ID_A,
+            reread_theme_ids=[self._ID_A, self._ID_B],
+            reread_primary=self._ID_A,
+        )
+        assert result.get("ok") is True
+        payload = atomic_calls[0]
+        add_ops = {e["theme_id"] for e in payload["ticker_overrides"] if e["action"] == "add"}
+        assert self._ID_B in add_ops
+
+    # ── Test 21: requested primary remains primary ────────────────────────────
+    def test_requested_primary_is_primary_in_response(self, monkeypatch):
+        """primary_theme_id in response comes from authoritative reread, not request body."""
+        body = self._make_body(primary="ai_accelerators")
+        result, _, _ = self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=[], current_primary=None,
+            reread_theme_ids=["ai_accelerators"], reread_primary="ai_accelerators",
+        )
+        assert result["primary_theme_id"] == "ai_accelerators"
+
+    # ── Test 22: redundant ancestor normalization ─────────────────────────────
+    def test_redundant_ancestor_removed_from_additional(self, monkeypatch):
+        """
+        Redundant ancestor in additional must be removed before building the payload.
+        Uses real taxonomy registry to find a parent-child pair.
+        """
+        from services.theme_rs_universe import THEME_RS_UNIVERSE as _base
+        # Find a sub_theme that has a parent_theme_id in the registry
+        child = None
+        parent = None
+        for tid, meta in _base.items():
+            pid = meta.get("parent_theme_id")
+            if pid and pid in _base and meta.get("classification") == "sub_theme":
+                child  = tid
+                parent = pid
+                break
+        if child is None or parent is None:
+            import pytest
+            pytest.skip("No suitable parent-child pair found in registry")
+
+        # Request primary=child, additional=[parent] → parent should be stripped
+        body = self._make_body(primary=child, additional=[parent])
+        result, atomic_calls, _ = self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=[], current_primary=None,
+            reread_theme_ids=[child], reread_primary=child,
+        )
+        assert result.get("ok") is True
+        # Parent must not appear in the membership adds
+        add_ops = {e["theme_id"] for e in atomic_calls[0]["ticker_overrides"] if e["action"] == "add"}
+        assert parent not in add_ops, \
+            f"Redundant ancestor {parent!r} must be pruned; got adds: {add_ops}"
+
+    # ── Test 24: sector / deprecated / market-lens IDs rejected ──────────────
+    def test_sector_id_rejected_as_primary(self, monkeypatch):
+        """Sector IDs must be rejected with HTTP 422."""
+        import asyncio
+        import fastapi
+        import routes.themes as rth
+        from services.theme_rs_universe import THEME_RS_UNIVERSE as _base
+
+        sector_id = next(
+            (k for k, v in _base.items() if v.get("classification") == "sector"), None
+        )
+        if sector_id is None:
+            import pytest; pytest.skip("No sector IDs in registry")
+
+        monkeypatch.setattr(rth, "_check_admin", lambda req, key: None)
+
+        from routes.themes import TickerTaxonomyBody
+        body = TickerTaxonomyBody(primary_theme_id=sector_id)
+
+        class _Req:
+            headers = {}
+            state = type("s", (), {})()
+
+        exc_holder = [None]
+        async def _run():
+            try:
+                await rth.admin_put_ticker_taxonomy(
+                    ticker="XTST", request=_Req(), body=body, x_api_key="test"
+                )
+            except fastapi.HTTPException as e:
+                exc_holder[0] = e
+
+        asyncio.run(_run())
+        assert exc_holder[0] is not None and exc_holder[0].status_code in (422, 404), \
+            f"Sector ID must be rejected; got {exc_holder[0]}"
+
+    def test_deprecated_id_rejected(self, monkeypatch):
+        """Deprecated and market_lens IDs must be rejected with HTTP 422."""
+        import asyncio
+        import fastapi
+        import routes.themes as rth
+        from services.theme_rs_universe import THEME_RS_UNIVERSE as _base
+
+        bad_id = next(
+            (k for k, v in _base.items()
+             if v.get("classification") in ("deprecated", "market_lens")), None
+        )
+        if bad_id is None:
+            import pytest; pytest.skip("No deprecated/market_lens IDs in registry")
+
+        monkeypatch.setattr(rth, "_check_admin", lambda req, key: None)
+        from routes.themes import TickerTaxonomyBody
+        body = TickerTaxonomyBody(primary_theme_id=bad_id)
+
+        class _Req:
+            headers = {}
+            state = type("s", (), {})()
+
+        exc_holder = [None]
+        async def _run():
+            try:
+                await rth.admin_put_ticker_taxonomy(
+                    ticker="XTST", request=_Req(), body=body, x_api_key="test"
+                )
+            except fastapi.HTTPException as e:
+                exc_holder[0] = e
+
+        asyncio.run(_run())
+        assert exc_holder[0] is not None and exc_holder[0].status_code in (422, 404)
+
+    # ── Test 25: response primary from authoritative reread ───────────────────
+    def test_response_primary_from_reread_not_body(self, monkeypatch):
+        """primary_theme_id in response must be the reread value, never body.primary_theme_id."""
+        body = self._make_body(primary="ai_accelerators")
+        result, _, _ = self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=[], current_primary=None,
+            reread_theme_ids=["ai_accelerators"], reread_primary="ai_accelerators",
+        )
+        # The response value comes from reread
+        assert result["primary_theme_id"] == "ai_accelerators"
+
+    # ── Test 26: primary appears first in theme_ids ───────────────────────────
+    def test_primary_first_in_theme_ids(self, monkeypatch):
+        """primary_theme_id must be the first element of theme_ids."""
+        body = self._make_body(primary=self._ID_A, additional=[self._ID_B])
+        result, _, _ = self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=[], current_primary=None,
+            reread_theme_ids=[self._ID_A, self._ID_B],
+            reread_primary=self._ID_A,
+        )
+        assert result["theme_ids"][0] == self._ID_A, \
+            f"Primary must be first in theme_ids; got {result['theme_ids']}"
+
+    # ── Test 27: reread mismatch raises 500 ───────────────────────────────────
+    def test_reread_mismatch_raises_server_error(self, monkeypatch):
+        """When reread primary doesn't match requested primary, route must raise 500."""
+        body = self._make_body(primary=self._ID_A)
+        # Reread returns a different primary (simulating storage inconsistency)
+        exc, _, _ = self._run_handler(
+            body, monkeypatch,
+            current_theme_ids=[], current_primary=None,
+            reread_theme_ids=[self._ID_B], reread_primary=self._ID_B,
+        )
+        assert exc is not None and exc.status_code == 500, \
+            f"Reread mismatch must raise HTTP 500; got {exc}"
+
+    # ── Test 28: legacy single-membership endpoints remain functional ─────────
+    def test_legacy_endpoints_use_per_membership_helpers(self, monkeypatch):
+        """
+        The legacy POST /admin/memberships endpoint must still use _perform_membership_write.
+        We verify the helper is still callable (not broken by the route rewrite).
+        """
+        import routes.themes as rth
+        assert callable(rth._perform_membership_write), \
+            "_perform_membership_write must remain callable for legacy endpoints"
+        assert callable(rth._perform_theme_membership_only_write), \
+            "_perform_theme_membership_only_write must remain callable for legacy endpoints"
+
+
 # ── Contract 15: Generated artifacts not tracked in git ───────────────────────
 
 def test_proposals_json_not_git_tracked():

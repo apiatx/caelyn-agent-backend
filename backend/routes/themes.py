@@ -20,11 +20,14 @@ DELETE /api/themes/admin/leaders/{theme_id}                 clear a theme leader
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Query, HTTPException, Request, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
+
+_log = logging.getLogger(__name__)
 
 from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as THEME_RS_UNIVERSE
 from services.theme_rs_universe import get_effective_rollup_sector_ids as _get_effective_rollup
@@ -1094,29 +1097,33 @@ async def admin_put_ticker_taxonomy(
       One primary membership  (theme or sub_theme, or null to clear)
       Zero or more additional memberships  (different theme families)
 
+    All theme_ticker_overrides changes AND the primary watchlist_category_overrides
+    change execute in a single database transaction via atomic_taxonomy_write_db().
+    No per-membership helpers are called from this route.
+
     Processing steps:
       1. Authenticate admin.
       2. Normalize ticker to uppercase.
       3. Validate every ID against the assignable canonical registry.
          - Reject sector IDs.
          - Reject deprecated and market_lens IDs.
-      4. Remove primary from additional_theme_ids.
-      5. Remove duplicate additional IDs.
-      6. Remove redundant ancestor memberships when a child already provides rollup.
-      7. Diff requested set against active stored memberships:
-         - Deactivate (remove) memberships no longer requested.
-         - Insert or reactivate memberships now required.
-      8. Update primary through the canonical assign-primary-theme path.
-      9. Invalidate affected caches once.
-      10. Return final normalized canonical identity.
-
-    Reuses _perform_membership_write as the canonical storage path;
-    performs no additional Neon writes beyond that existing function.
+      4. Remove primary from additional_theme_ids; deduplicate; remove redundant ancestors.
+      5. Read current explicit memberships and current canonical primary.
+      6. Compute deterministic desired state (to_add / to_remove).
+      7. Build one complete transaction payload.
+      8. Call atomic_taxonomy_write_db() exactly once.
+      9. Raise immediately when the transaction fails (no compensating writes).
+      10. Invalidate caches exactly once after successful commit.
+      11. Run optional non-authoritative downstream hints after commit.
+      12. Reread authoritative state and validate it matches the requested normalized state.
+      13. Return the authoritative reread (primary_theme_id from reread, never from request).
     """
+    # ── 1. Authenticate ───────────────────────────────────────────────────────
     err = _check_admin(request, x_api_key)
     if err:
         return err
 
+    # ── 2. Normalize ticker ───────────────────────────────────────────────────
     ticker = ticker.strip().upper()
     if not _SYM_RE.match(ticker):
         raise HTTPException(status_code=422, detail=f"Invalid ticker format: '{ticker}'")
@@ -1124,7 +1131,7 @@ async def admin_put_ticker_taxonomy(
     from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _uni
     from services.theme_rs_universe import THEME_RS_UNIVERSE as _base_uni
 
-    # ── Validate IDs ──────────────────────────────────────────────────────────
+    # ── 3. Validate IDs ───────────────────────────────────────────────────────
     sector_ids = {k for k, v in _base_uni.items() if v.get("classification") == "sector"}
     assignable_ids = {
         k for k, v in _base_uni.items()
@@ -1151,28 +1158,23 @@ async def admin_put_ticker_taxonomy(
 
     if body.primary_theme_id:
         _validate_theme_id(body.primary_theme_id, "primary_theme_id")
-
     for atid in body.additional_theme_ids:
         _validate_theme_id(atid, f"additional_theme_ids[{atid!r}]")
 
-    # ── Normalize: remove primary from additional, deduplicate ────────────────
+    # ── 4. Normalize: remove primary from additional, deduplicate, prune ancestors
     additional: list[str] = sorted(
         {t for t in body.additional_theme_ids if t != body.primary_theme_id}
     )
 
-    # ── Remove redundant ancestor memberships ─────────────────────────────────
-    # If additional_theme_ids already contains a child of a theme, the parent
-    # itself is redundant because the child rolls up to the parent.
     def _get_parent(tid: str) -> Optional[str]:
         return _base_uni.get(tid, {}).get("parent_theme_id")
 
-    # Build set of parents covered by child memberships in the final set
     final_ids = set(additional)
     if body.primary_theme_id:
         final_ids.add(body.primary_theme_id)
 
     parents_covered = {_get_parent(t) for t in final_ids if _get_parent(t)}
-    # Remove ancestors only from additional (never strip the primary)
+    # Remove redundant ancestors from additional only (never strip the primary)
     additional = [
         t for t in additional
         if not (t in parents_covered and any(
@@ -1180,11 +1182,12 @@ async def admin_put_ticker_taxonomy(
         ))
     ]
 
-    # ── Get current stored memberships ────────────────────────────────────────
+    # ── 5. Read current authoritative state ───────────────────────────────────
     current_memberships = _get_ticker_theme_memberships(ticker)
-    current_all: set[str] = set(current_memberships.get("theme_ids", []))
+    current_all: set[str] = {m["theme_id"] for m in current_memberships["theme_memberships"]}
+    current_primary: Optional[str] = current_memberships["primary_theme"]["theme_id"]
 
-    # Desired final set
+    # ── 6. Compute deterministic desired state ────────────────────────────────
     desired_all: set[str] = set(additional)
     if body.primary_theme_id:
         desired_all.add(body.primary_theme_id)
@@ -1192,111 +1195,140 @@ async def admin_put_ticker_taxonomy(
     to_remove = current_all - desired_all
     to_add    = desired_all - current_all
 
-    errors_list: list[str] = []
-    undo_stack: list[tuple[str, str, bool]] = []  # (theme_id, reverse_action, is_primary)
-
-    # ── Remove unwanted memberships (membership-only; no category cross-sync) ─
+    # ── 7. Build one complete transaction payload ─────────────────────────────
+    # All removals first, then upsert every desired membership (handles
+    # promotions/demotions: updating source between manual_admin /
+    # manual_admin_additional in the same ON CONFLICT DO UPDATE pass).
+    membership_edits: list[dict] = []
     for rem_tid in sorted(to_remove):
-        try:
-            _perform_theme_membership_only_write(
-                theme_id=rem_tid,
-                symbol=ticker,
-                action="remove",
-                note=f"cleared by ticker-taxonomy PUT (replaced by {body.primary_theme_id or 'none'})",
-                created_by=body.created_by,
-            )
-            undo_stack.append((rem_tid, "add", False))
-        except HTTPException as exc:
-            # Roll back successful removes before raising
-            for (rtid, undo_action, is_prim) in reversed(undo_stack):
-                try:
-                    fn = _perform_membership_write if is_prim else _perform_theme_membership_only_write
-                    fn(theme_id=rtid, symbol=ticker, action=undo_action,
-                       note="rollback: taxonomy PUT remove phase failed",
-                       created_by=body.created_by)
-                except Exception:
-                    pass
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to remove '{rem_tid}' (prior changes rolled back): {exc.detail}",
-            )
+        membership_edits.append({
+            "theme_id":   rem_tid,
+            "symbol":     ticker,
+            "action":     "remove",
+            "source":     "manual_admin",
+            "note":       f"cleared by taxonomy PUT (replaced by {body.primary_theme_id or 'none'})",
+            "created_by": body.created_by,
+        })
+    for desired_tid in sorted(desired_all):
+        src = "manual_admin" if desired_tid == body.primary_theme_id else "manual_admin_additional"
+        membership_edits.append({
+            "theme_id":   desired_tid,
+            "symbol":     ticker,
+            "action":     "add",
+            "source":     src,
+            "note":       body.note,
+            "created_by": body.created_by,
+        })
 
-    # ── Add primary membership (with watchlist cross-sync) ────────────────────
-    if body.primary_theme_id and body.primary_theme_id in to_add:
-        try:
-            _perform_membership_write(
-                theme_id=body.primary_theme_id,
-                symbol=ticker,
-                action="add",
-                note=body.note,
-                created_by=body.created_by,
-            )
-            undo_stack.append((body.primary_theme_id, "remove", True))
-        except HTTPException as exc:
-            for (rtid, undo_action, is_prim) in reversed(undo_stack):
-                try:
-                    fn = _perform_membership_write if is_prim else _perform_theme_membership_only_write
-                    fn(theme_id=rtid, symbol=ticker, action=undo_action,
-                       note="rollback: taxonomy PUT primary-add failed",
-                       created_by=body.created_by)
-                except Exception:
-                    pass
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to add primary '{body.primary_theme_id}' (rolled back): {exc.detail}",
-            )
+    # Build primary store operation
+    primary_op: Optional[dict] = None
+    if body.primary_theme_id:
+        display_name = _uni.get(body.primary_theme_id, {}).get("display_name") or body.primary_theme_id
+        primary_op = {
+            "action":   "set",
+            "user_id":  "default",
+            "ticker":   ticker,
+            "category": display_name,
+            "source":   "themes_page_manual",
+            "reason":   f"themes_page:{body.primary_theme_id}",
+        }
+    elif current_primary is not None:
+        # Clear the category override in the same transaction
+        primary_op = {
+            "action":  "clear",
+            "user_id": "default",
+            "ticker":  ticker,
+        }
 
-    # ── Add additional memberships (membership-only; no watchlist cross-sync) ─
-    for add_tid in sorted(to_add):
-        if add_tid == body.primary_theme_id:
-            continue  # already handled above
-        try:
-            _perform_theme_membership_only_write(
-                theme_id=add_tid,
-                symbol=ticker,
-                action="add",
-                note=body.note,
-                created_by=body.created_by,
-            )
-        except HTTPException as exc:
-            errors_list.append(f"add additional {add_tid}: {exc.detail}")
+    # ── 8. One atomic transaction — all or nothing ────────────────────────────
+    from data.pg_storage import atomic_taxonomy_write_db
+    txn_result = atomic_taxonomy_write_db(
+        ticker_overrides=membership_edits,
+        primary_operation=primary_op,
+    )
 
-    # ── Single explicit cache invalidation after all writes ───────────────────
+    # ── 9. Raise immediately on failure; no compensating writes ───────────────
+    if not txn_result["ok"]:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Taxonomy write transaction failed: {txn_result.get('error', 'unknown')}",
+        )
+
+    # ── 10. Single cache invalidation after successful commit ─────────────────
     _invalidate_caches()
 
-    # ── Response from stored assignments (never from in-memory universe) ──────
-    final_memberships = _get_ticker_theme_memberships(ticker)
-    stored_theme_ids: list[str] = list(final_memberships.get("theme_ids") or [])
+    # ── 11. Post-commit optional downstream hints (non-authoritative) ─────────
+    if to_add:
+        try:
+            from data.options_theme_supplement import add_high_priority_symbols as _add_hi
+            _add_hi([ticker])
+        except Exception as _hpe:
+            _log.warning("[taxonomy PUT] options high-priority hint failed (non-fatal): %s", _hpe)
 
-    # Primary first in theme_ids
-    primary_id = body.primary_theme_id
-    if primary_id and primary_id in stored_theme_ids:
-        ordered: list[str] = [primary_id] + [t for t in stored_theme_ids if t != primary_id]
+    if body.primary_theme_id:
+        try:
+            _display_sync = _uni.get(body.primary_theme_id, {}).get("display_name") or body.primary_theme_id
+            from services.theme_ticker_mapper import register_llm_classified_tickers as _xsync
+            _xsync([{"ticker": ticker, "theme": _display_sync, "confidence": "manual"}])
+        except Exception as _xse:
+            _log.warning("[taxonomy PUT] theme mapper sync failed (non-fatal): %s", _xse)
+    elif current_primary:
+        try:
+            from services.theme_ticker_mapper import remove_llm_theme_override as _del_llm
+            _del_llm(ticker, only_if_theme_id=current_primary)
+        except Exception as _xle:
+            _log.warning("[taxonomy PUT] theme mapper clear failed (non-fatal): %s", _xle)
+
+    # ── 12. Reread authoritative state ────────────────────────────────────────
+    final = _get_ticker_theme_memberships(ticker)
+    reread_primary: Optional[str] = final["primary_theme"]["theme_id"]
+    reread_all: set[str] = {m["theme_id"] for m in final["theme_memberships"]}
+
+    # Validate reread matches the requested normalized state
+    expected_primary = body.primary_theme_id
+    if reread_primary != expected_primary:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Authoritative reread mismatch after commit: "
+                f"expected primary={expected_primary!r}, stored primary={reread_primary!r}. "
+                f"Transaction committed but state verification failed. "
+                f"Diagnostics: desired_all={sorted(desired_all)}, reread_all={sorted(reread_all)}."
+            ),
+        )
+    if not desired_all.issubset(reread_all):
+        missing = sorted(desired_all - reread_all)
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Authoritative reread mismatch after commit: "
+                f"requested memberships {missing} not found in stored state. "
+                f"Transaction committed but state verification failed."
+            ),
+        )
+
+    # ── 13. Build response with primary first in theme_ids ────────────────────
+    reread_sorted = sorted(reread_all)
+    if reread_primary and reread_primary in reread_all:
+        ordered: list[str] = [reread_primary] + [t for t in reread_sorted if t != reread_primary]
     else:
-        ordered = stored_theme_ids
+        ordered = reread_sorted
 
-    final_subtheme_ids = [
+    subtheme_ids = [
         t for t in ordered
         if _base_uni.get(t, {}).get("classification") == "sub_theme"
     ]
 
     return {
-        "ok":                   len(errors_list) == 0,
+        "ok":                   True,
         "ticker":               ticker,
-        "primary_theme_id":     primary_id,
-        "additional_theme_ids": [t for t in ordered if t != primary_id],
+        "primary_theme_id":     reread_primary,
+        "additional_theme_ids": [t for t in ordered if t != reread_primary],
         "theme_ids":            ordered,
-        "subtheme_ids":         final_subtheme_ids,
-        "sector_id":            None,   # resolved by Watchlist enrichment, not here
+        "subtheme_ids":         subtheme_ids,
+        "sector_id":            None,
         "memberships_removed":  sorted(to_remove),
         "memberships_added":    sorted(to_add),
-        "errors":               errors_list,
-        "message": (
-            f"Ticker '{ticker}' taxonomy updated. "
-            f"Added: {sorted(to_add) or 'none'}. "
-            f"Removed: {sorted(to_remove) or 'none'}."
-            + (f" Errors: {errors_list}" if errors_list else "")
-        ),
     }
 
 

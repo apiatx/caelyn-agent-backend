@@ -2747,28 +2747,46 @@ def bulk_upsert_theme_ticker_overrides(edits: list[dict]) -> dict:
 
 def atomic_taxonomy_write_db(
     ticker_overrides: list[dict],
+    primary_operation: dict | None = None,
     category_override: dict | None = None,
 ) -> dict:
     """
     Write all theme_ticker_overrides rows PLUS an optional watchlist_category_overrides
-    row in a single Neon transaction (one BEGIN/COMMIT).
+    change in a single Neon transaction (one BEGIN/COMMIT).
 
     Low-level storage primitive for true DB-level atomicity; does NOT refresh
     in-memory caches or trigger any side effects — caller must call
     _invalidate_caches() after this returns.
 
     ticker_overrides: list of {theme_id, symbol, action, source?, note?, created_by?}
-    category_override: optional {user_id, ticker, category, source?, reason?}
-                       written to watchlist_category_overrides; pass None to skip.
+
+    primary_operation: optional explicit primary-store change with one of two shapes:
+      {"action": "set", "user_id": ..., "ticker": ..., "category": ..., "source"?: ..., "reason"?: ...}
+        → upserts watchlist_category_overrides (sets canonical primary)
+      {"action": "clear", "user_id": ..., "ticker": ...}
+        → deletes watchlist_category_overrides row (clears canonical primary)
+
+    category_override: legacy alias — treated as a "set" primary_operation when
+      primary_operation is None. Accepts {user_id?, ticker, category, source?, reason?}.
+
+    primary_operation takes precedence over category_override when both are supplied.
 
     Returns {ok, succeeded, failed, error}
+    On any statement failure the transaction is rolled back and ok=False is returned.
     """
     conn = _get_conn()
     if conn is None:
         return {"ok": False, "succeeded": 0, "failed": len(ticker_overrides), "error": "DB unavailable"}
+
+    # Resolve effective primary operation (explicit primary_operation wins over legacy alias)
+    _eff_primary_op: dict | None = primary_operation
+    if _eff_primary_op is None and category_override is not None:
+        _eff_primary_op = {"action": "set", **category_override}
+
     succeeded = 0
     try:
         with conn.cursor() as cur:
+            # ── 1. Theme-membership rows ──────────────────────────────────────
             for edit in ticker_overrides:
                 cur.execute(
                     """
@@ -2792,26 +2810,45 @@ def atomic_taxonomy_write_db(
                     ),
                 )
                 succeeded += 1
-            if category_override is not None:
-                cur.execute(
-                    """
-                    INSERT INTO public.watchlist_category_overrides
-                        (user_id, ticker, category, source, reason, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, NOW())
-                    ON CONFLICT (user_id, ticker) DO UPDATE SET
-                        category   = EXCLUDED.category,
-                        source     = EXCLUDED.source,
-                        reason     = EXCLUDED.reason,
-                        updated_at = NOW()
-                    """,
-                    (
-                        category_override.get("user_id", "default"),
-                        category_override["ticker"],
-                        category_override["category"],
-                        category_override.get("source", "manual_admin"),
-                        category_override.get("reason"),
-                    ),
-                )
+
+            # ── 2. Primary-store operation (set or clear) ─────────────────────
+            if _eff_primary_op is not None:
+                _op_action = _eff_primary_op.get("action", "set")
+                _op_user   = _eff_primary_op.get("user_id", "default")
+                _op_ticker = _eff_primary_op["ticker"]
+
+                if _op_action == "set":
+                    cur.execute(
+                        """
+                        INSERT INTO public.watchlist_category_overrides
+                            (user_id, ticker, category, source, reason, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (user_id, ticker) DO UPDATE SET
+                            category   = EXCLUDED.category,
+                            source     = EXCLUDED.source,
+                            reason     = EXCLUDED.reason,
+                            updated_at = NOW()
+                        """,
+                        (
+                            _op_user,
+                            _op_ticker,
+                            _eff_primary_op["category"],
+                            _eff_primary_op.get("source", "manual_admin"),
+                            _eff_primary_op.get("reason"),
+                        ),
+                    )
+                elif _op_action == "clear":
+                    cur.execute(
+                        "DELETE FROM public.watchlist_category_overrides "
+                        "WHERE user_id = %s AND ticker = %s",
+                        (_op_user, _op_ticker),
+                    )
+                else:
+                    raise ValueError(
+                        f"atomic_taxonomy_write_db: unknown primary_operation action {_op_action!r}; "
+                        f"must be 'set' or 'clear'"
+                    )
+
         conn.commit()
         return {"ok": True, "succeeded": succeeded, "failed": 0, "error": None}
     except Exception as exc:
