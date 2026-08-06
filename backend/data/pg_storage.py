@@ -2745,6 +2745,86 @@ def bulk_upsert_theme_ticker_overrides(edits: list[dict]) -> dict:
     return {"succeeded": succeeded, "failed": failed, "errors": errors}
 
 
+def atomic_taxonomy_write_db(
+    ticker_overrides: list[dict],
+    category_override: dict | None = None,
+) -> dict:
+    """
+    Write all theme_ticker_overrides rows PLUS an optional watchlist_category_overrides
+    row in a single Neon transaction (one BEGIN/COMMIT).
+
+    Low-level storage primitive for true DB-level atomicity; does NOT refresh
+    in-memory caches or trigger any side effects — caller must call
+    _invalidate_caches() after this returns.
+
+    ticker_overrides: list of {theme_id, symbol, action, source?, note?, created_by?}
+    category_override: optional {user_id, ticker, category, source?, reason?}
+                       written to watchlist_category_overrides; pass None to skip.
+
+    Returns {ok, succeeded, failed, error}
+    """
+    conn = _get_conn()
+    if conn is None:
+        return {"ok": False, "succeeded": 0, "failed": len(ticker_overrides), "error": "DB unavailable"}
+    succeeded = 0
+    try:
+        with conn.cursor() as cur:
+            for edit in ticker_overrides:
+                cur.execute(
+                    """
+                    INSERT INTO public.theme_ticker_overrides
+                        (theme_id, symbol, action, source, note, created_by, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (theme_id, symbol) DO UPDATE SET
+                        action     = EXCLUDED.action,
+                        source     = EXCLUDED.source,
+                        note       = EXCLUDED.note,
+                        created_by = EXCLUDED.created_by,
+                        updated_at = NOW()
+                    """,
+                    (
+                        edit["theme_id"],
+                        edit["symbol"],
+                        edit["action"],
+                        edit.get("source", "manual_admin"),
+                        edit.get("note"),
+                        edit.get("created_by"),
+                    ),
+                )
+                succeeded += 1
+            if category_override is not None:
+                cur.execute(
+                    """
+                    INSERT INTO public.watchlist_category_overrides
+                        (user_id, ticker, category, source, reason, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (user_id, ticker) DO UPDATE SET
+                        category   = EXCLUDED.category,
+                        source     = EXCLUDED.source,
+                        reason     = EXCLUDED.reason,
+                        updated_at = NOW()
+                    """,
+                    (
+                        category_override.get("user_id", "default"),
+                        category_override["ticker"],
+                        category_override["category"],
+                        category_override.get("source", "manual_admin"),
+                        category_override.get("reason"),
+                    ),
+                )
+        conn.commit()
+        return {"ok": True, "succeeded": succeeded, "failed": 0, "error": None}
+    except Exception as exc:
+        print(f"[PG] atomic_taxonomy_write_db error: {exc}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"ok": False, "succeeded": 0, "failed": len(ticker_overrides), "error": str(exc)}
+    finally:
+        _put_conn(conn)
+
+
 def delete_theme_ticker_override(theme_id: str, symbol: str) -> bool:
     """
     Delete a (theme_id, symbol) override row, restoring default universe behavior

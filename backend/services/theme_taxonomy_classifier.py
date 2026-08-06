@@ -9,10 +9,14 @@ Produces AI-assisted classification proposals mapping each ticker to:
 Design principles:
   - DRY RUN ONLY — this module never writes to Neon.
   - Reads from existing cached fundamentals; no new provider calls per ticker.
-  - Uses the existing Gemini (or OpenAI-compatible) classification path already
-    present in services/watchlist_theme_classifier.py.
-  - SOL 5.6 was not found in the live codebase. Gemini/OpenAI paths are used
-    (already authorized for theme classification in watchlist_theme_classifier.py).
+  - Authorized providers: SOL56 (SOL56_MODEL_ID env var) or OpenAI with an
+    explicit THEME_CLASSIFIER_MODEL env var. No auto-detection of Anthropic or
+    Gemini; if neither authorized provider is configured the run stops with a
+    config report and makes zero model calls.
+  - Input completeness gate: tickers whose company name or business description
+    is missing are quarantined as INPUT_INCOMPLETE before any model call.
+  - Identity guard: proposals whose rationale exhibits identity confusion (e.g.
+    "or similar", ticker-only guess with no evidence) are quarantined.
   - Manual overrides are never overwritten — existing theme_ticker_overrides
     rows with source "manual_admin" are marked manual_override_protected=True.
   - Checkpointed, resumable, idempotent: skip tickers already in proposal file.
@@ -54,18 +58,29 @@ _CSV_FIELDS = [
     "taxonomy_version", "prompt_version", "run_timestamp", "model_id",
 ]
 
-# ── SOL 5.6 configuration check ───────────────────────────────────────────────
-# The task spec requests SOL 5.6. No such model alias was found in the live
-# codebase (agent/model_policy.py, config.py, or any provider integration).
-# Gemini and OpenAI-compatible paths are already authorized in
-# services/watchlist_theme_classifier.py for the same classification purpose.
+# ── Provider configuration ─────────────────────────────────────────────────────
+# Authorized providers: SOL56 or explicit OpenAI only.
+# Anthropic and Gemini are NOT authorized for this classifier regardless of
+# which API keys are present in the environment.
 _SOL56_MODEL_ID = os.getenv("SOL56_MODEL_ID") or os.getenv("SOL_MODEL_ID")
 _SOL56_MISSING  = _SOL56_MODEL_ID is None
 SOL56_FINDING   = (
     "SOL 5.6 model alias not found. Searched env vars: SOL56_MODEL_ID, SOL_MODEL_ID. "
-    "Also searched agent/model_policy.py and config.py — no 'sol' model identifier found. "
-    "Gemini (already authorized for watchlist_theme_classifier.py) is used instead."
+    "OpenAI is also authorized when both OPENAI_API_KEY and THEME_CLASSIFIER_MODEL are set. "
+    "Anthropic and Gemini are NOT authorized fallbacks for this classifier."
 )
+
+# Identity-guard red-flag phrases in model rationales
+_IDENTITY_RED_FLAGS: list[str] = [
+    "or similar",
+    "or equivalent",
+    "ticker suggests",
+    "name suggests",
+    "symbol suggests",
+    "appears to be a",
+    "likely a ",
+    "guessing from",
+]
 
 
 def _get_assignable_registry() -> dict:
@@ -139,37 +154,23 @@ def _get_llm_overrides() -> dict[str, dict]:
 
 def _detect_provider() -> tuple[str, str]:
     """
-    Detect available LLM provider.
+    Detect authorized LLM provider for taxonomy classification.
     Returns (provider_name, model_id).
-    Priority: SOL56 → Anthropic → Gemini REST → OpenAI.
-    Anthropic is checked before Gemini because the `anthropic` Python package
-    is installed in this environment; google-generativeai is not.
+
+    ONLY authorized providers:
+      1. SOL56: SOL56_MODEL_ID (or SOL_MODEL_ID) env var must be set.
+      2. OpenAI: OPENAI_API_KEY **and** THEME_CLASSIFIER_MODEL must both be set.
+         Key alone is insufficient — an explicit model opt-in is required.
+
+    Anthropic and Gemini are NOT authorized, regardless of which API keys are
+    present. If neither authorized provider is configured, returns ("none", "none")
+    and the caller must stop with a config report — zero model calls must be made.
     """
     if _SOL56_MODEL_ID:
         return "sol56", _SOL56_MODEL_ID
 
-    # Anthropic — preferred when package available
-    try:
-        import anthropic as _anth  # noqa: F401
-        if os.getenv("ANTHROPIC_API_KEY"):
-            model = os.getenv("THEME_CLASSIFIER_MODEL") or "claude-haiku-4-5-20251001"
-            return "anthropic", model
-    except ImportError:
-        pass
-
-    # Gemini — try REST if google-generativeai not installed
-    if os.getenv("GEMINI_API_KEY"):
-        try:
-            import google.generativeai  # noqa: F401
-            model = os.getenv("THEME_CLASSIFIER_MODEL") or "gemini-2.5-flash"
-            return "gemini", model
-        except ImportError:
-            # Fall through to REST path below
-            return "gemini_rest", os.getenv("THEME_CLASSIFIER_MODEL") or "gemini-2.0-flash"
-
-    if os.getenv("OPENAI_API_KEY"):
-        model = os.getenv("THEME_CLASSIFIER_MODEL") or "gpt-4o-mini"
-        return "openai", model
+    if os.getenv("OPENAI_API_KEY") and os.getenv("THEME_CLASSIFIER_MODEL"):
+        return "openai", os.getenv("THEME_CLASSIFIER_MODEL")
 
     return "none", "none"
 
@@ -339,16 +340,49 @@ def _validate_proposal(
     proposal: dict,
     registry: dict,
     current_assignments: dict[str, dict],
+    company_name: str = "",
 ) -> tuple[dict, list[str]]:
     """
     Validate and normalize one AI proposal. Returns (normalized_proposal, quarantine_reasons).
     quarantine_reasons is empty if the proposal is valid.
+
+    company_name (optional): expected company name for this ticker, used by the
+    identity guard. When supplied, the guard rejects proposals whose rationale
+    shows signs of identity confusion (red-flag phrases, no company reference,
+    no supporting evidence). When omitted, the identity guard is skipped.
     """
     quarantine: list[str] = []
     ticker = str(proposal.get("ticker", "")).upper()
     if not ticker:
         quarantine.append("missing ticker")
         return proposal, quarantine
+
+    # ── Identity guard ────────────────────────────────────────────────────────
+    if company_name:
+        rationale_lower = str(proposal.get("rationale") or "").lower()
+        evidence = list(proposal.get("evidence") or [])
+
+        # Red-flag phrases that indicate the model is guessing rather than classifying
+        for flag in _IDENTITY_RED_FLAGS:
+            if flag in rationale_lower:
+                quarantine.append(
+                    f"IDENTITY_GUARD: rationale contains suspect phrase {flag!r} "
+                    f"suggesting identity confusion (ticker={ticker}, expected company={company_name!r})"
+                )
+                break
+
+        # If no red-flag phrase, check whether the rationale references the expected
+        # company and whether there is any supporting evidence. Quarantine if the model
+        # neither named the company nor provided any evidence (ticker-only guess).
+        if not quarantine:
+            company_words = [w.lower() for w in company_name.split() if len(w) > 3]
+            rationale_mentions_company = any(w in rationale_lower for w in company_words)
+            if not rationale_mentions_company and not evidence:
+                quarantine.append(
+                    f"IDENTITY_GUARD: rationale does not reference company {company_name!r} "
+                    f"and no evidence was provided — possible ticker-only guess "
+                    f"(ticker={ticker})"
+                )
 
     assignable_ids = set(registry.keys())
 
@@ -453,7 +487,31 @@ def run_sample(
     proposals: list[dict] = []
     quarantined: list[dict] = []
 
-    # Build ticker input data
+    # ── Config-error gate: no authorized provider → stop immediately ──────────
+    if provider == "none":
+        config_report = (
+            "CONFIG ERROR: No authorized LLM provider found for taxonomy classification.\n"
+            "  Authorized providers:\n"
+            "    SOL56:  set SOL56_MODEL_ID (and optionally SOL56_BASE_URL + SOL56_API_KEY)\n"
+            "    OpenAI: set both OPENAI_API_KEY and THEME_CLASSIFIER_MODEL\n"
+            "  NOT authorized: Anthropic, Gemini, or any auto-detected provider.\n"
+            "Zero model calls were made."
+        )
+        log.warning("run_sample: no authorized provider — returning config_error")
+        return {
+            "proposals":     [],
+            "quarantined":   [],
+            "provider":      "none",
+            "model_id":      "none",
+            "config_error":  config_report,
+            "sol56_finding": SOL56_FINDING,
+            "sol56_missing": _SOL56_MISSING,
+            "prompt_hash":   prompt_hash,
+            "run_timestamp": run_ts,
+            "summary":       _summarize([], []),
+        }
+
+    # ── Build ticker input data + input completeness gate ─────────────────────
     tickers_data: list[dict] = []
     for ticker in tickers:
         fund = fund_cache.get(ticker) or fund_cache.get(ticker.upper()) or {}
@@ -465,10 +523,32 @@ def run_sample(
             or llm_overrides.get(ticker, {}).get("display_name", "")
             or ""
         )
+        company = profile.get("companyName") or fields.get("companyName") or ""
+
+        # Input completeness gate: quarantine before any model call
+        if not company or company.strip().upper() == ticker.upper():
+            quarantined.append({
+                "ticker": ticker,
+                "reason": (
+                    "INPUT_INCOMPLETE: company name missing or defaults to ticker symbol — "
+                    "cannot classify without confirmed company identity"
+                ),
+            })
+            continue
+        if not desc or len(desc.strip()) < 20:
+            quarantined.append({
+                "ticker": ticker,
+                "reason": (
+                    "INPUT_INCOMPLETE: business description missing or too short — "
+                    "cannot classify without a description of core operations"
+                ),
+            })
+            continue
+
         current_a = current_assignments.get(ticker, {})
         tickers_data.append({
             "ticker":          ticker,
-            "company":         profile.get("companyName") or fields.get("companyName") or ticker,
+            "company":         company,
             "sector":          (profile.get("sector") or fields.get("sector") or ""),
             "industry":        (profile.get("industry") or fields.get("industry") or ""),
             "description":     desc[:500],
@@ -480,37 +560,6 @@ def run_sample(
     for i in range(0, len(tickers_data), BATCH_SIZE):
         batch = tickers_data[i:i + BATCH_SIZE]
         batch_tickers = [b["ticker"] for b in batch]
-
-        if provider == "none":
-            # No provider configured — create placeholder proposals
-            for td in batch:
-                ticker = td["ticker"]
-                # Rules-based fallback: use existing LLM override or current assignment
-                existing_override = llm_overrides.get(ticker, {})
-                existing_tid = existing_override.get("theme_id", "")
-                # Map old tid to new equivalent if it exists in registry
-                proposed_primary = existing_tid if existing_tid in registry else None
-                proposals.append({
-                    "ticker":                    ticker,
-                    "actual_sector_id":          td.get("sector", ""),
-                    "current_primary_theme_id":  current_assignments.get(ticker, {}).get("primary_theme_id"),
-                    "current_additional_theme_ids": current_assignments.get(ticker, {}).get("additional_theme_ids") or [],
-                    "proposed_primary_theme_id":    proposed_primary,
-                    "proposed_additional_theme_ids": [],
-                    "commodity_exposures":       [],
-                    "confidence":                0.0,
-                    "rationale":                 "No LLM provider configured; rules-based fallback using cached override.",
-                    "evidence":                  [],
-                    "warnings":                  ["No LLM provider configured — SOL 5.6 not found, Gemini/OpenAI keys absent."],
-                    "manual_override_protected": current_assignments.get(ticker, {}).get("manual", False),
-                    "requires_manual_review":    True,
-                    "change_type":               "MANUAL_REVIEW",
-                    "taxonomy_version":          TAXONOMY_VERSION,
-                    "prompt_version":            PROMPT_VERSION,
-                    "run_timestamp":             run_ts,
-                    "model_id":                  "none",
-                })
-            continue
 
         prompt = _build_batch_prompt(batch, registry)
         raw_proposals: list[dict] = []
@@ -546,7 +595,11 @@ def run_sample(
                 continue
 
             try:
-                normalized, quarantine_reasons = _validate_proposal(raw, registry, current_assignments)
+                # Pass company_name to enable identity guard
+                normalized, quarantine_reasons = _validate_proposal(
+                    raw, registry, current_assignments,
+                    company_name=td.get("company", ""),
+                )
                 if quarantine_reasons:
                     quarantined.append({
                         "ticker": ticker,

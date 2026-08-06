@@ -1193,56 +1193,90 @@ async def admin_put_ticker_taxonomy(
     to_add    = desired_all - current_all
 
     errors_list: list[str] = []
+    undo_stack: list[tuple[str, str, bool]] = []  # (theme_id, reverse_action, is_primary)
 
-    # ── Remove unwanted memberships ───────────────────────────────────────────
-    for rem_tid in to_remove:
+    # ── Remove unwanted memberships (membership-only; no category cross-sync) ─
+    for rem_tid in sorted(to_remove):
         try:
-            _perform_membership_write(
+            _perform_theme_membership_only_write(
                 theme_id=rem_tid,
                 symbol=ticker,
                 action="remove",
                 note=f"cleared by ticker-taxonomy PUT (replaced by {body.primary_theme_id or 'none'})",
                 created_by=body.created_by,
             )
-        except HTTPException as _exc:
-            errors_list.append(f"remove {rem_tid}: {_exc.detail}")
+            undo_stack.append((rem_tid, "add", False))
+        except HTTPException as exc:
+            # Roll back successful removes before raising
+            for (rtid, undo_action, is_prim) in reversed(undo_stack):
+                try:
+                    fn = _perform_membership_write if is_prim else _perform_theme_membership_only_write
+                    fn(theme_id=rtid, symbol=ticker, action=undo_action,
+                       note="rollback: taxonomy PUT remove phase failed",
+                       created_by=body.created_by)
+                except Exception:
+                    pass
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to remove '{rem_tid}' (prior changes rolled back): {exc.detail}",
+            )
 
-    # ── Add required memberships ──────────────────────────────────────────────
-    for add_tid in to_add:
+    # ── Add primary membership (with watchlist cross-sync) ────────────────────
+    if body.primary_theme_id and body.primary_theme_id in to_add:
         try:
             _perform_membership_write(
+                theme_id=body.primary_theme_id,
+                symbol=ticker,
+                action="add",
+                note=body.note,
+                created_by=body.created_by,
+            )
+            undo_stack.append((body.primary_theme_id, "remove", True))
+        except HTTPException as exc:
+            for (rtid, undo_action, is_prim) in reversed(undo_stack):
+                try:
+                    fn = _perform_membership_write if is_prim else _perform_theme_membership_only_write
+                    fn(theme_id=rtid, symbol=ticker, action=undo_action,
+                       note="rollback: taxonomy PUT primary-add failed",
+                       created_by=body.created_by)
+                except Exception:
+                    pass
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to add primary '{body.primary_theme_id}' (rolled back): {exc.detail}",
+            )
+
+    # ── Add additional memberships (membership-only; no watchlist cross-sync) ─
+    for add_tid in sorted(to_add):
+        if add_tid == body.primary_theme_id:
+            continue  # already handled above
+        try:
+            _perform_theme_membership_only_write(
                 theme_id=add_tid,
                 symbol=ticker,
                 action="add",
                 note=body.note,
                 created_by=body.created_by,
             )
-        except HTTPException as _exc:
-            errors_list.append(f"add {add_tid}: {_exc.detail}")
+        except HTTPException as exc:
+            errors_list.append(f"add additional {add_tid}: {exc.detail}")
 
-    # Cache has already been invalidated inside each _perform_membership_write call.
-    # No extra invalidation needed.
+    # ── Single explicit cache invalidation after all writes ───────────────────
+    _invalidate_caches()
 
-    # ── Build final normalized identity ───────────────────────────────────────
-    from services.theme_resolver import resolve_primary_theme_for_ticker
-    from services.theme_rs_universe import get_effective_rollup_sector_ids as _rollup
+    # ── Response from stored assignments (never from in-memory universe) ──────
+    final_memberships = _get_ticker_theme_memberships(ticker)
+    stored_theme_ids: list[str] = list(final_memberships.get("theme_ids") or [])
 
-    final_primary = resolve_primary_theme_for_ticker(ticker)
-    primary_id    = final_primary.get("theme_id")
-
-    # Collect all active memberships from enriched universe
-    from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _eu_final
-    manual_rows = {
-        k: v for k, v in _eu_final.items()
-        if ticker in (v.get("proxy_symbols") or [])
-           or ticker in (v.get("candidate_symbols") or [])
-    }
-    final_theme_ids = sorted(manual_rows.keys())
-    if primary_id and primary_id not in final_theme_ids:
-        final_theme_ids = [primary_id] + final_theme_ids
+    # Primary first in theme_ids
+    primary_id = body.primary_theme_id
+    if primary_id and primary_id in stored_theme_ids:
+        ordered: list[str] = [primary_id] + [t for t in stored_theme_ids if t != primary_id]
+    else:
+        ordered = stored_theme_ids
 
     final_subtheme_ids = [
-        t for t in final_theme_ids
+        t for t in ordered
         if _base_uni.get(t, {}).get("classification") == "sub_theme"
     ]
 
@@ -1250,8 +1284,8 @@ async def admin_put_ticker_taxonomy(
         "ok":                   len(errors_list) == 0,
         "ticker":               ticker,
         "primary_theme_id":     primary_id,
-        "additional_theme_ids": [t for t in final_theme_ids if t != primary_id],
-        "theme_ids":            final_theme_ids,
+        "additional_theme_ids": [t for t in ordered if t != primary_id],
+        "theme_ids":            ordered,
         "subtheme_ids":         final_subtheme_ids,
         "sector_id":            None,   # resolved by Watchlist enrichment, not here
         "memberships_removed":  sorted(to_remove),

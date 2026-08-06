@@ -55,6 +55,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "candidate_symbols": ["META", "GOOGL", "NFLX", "DIS", "T", "VZ", "CMCSA"],
         "description": "Telecom, media, social media, entertainment, and advertising companies.",
         "keywords": ["communication", "social media", "streaming", "telecom", "advertising"],
+        "sector_tags": ["Communication Services"],
+        "macro_sensitivities": ["ad market", "subscriber growth", "interest rates", "regulation"],
     },
 
     "consumer_discretionary": {
@@ -66,6 +68,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "candidate_symbols": ["AMZN", "TSLA", "HD", "MCD", "NKE", "LOW", "SBUX"],
         "description": "Non-essential consumer goods and services: retail, autos, restaurants, leisure.",
         "keywords": ["consumer discretionary", "retail", "autos", "restaurants", "leisure"],
+        "sector_tags": ["Consumer Discretionary"],
+        "macro_sensitivities": ["consumer confidence", "wages", "credit conditions", "gasoline prices"],
     },
 
     "consumer_staples": {
@@ -77,6 +81,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "candidate_symbols": ["PG", "KO", "PEP", "WMT", "COST", "PM", "MO"],
         "description": "Essential consumer products: food, beverages, household goods, tobacco.",
         "keywords": ["consumer staples", "food", "beverages", "household", "essential"],
+        "sector_tags": ["Consumer Staples"],
+        "macro_sensitivities": ["inflation", "consumer spending", "USD", "commodity costs"],
     },
 
     "energy": {
@@ -88,6 +94,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "candidate_symbols": ["XOM", "CVX", "COP", "EOG", "SLB", "OXY", "PSX"],
         "description": "Oil, gas, coal, and energy equipment companies.",
         "keywords": ["energy", "oil", "gas", "fossil fuel", "exploration"],
+        "sector_tags": ["Energy"],
+        "macro_sensitivities": ["crude oil price", "OPEC", "global growth", "USD"],
     },
 
     "financials": {
@@ -99,6 +107,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "candidate_symbols": ["JPM", "BAC", "WFC", "GS", "MS", "BRK.B", "V", "MA"],
         "description": "Banks, insurance, asset managers, fintech, and diversified financial services.",
         "keywords": ["financials", "banking", "insurance", "payments", "capital markets"],
+        "sector_tags": ["Financials"],
+        "macro_sensitivities": ["Fed rates", "credit conditions", "economic cycle"],
     },
 
     "healthcare": {
@@ -110,6 +120,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "candidate_symbols": ["JNJ", "UNH", "LLY", "ABBV", "MRK", "TMO", "ABT"],
         "description": "Pharmaceuticals, biotech, medical devices, healthcare services, and life science tools.",
         "keywords": ["healthcare", "pharma", "biotech", "medical", "health insurance"],
+        "sector_tags": ["Healthcare"],
+        "macro_sensitivities": ["drug pricing policy", "aging demographics", "M&A"],
     },
 
     "industrials": {
@@ -121,6 +133,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "candidate_symbols": ["GE", "HON", "UNP", "BA", "CAT", "RTX", "LMT"],
         "description": "Aerospace, defense, machinery, transportation, construction, and industrial services.",
         "keywords": ["industrials", "aerospace", "machinery", "transportation", "construction"],
+        "sector_tags": ["Industrials"],
+        "macro_sensitivities": ["PMI", "capex cycle", "global trade", "infrastructure"],
     },
 
     "materials": {
@@ -132,6 +146,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "candidate_symbols": ["LIN", "APD", "FCX", "NEM", "NUE", "ALB", "ECL"],
         "description": "Chemicals, construction materials, metals, mining, and forest products.",
         "keywords": ["materials", "chemicals", "metals", "mining", "construction materials"],
+        "sector_tags": ["Materials"],
+        "macro_sensitivities": ["global growth", "China demand", "commodity cycle", "USD"],
     },
 
     "real_estate": {
@@ -143,6 +159,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "candidate_symbols": ["PLD", "AMT", "EQIX", "SPG", "CCI", "PSA", "DLR"],
         "description": "Real estate investment trusts (REITs), commercial real estate, residential.",
         "keywords": ["real estate", "REIT", "commercial property", "residential", "industrial REIT"],
+        "sector_tags": ["Real Estate"],
+        "macro_sensitivities": ["interest rates", "cap rates", "property valuations", "occupancy"],
     },
 
     "technology": {
@@ -154,6 +172,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "candidate_symbols": ["AAPL", "MSFT", "NVDA", "AVGO", "ORCL", "AMD", "QCOM"],
         "description": "Software, hardware, semiconductors, IT services, and technology equipment.",
         "keywords": ["technology", "software", "semiconductors", "hardware", "IT services"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["AI capex", "enterprise IT spending", "interest rates", "antitrust"],
     },
 
     "utilities": {
@@ -165,6 +185,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "candidate_symbols": ["NEE", "DUK", "SO", "D", "EXC", "AEP", "SRE"],
         "description": "Electric, water, gas utilities, and independent power producers.",
         "keywords": ["utilities", "electric", "water", "gas utility", "power generation"],
+        "sector_tags": ["Utilities"],
+        "macro_sensitivities": ["interest rates", "power demand", "regulatory environment"],
     },
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -182,6 +204,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["consumer_staples", "materials", "industrials"],
         "description": "Agricultural inputs, farm equipment, crop protection, and food production businesses.",
         "keywords": ["agriculture", "fertilizer", "crop", "farming", "food supply", "agchem"],
+        "sector_tags": ["Materials", "Consumer Staples"],
+        "macro_sensitivities": ["commodity prices", "weather", "food inflation", "USD"],
     },
 
     # ── 2. Consumer & Housing ─────────────────────────────────────────────────
@@ -195,6 +219,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["consumer_discretionary", "consumer_staples", "real_estate"],
         "description": "Consumer retail and housing/homebuilder businesses.",
         "keywords": ["consumer", "retail", "housing", "homebuilder", "e-commerce"],
+        "sector_tags": ["Consumer Discretionary", "Real Estate"],
+        "macro_sensitivities": ["mortgage rates", "housing starts", "consumer confidence", "employment"],
     },
 
     # ── 3. Banking (promoted from sub_theme; ID preserved) ────────────────────
@@ -208,6 +234,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["financials"],
         "description": "Commercial banks, investment banks, and diversified banking businesses.",
         "keywords": ["banking", "credit", "lending", "deposits", "interest rates", "bank"],
+        "sector_tags": ["Financials"],
+        "macro_sensitivities": ["Fed rates", "yield curve", "credit spreads", "GDP"],
         "aliases": ["banking"],
     },
 
@@ -222,6 +250,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["financials"],
         "description": "Property & casualty, life insurance, reinsurance, and specialty insurance.",
         "keywords": ["insurance", "P&C", "reinsurance", "underwriting", "annuity"],
+        "sector_tags": ["Financials"],
+        "macro_sensitivities": ["interest rates", "catastrophe risk", "claims trends"],
     },
 
     # ── 5. Fintech & Digital Payments (promoted; ID preserved) ────────────────
@@ -235,6 +265,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["financials", "technology"],
         "description": "Digital payments, embedded finance, neobanks, buy-now-pay-later, and fintech infrastructure.",
         "keywords": ["fintech", "payments", "digital banking", "neobank", "BNPL", "crypto payments"],
+        "sector_tags": ["Technology", "Financials"],
+        "macro_sensitivities": ["consumer spending", "interest rates", "regulatory risk"],
     },
 
     # ── 6. Healthcare Innovation ──────────────────────────────────────────────
@@ -248,6 +280,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["healthcare"],
         "description": "Biotech drug development, medical devices, diagnostics, and life-science tools.",
         "keywords": ["biotech", "medical devices", "healthcare innovation", "diagnostics", "life science"],
+        "sector_tags": ["Healthcare"],
+        "macro_sensitivities": ["FDA approvals", "risk appetite", "M&A activity"],
     },
 
     # ── 7. Metals & Mining ────────────────────────────────────────────────────
@@ -261,6 +295,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["materials"],
         "description": "Metals extraction and primary mining: precious metals, base metals, bulk commodities.",
         "keywords": ["metals", "mining", "gold", "silver", "copper", "steel", "iron ore"],
+        "sector_tags": ["Materials", "Mining"],
+        "macro_sensitivities": ["China infrastructure", "global growth", "commodity cycle"],
     },
 
     # ── 8. Advanced Materials ─────────────────────────────────────────────────
@@ -274,6 +310,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["materials", "industrials", "technology"],
         "description": "Engineered, specialty, and high-performance materials: alloys, composites, electronic materials, polymers.",
         "keywords": ["specialty chemicals", "engineered materials", "composites", "polymers", "advanced alloys"],
+        "sector_tags": ["Materials", "Technology"],
+        "macro_sensitivities": ["specialty demand", "EV/semiconductor demand", "global trade"],
         "aliases": ["chemicals_materials_advanced"],
     },
 
@@ -288,6 +326,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "Semiconductor chip design, foundry, equipment, materials, and packaging.",
         "keywords": ["semiconductors", "chips", "GPU", "CPU", "fab", "wafer", "silicon"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["AI capex", "PC/mobile cycle", "China restrictions", "leading-edge node"],
     },
 
     # ── 10. Data Center Infrastructure (promoted from sub_theme; ID preserved) ─
@@ -298,9 +338,11 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "proxy_type": "etf",
         "proxy_symbols": ["SRVR", "DTCR"],
         "candidate_symbols": ["EQIX", "DLR", "VRT", "SMCI", "ANET", "NFLX", "IRM"],
-        "rollup_sector_ids": ["technology", "utilities", "real_estate"],
+        "rollup_sector_ids": ["technology", "utilities", "real_estate", "industrials"],
         "description": "Physical infrastructure for data centers: networking, optical, servers, power, cooling, operators.",
         "keywords": ["data center", "DC infrastructure", "networking", "optical", "server", "power"],
+        "sector_tags": ["Technology", "Utilities", "Real Estate"],
+        "macro_sensitivities": ["AI capex", "power demand", "interest rates", "cloud growth"],
     },
 
     # ── 11. Software ──────────────────────────────────────────────────────────
@@ -314,6 +356,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "Enterprise software, cloud SaaS, cybersecurity, and AI software platforms.",
         "keywords": ["software", "SaaS", "cloud software", "cybersecurity", "AI platform"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["enterprise IT budgets", "AI adoption", "interest rates (multiples)"],
     },
 
     # ── 12. Photonics & Optical Systems ───────────────────────────────────────
@@ -323,10 +367,12 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "display_name": "Photonics & Optical Systems",
         "proxy_type": "custom",
         "proxy_symbols": ["IPGP", "COHR", "LITE", "VIAV", "IIVI"],
-        "candidate_symbols": ["IPGP", "COHR", "LITE", "AAOI", "VIAV", "FN", "LPTH", "LASR"],
+        "candidate_symbols": ["IPGP", "COHR", "LITE", "VIAV", "FN", "LPTH", "LASR"],
         "rollup_sector_ids": ["technology", "industrials"],
         "description": "Photonics, laser systems, optical components, and sensing technology.",
         "keywords": ["photonics", "lasers", "optical components", "silicon photonics", "LiDAR"],
+        "sector_tags": ["Technology", "Industrials"],
+        "macro_sensitivities": ["AI data center buildout", "telecom capex", "defense optics spending"],
     },
 
     # ── 13. Defense & Aerospace (ID "defense" preserved; display renamed) ─────
@@ -337,9 +383,11 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "proxy_type": "etf",
         "proxy_symbols": ["ITA", "XAR", "PPA"],
         "candidate_symbols": ["LMT", "RTX", "NOC", "GD", "L3H", "KTOS", "AVAV"],
-        "rollup_sector_ids": ["industrials"],
+        "rollup_sector_ids": ["industrials", "technology"],
         "description": "Defense platforms, weapons systems, aerospace, and defense electronics.",
         "keywords": ["defense", "aerospace", "weapons", "military", "contractor", "radar", "EW"],
+        "sector_tags": ["Industrials", "Defense"],
+        "macro_sensitivities": ["geopolitical risk", "defense budgets", "NATO spending"],
         "aliases": ["defense_aerospace"],
     },
 
@@ -354,6 +402,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "communication_services", "technology"],
         "description": "Launch vehicles, satellites, space operations, and commercial space services.",
         "keywords": ["space", "launch", "satellite", "space economy", "orbital", "LEO"],
+        "sector_tags": ["Technology", "Industrials"],
+        "macro_sensitivities": ["government space contracts", "Starlink competition", "constellation buildout"],
         "aliases": ["space_economy"],
     },
 
@@ -368,6 +418,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["utilities", "energy", "industrials"],
         "description": "Renewable energy generation, storage, and hydrogen technology companies.",
         "keywords": ["clean energy", "renewable", "solar", "wind", "hydrogen", "battery storage", "ESG"],
+        "sector_tags": ["Energy", "Utilities", "Industrials"],
+        "macro_sensitivities": ["IRA policy", "interest rates", "power demand", "carbon prices"],
     },
 
     # ── 16. Grid & Electrification ────────────────────────────────────────────
@@ -381,6 +433,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "utilities"],
         "description": "Electrical grid hardware, power generation equipment, transmission, and backup/distributed power.",
         "keywords": ["grid", "electrification", "electrical equipment", "power generation", "transmission", "turbines"],
+        "sector_tags": ["Utilities", "Industrials"],
+        "macro_sensitivities": ["power demand", "grid upgrade cycle", "AI data center buildout"],
     },
 
     # ── 17. Nuclear Energy ────────────────────────────────────────────────────
@@ -394,6 +448,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["utilities", "energy", "industrials", "materials"],
         "description": "Nuclear fuel, uranium mining, reactor equipment, SMRs, and nuclear utility operators.",
         "keywords": ["nuclear", "uranium", "reactor", "SMR", "nuclear power", "nuclear fuel"],
+        "sector_tags": ["Energy", "Utilities"],
+        "macro_sensitivities": ["AI power demand", "energy policy", "carbon neutrality"],
     },
 
     # ── 18. Oil & Gas ─────────────────────────────────────────────────────────
@@ -407,6 +463,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["energy"],
         "description": "Exploration, production, integrated oil, LNG, midstream, and oil services.",
         "keywords": ["oil", "gas", "E&P", "upstream", "LNG", "midstream", "oil services", "refining"],
+        "sector_tags": ["Energy"],
+        "macro_sensitivities": ["crude oil price", "OPEC+ decisions", "global demand", "USD"],
     },
 
     # ── 19. Industrial Automation ─────────────────────────────────────────────
@@ -420,6 +478,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "technology"],
         "description": "Industrial robots, automation systems, process control, and factory sensors.",
         "keywords": ["robotics", "automation", "industrial robots", "cobots", "process control", "sensors"],
+        "sector_tags": ["Technology", "Industrials"],
+        "macro_sensitivities": ["labor costs", "AI adoption", "capex", "manufacturing reshoring"],
     },
 
     # ── 20. Construction & Infrastructure ────────────────────────────────────
@@ -433,6 +493,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "materials"],
         "description": "Engineering, heavy construction, infrastructure projects, building products, and heavy equipment.",
         "keywords": ["construction", "infrastructure", "engineering", "building", "heavy equipment"],
+        "sector_tags": ["Industrials", "Materials"],
+        "macro_sensitivities": ["infrastructure spending", "interest rates", "commodity costs"],
     },
 
     # ── 21. Transportation & Mobility ─────────────────────────────────────────
@@ -446,6 +508,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "consumer_discretionary"],
         "description": "Travel, freight, logistics, rail, shipping, and passenger mobility.",
         "keywords": ["transportation", "travel", "logistics", "freight", "rail", "airline", "shipping"],
+        "sector_tags": ["Industrials", "Consumer Discretionary"],
+        "macro_sensitivities": ["consumer spending", "fuel costs", "global trade"],
     },
 
     # ── 22. Quantum Computing (promoted from sub_theme; ID "quantum" preserved) ─
@@ -459,6 +523,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "Quantum computing hardware, software, and quantum networking.",
         "keywords": ["quantum computing", "qubit", "quantum hardware", "quantum software", "quantum error correction"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["R&D spending", "government grants", "AI adjacency"],
         "aliases": ["quantum_computing"],
     },
 
@@ -473,6 +539,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology", "financials"],
         "description": "Bitcoin miners, digital asset platforms, and blockchain infrastructure equities.",
         "keywords": ["bitcoin", "crypto", "blockchain", "digital assets", "mining", "DeFi"],
+        "sector_tags": ["Technology", "Financials"],
+        "macro_sensitivities": ["bitcoin price", "regulatory risk", "risk appetite", "liquidity"],
     },
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -491,6 +559,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["materials", "consumer_staples"],
         "description": "Fertilizers, crop chemicals, and agricultural input companies.",
         "keywords": ["fertilizer", "crop protection", "agchem", "potash", "nitrogen", "phosphate"],
+        "sector_tags": ["Materials"],
+        "macro_sensitivities": ["commodity prices", "crop demand", "China potash supply"],
     },
 
     "farm_machinery": {
@@ -504,6 +574,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "consumer_staples"],
         "description": "Agricultural machinery, precision farming equipment, and related services.",
         "keywords": ["farm equipment", "precision agriculture", "tractors", "combines", "irrigation"],
+        "sector_tags": ["Industrials"],
+        "macro_sensitivities": ["farm income", "crop prices", "infrastructure spend"],
     },
 
     "food_producers": {
@@ -517,6 +589,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["consumer_staples", "materials"],
         "description": "Grain processors, food manufacturers, and agricultural commodity traders.",
         "keywords": ["food processing", "grain", "milling", "agricultural commodity", "food manufacturer"],
+        "sector_tags": ["Consumer Staples", "Materials"],
+        "macro_sensitivities": ["food inflation", "grain prices", "consumer spending"],
     },
 
     # ── Under Consumer & Housing ──────────────────────────────────────────────
@@ -531,6 +605,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["consumer_discretionary", "consumer_staples"],
         "description": "General merchandise retailers, e-commerce, specialty retail, and discount chains.",
         "keywords": ["retail", "consumer spending", "e-commerce", "big box", "discount", "merchandise"],
+        "sector_tags": ["Consumer Discretionary", "Consumer Staples"],
+        "macro_sensitivities": ["consumer confidence", "wages", "inflation", "credit"],
     },
 
     "homebuilders": {
@@ -544,6 +620,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["consumer_discretionary", "real_estate"],
         "description": "Residential homebuilders and related building materials and services.",
         "keywords": ["homebuilders", "residential construction", "housing", "new homes"],
+        "sector_tags": ["Consumer Discretionary", "Real Estate"],
+        "macro_sensitivities": ["mortgage rates", "housing starts", "consumer confidence"],
     },
 
     # ── Under Banking ─────────────────────────────────────────────────────────
@@ -558,6 +636,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["financials"],
         "description": "US regional and community banks with concentrated geographic deposit bases.",
         "keywords": ["regional banks", "community banking", "CRE", "deposits", "NIM"],
+        "sector_tags": ["Financials"],
+        "macro_sensitivities": ["Fed rates", "CRE exposure", "deposit stability", "yield curve"],
     },
 
     # ── Under Healthcare Innovation ───────────────────────────────────────────
@@ -572,6 +652,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["healthcare"],
         "description": "Biopharmaceutical drug development, gene therapy, and precision medicine.",
         "keywords": ["biotech", "biopharma", "clinical trials", "FDA", "drug development", "gene therapy"],
+        "sector_tags": ["Healthcare"],
+        "macro_sensitivities": ["FDA approvals", "risk appetite", "M&A activity"],
     },
 
     "medical_devices": {
@@ -585,6 +667,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["healthcare"],
         "description": "Medical instruments, surgical systems, implants, and diagnostic equipment.",
         "keywords": ["medical devices", "surgical", "implants", "diagnostics equipment", "cardiac"],
+        "sector_tags": ["Healthcare"],
+        "macro_sensitivities": ["procedure volumes", "hospital budgets", "FDA approvals", "M&A"],
     },
 
     "diagnostics_life_science": {
@@ -598,6 +682,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["healthcare"],
         "description": "In-vitro diagnostics, genomics sequencing, lab instruments, and life-science tools.",
         "keywords": ["diagnostics", "genomics", "life science tools", "lab instruments", "sequencing"],
+        "sector_tags": ["Healthcare"],
+        "macro_sensitivities": ["R&D spending", "hospital budgets", "clinical volume"],
     },
 
     # ── Under Metals & Mining ─────────────────────────────────────────────────
@@ -612,6 +698,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["materials"],
         "description": "Gold miners, silver producers, platinum-group metals, and royalty/streaming companies.",
         "keywords": ["gold miners", "silver miners", "precious metals", "royalty streaming", "PGMs"],
+        "sector_tags": ["Materials", "Commodities"],
+        "macro_sensitivities": ["real yields", "USD", "inflation", "geopolitical risk"],
     },
 
     "base_metals_diversified": {
@@ -625,6 +713,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["materials"],
         "description": "Copper, nickel, zinc, aluminum, iron ore, and diversified mining portfolios.",
         "keywords": ["copper", "nickel", "zinc", "aluminum", "diversified mining", "base metals"],
+        "sector_tags": ["Materials", "Mining"],
+        "macro_sensitivities": ["China manufacturing", "global growth", "USD", "supply constraints"],
         "aliases": ["copper_miners_structural"],
     },
 
@@ -639,6 +729,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["materials"],
         "description": "Rare earth elements, magnet materials, graphite, antimony, and strategic mineral supply chains.",
         "keywords": ["rare earth", "critical minerals", "magnets", "graphite", "antimony", "defense supply chain"],
+        "sector_tags": ["Materials", "Mining"],
+        "macro_sensitivities": ["China export controls", "EV demand", "defense spending"],
         "aliases": ["rare_earth_metals", "rare_earths_strategic_minerals"],
     },
 
@@ -653,6 +745,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["materials"],
         "description": "Lithium extraction, hard-rock and brine production, refining, and chemical conversion.",
         "keywords": ["lithium", "lithium mining", "brines", "hard rock lithium", "lithium carbonate"],
+        "sector_tags": ["Materials", "Mining"],
+        "macro_sensitivities": ["EV adoption", "battery demand", "China supply"],
     },
 
     "steel_ferrous": {
@@ -666,6 +760,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["materials"],
         "description": "Steelmakers, ferrous-metal processors, and metallurgical feedstock businesses.",
         "keywords": ["steel", "ferrous metals", "iron ore", "steelmaker", "mini-mill", "metallurgical"],
+        "sector_tags": ["Materials"],
+        "macro_sensitivities": ["China manufacturing", "construction spend", "tariffs", "infrastructure"],
     },
 
     # ── Under Advanced Materials ──────────────────────────────────────────────
@@ -680,6 +776,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["materials", "industrials"],
         "description": "High-performance alloys, titanium, superalloys, and engineered metal products.",
         "keywords": ["specialty alloys", "titanium", "superalloys", "high performance metals", "nickel alloys"],
+        "sector_tags": ["Materials", "Industrials"],
+        "macro_sensitivities": ["aerospace demand", "defense spending", "titanium supply"],
     },
 
     "electronic_materials": {
@@ -693,6 +791,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["materials", "technology"],
         "description": "Wafer chemicals, electronic gases, CMP slurries, process materials, and specialty substrate inputs.",
         "keywords": ["semiconductor materials", "wafer chemicals", "CMP", "electronic materials", "process gases"],
+        "sector_tags": ["Materials", "Technology"],
+        "macro_sensitivities": ["semiconductor capex", "specialty chemicals demand", "China supply"],
     },
 
     "composites_materials": {
@@ -706,6 +806,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["materials", "industrials"],
         "description": "Carbon fiber, polymer composites, performance plastics, and specialty industrial materials.",
         "keywords": ["composites", "carbon fiber", "specialty materials", "polymers", "performance plastics"],
+        "sector_tags": ["Materials", "Industrials"],
+        "macro_sensitivities": ["aerospace demand", "defense spending", "lightweighting trends"],
     },
 
     # ── Under Semiconductors ──────────────────────────────────────────────────
@@ -720,6 +822,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "GPUs, AI accelerators, custom compute ASICs, and compute-related semiconductor IP.",
         "keywords": ["AI chips", "GPU", "accelerator", "ASIC", "compute silicon", "AI processor"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["AI capex", "GPU demand", "hyperscaler spending"],
     },
 
     "dc_connectivity_silicon": {
@@ -739,6 +843,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "Silicon and semiconductor IP for SerDes, PCIe, CXL, retimers, memory connectivity, and high-speed data-center interconnects.",
         "keywords": ["SerDes", "PCIe", "CXL", "retimer", "memory connectivity", "interconnect silicon", "fabric silicon"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["AI capex", "data center buildout", "hyperscaler connectivity spending"],
     },
 
     "memory_storage": {
@@ -751,6 +857,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "candidate_symbols": ["MU", "WDC", "STX", "SNDK", "SIMO", "RMBS", "NAND"],
         "description": "DRAM, NAND flash, storage devices, controllers, and memory-related semiconductor IP.",
         "keywords": ["memory", "DRAM", "NAND", "storage", "flash", "SSD", "HDD", "memory controller"],
+        "sector_tags": ["Technology", "Semiconductors"],
+        "macro_sensitivities": ["AI demand", "data center capex", "PC/mobile upgrade cycle"],
     },
 
     "analog_power_mixed": {
@@ -764,6 +872,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "Analog, mixed-signal, power-management, and power-semiconductor companies.",
         "keywords": ["analog", "mixed-signal", "power management", "power semiconductor", "ADC", "DAC"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["EV adoption", "industrial automation", "power management demand"],
     },
 
     "foundry_manufacturing": {
@@ -777,6 +887,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "Wafer fabrication, foundry operations, and integrated manufacturing where that is the defining business role.",
         "keywords": ["foundry", "wafer fab", "semiconductor manufacturing", "TSMC", "pure-play foundry"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["leading-edge node ramp", "geopolitics", "capex cycles"],
     },
 
     "semicap_equip": {
@@ -790,6 +902,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "Wafer-fab process equipment for deposition, etch, lithography, and metrology.",
         "keywords": ["semiconductor equipment", "wafer fab equipment", "lithography", "etch", "deposition", "AMAT", "ASML"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["fab capex cycles", "leading-edge node ramp", "China restrictions"],
     },
 
     "semicap_materials_node": {
@@ -803,6 +917,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["materials", "technology"],
         "description": "Wafers, process chemicals, gases, and other semiconductor-production input materials.",
         "keywords": ["semiconductor materials", "wafer", "process chemicals", "gases", "CMP slurry"],
+        "sector_tags": ["Materials", "Technology"],
+        "macro_sensitivities": ["fab capex cycles", "specialty chemicals demand", "China supply"],
     },
 
     "test_measurement": {
@@ -816,6 +932,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "Semiconductor testing, inspection, metrology, burn-in, handlers, and relevant electronic test systems.",
         "keywords": ["semiconductor test", "ATE", "burn-in", "inspection", "metrology", "handler", "test socket"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["fab capex cycles", "EV/auto chip demand", "AI chip ramp"],
     },
 
     "packaging_substrates": {
@@ -829,6 +947,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "Advanced packaging, OSAT, flip-chip, substrates, and packaging equipment.",
         "keywords": ["packaging", "OSAT", "advanced packaging", "substrates", "flip-chip", "HBM packaging"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["AI chip demand", "advanced packaging ramp", "HBM adoption"],
         "aliases": ["substrates_packaging_structural"],
     },
 
@@ -844,6 +964,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "Networking switches, routers, fabric products, and infrastructure for data-center connectivity.",
         "keywords": ["networking", "switches", "routers", "fabric", "Ethernet", "InfiniBand", "data center network"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["AI capex", "data center buildout", "hyperscaler spending"],
     },
 
     "optical_interconnects": {
@@ -857,6 +979,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "Optical transceivers, coherent systems, photonic interconnects, and silicon photonics for data-center connectivity.",
         "keywords": ["optical transceivers", "coherent", "silicon photonics", "QSFP", "800G", "optical interconnect"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["AI capex", "optical bandwidth demand", "data center buildout"],
     },
 
     "servers_compute_systems": {
@@ -870,6 +994,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "Server hardware, rack systems, and integrated compute-system vendors.",
         "keywords": ["servers", "rack", "compute systems", "server hardware", "OCP", "HPC"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["AI capex", "server refresh cycle", "hyperscaler spending"],
     },
 
     "ai_cloud_dc_operators": {
@@ -883,6 +1009,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology", "real_estate", "utilities"],
         "description": "AI cloud platforms, GPU-cloud operators, data-center operators, colocation operators, and relevant REIT businesses.",
         "keywords": ["data center operators", "AI cloud", "GPU cloud", "colocation", "colo REIT", "hyperscaler"],
+        "sector_tags": ["Technology", "Real Estate"],
+        "macro_sensitivities": ["AI capex", "cloud growth", "power demand"],
     },
 
     "power_cooling": {
@@ -899,6 +1027,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology", "industrials"],
         "description": "Data-center power distribution, thermal management, cooling systems, UPS, and backup power.",
         "keywords": ["power", "cooling", "thermal management", "UPS", "liquid cooling", "HVAC", "PDU"],
+        "sector_tags": ["Industrials", "Technology"],
+        "macro_sensitivities": ["AI data center buildout", "power grid demand", "industrial capex"],
     },
 
     # ── Under Software ────────────────────────────────────────────────────────
@@ -913,6 +1043,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "SaaS, PaaS, and cloud-native software platforms.",
         "keywords": ["cloud", "SaaS", "cloud computing", "platform software", "AWS", "Azure"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["enterprise IT budgets", "AI adoption", "interest rates (multiples)"],
         "aliases": ["cloud_computing"],
     },
 
@@ -927,6 +1059,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "Network security, endpoint security, identity, SIEM, and zero-trust platforms.",
         "keywords": ["cybersecurity", "zero trust", "endpoint security", "SIEM", "identity", "network security"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["threat landscape", "enterprise IT budgets", "AI adoption"],
     },
 
     "ai_software_platforms": {
@@ -940,6 +1074,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "AI software platforms, data analytics, AI Ops, and enterprise AI applications.",
         "keywords": ["AI software", "data platform", "AI Ops", "enterprise AI", "AI analytics"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["AI capex", "enterprise AI adoption", "defense AI spending"],
     },
 
     # ── Under Photonics & Optical Systems ─────────────────────────────────────
@@ -954,6 +1090,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology", "industrials"],
         "description": "Fiber lasers, solid-state lasers, optical components, and photonic manufacturing.",
         "keywords": ["fiber laser", "industrial laser", "optical components", "photonic", "laser diode"],
+        "sector_tags": ["Technology", "Industrials"],
+        "macro_sensitivities": ["AI data center buildout", "telecom capex", "defense optics spending"],
     },
 
     "sensing_lidar": {
@@ -967,6 +1105,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology", "industrials"],
         "description": "LiDAR sensors, radar, and photonic sensing systems for automotive and industrial applications.",
         "keywords": ["LiDAR", "sensing", "radar", "MEMS", "optical sensing", "autonomous sensing"],
+        "sector_tags": ["Technology", "Industrials"],
+        "macro_sensitivities": ["autonomous vehicles", "defense sensing", "industrial automation"],
     },
 
     # ── Under Defense & Aerospace ─────────────────────────────────────────────
@@ -981,6 +1121,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "technology"],
         "description": "Defense systems, aircraft, ships, electronic warfare, radar, and prime-contractor platforms.",
         "keywords": ["defense platforms", "missiles", "aircraft", "radar", "electronic warfare", "C4ISR"],
+        "sector_tags": ["Industrials", "Technology", "Defense"],
+        "macro_sensitivities": ["geopolitical risk", "defense budgets", "NATO spending"],
     },
 
     "drones": {
@@ -994,6 +1136,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "technology"],
         "description": "Unmanned aerial vehicles, autonomous systems, and counter-drone technology.",
         "keywords": ["drones", "UAV", "autonomous systems", "VTOL", "counter-drone", "eVTOL"],
+        "sector_tags": ["Technology", "Industrials", "Defense"],
+        "macro_sensitivities": ["FAA regulation", "defense budgets", "AI automation"],
     },
 
     # ── Under Space Economy ───────────────────────────────────────────────────
@@ -1008,6 +1152,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "technology"],
         "description": "Launch vehicles, spacecraft, in-space propulsion, and commercial space infrastructure.",
         "keywords": ["launch", "rocket", "spacecraft", "LEO", "moon", "in-space systems"],
+        "sector_tags": ["Industrials", "Technology"],
+        "macro_sensitivities": ["government space contracts", "commercial launch market", "satellite buildout"],
     },
 
     "satellite_comms": {
@@ -1021,6 +1167,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["communication_services", "industrials"],
         "description": "Satellite connectivity, broadband, and communications services.",
         "keywords": ["satellite communications", "broadband satellite", "LEO constellation", "GEO satellite"],
+        "sector_tags": ["Communication Services", "Industrials"],
+        "macro_sensitivities": ["constellation buildout", "broadband demand", "geopolitical risk"],
     },
 
     "earth_observation": {
@@ -1034,6 +1182,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology", "industrials"],
         "description": "Earth imaging, geospatial intelligence, weather data, and space-derived analytics.",
         "keywords": ["earth observation", "geospatial", "remote sensing", "SAR", "weather satellite"],
+        "sector_tags": ["Technology", "Industrials"],
+        "macro_sensitivities": ["defense spending", "commercial data demand", "government contracts"],
     },
 
     # ── Under Clean Energy ────────────────────────────────────────────────────
@@ -1048,6 +1198,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["utilities", "energy", "industrials"],
         "description": "Solar panel manufacturers, inverter companies, and solar installation businesses.",
         "keywords": ["solar", "photovoltaic", "solar panels", "inverter", "solar installation", "utility-scale solar"],
+        "sector_tags": ["Energy", "Utilities", "Clean Tech"],
+        "macro_sensitivities": ["IRA/solar policy", "China competition", "interest rates", "power demand"],
     },
 
     "battery_tech_storage": {
@@ -1061,6 +1213,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["utilities", "industrials", "materials"],
         "description": "Battery cells, battery components, storage systems, grid-storage platforms, and storage integrators.",
         "keywords": ["battery", "energy storage", "grid storage", "battery cells", "solid state battery"],
+        "sector_tags": ["Materials", "Industrials"],
+        "macro_sensitivities": ["grid storage demand", "IRA policy", "utility procurement"],
     },
 
     "hydrogen_fuel_cells": {
@@ -1074,6 +1228,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["utilities", "industrials", "energy"],
         "description": "Green hydrogen production, fuel cells, electrolyzers, and hydrogen infrastructure.",
         "keywords": ["hydrogen", "fuel cells", "green hydrogen", "electrolyzer", "PEM", "SOFC"],
+        "sector_tags": ["Energy", "Industrials"],
+        "macro_sensitivities": ["IRA policy", "industrial decarbonization", "green hydrogen cost"],
     },
 
     "wind_renewable": {
@@ -1087,6 +1243,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["utilities", "energy", "industrials"],
         "description": "Wind turbine manufacturers, wind and renewable power generation, and renewable utilities.",
         "keywords": ["wind", "renewable generation", "offshore wind", "turbines", "wind power"],
+        "sector_tags": ["Energy", "Utilities"],
+        "macro_sensitivities": ["IRA policy", "offshore wind permitting", "power demand"],
     },
 
     # ── Under Grid & Electrification ──────────────────────────────────────────
@@ -1101,6 +1259,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "utilities"],
         "description": "Switchgear, transformers, power distribution, and electrical grid hardware.",
         "keywords": ["switchgear", "transformer", "power distribution", "grid hardware", "electrical equipment"],
+        "sector_tags": ["Industrials", "Utilities"],
+        "macro_sensitivities": ["grid capex", "transformer demand", "AI power demand"],
     },
 
     "power_generation_turbines": {
@@ -1114,6 +1274,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "utilities"],
         "description": "Gas turbines, steam turbines, and large-scale power generation equipment.",
         "keywords": ["turbines", "power generation", "gas turbine", "steam turbine", "combined cycle"],
+        "sector_tags": ["Industrials", "Utilities"],
+        "macro_sensitivities": ["power demand growth", "gas turbine orders", "grid capex"],
     },
 
     "distributed_backup_power": {
@@ -1127,6 +1289,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "utilities"],
         "description": "Backup generators, UPS, microgrid, and distributed power systems.",
         "keywords": ["backup power", "generators", "UPS", "microgrid", "distributed power"],
+        "sector_tags": ["Industrials", "Utilities"],
+        "macro_sensitivities": ["data center power demand", "grid resilience", "AI capex"],
     },
 
     # ── Under Nuclear Energy ──────────────────────────────────────────────────
@@ -1141,6 +1305,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["materials", "energy"],
         "description": "Uranium mining, enrichment, and nuclear fuel cycle businesses.",
         "keywords": ["uranium", "uranium mining", "nuclear fuel", "enrichment", "yellow cake"],
+        "sector_tags": ["Energy", "Materials"],
+        "macro_sensitivities": ["AI power demand", "uranium spot price", "nuclear policy"],
     },
 
     "nuclear_equipment_services": {
@@ -1154,6 +1320,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "utilities"],
         "description": "Nuclear reactor components, services, and maintenance businesses.",
         "keywords": ["nuclear equipment", "reactor services", "nuclear components", "decommissioning"],
+        "sector_tags": ["Energy", "Industrials"],
+        "macro_sensitivities": ["nuclear buildout policy", "SMR adoption", "defense nuclear"],
     },
 
     "smr_advanced_reactors": {
@@ -1167,6 +1335,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "utilities"],
         "description": "Small modular reactors, advanced nuclear designs, and next-generation reactor developers.",
         "keywords": ["SMR", "small modular reactor", "advanced nuclear", "microreactor", "thorium"],
+        "sector_tags": ["Energy", "Technology"],
+        "macro_sensitivities": ["AI power demand", "carbon neutrality", "government funding"],
     },
 
     "nuclear_utilities_operators": {
@@ -1180,6 +1350,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["utilities"],
         "description": "Electric utilities and independent power producers with significant nuclear generation.",
         "keywords": ["nuclear utility", "nuclear operator", "nuclear power plant", "baseload nuclear"],
+        "sector_tags": ["Utilities", "Energy"],
+        "macro_sensitivities": ["power demand", "capacity auctions", "energy policy"],
     },
 
     # ── Under Oil & Gas ───────────────────────────────────────────────────────
@@ -1194,6 +1366,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["energy"],
         "description": "Exploration and production companies focused on oil and gas upstream activities.",
         "keywords": ["E&P", "upstream", "exploration", "production", "shale", "offshore drilling"],
+        "sector_tags": ["Energy"],
+        "macro_sensitivities": ["crude oil price", "E&P capex", "shale production"],
     },
 
     "integrated_oil_refining": {
@@ -1207,6 +1381,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["energy"],
         "description": "Integrated oil companies and refiners spanning upstream, midstream, and downstream.",
         "keywords": ["integrated oil", "refining", "downstream", "crack spread", "major oil", "refinery"],
+        "sector_tags": ["Energy"],
+        "macro_sensitivities": ["crude oil price", "crack spreads", "global demand"],
     },
 
     "lng_gas": {
@@ -1220,6 +1396,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["energy"],
         "description": "LNG exporters, natural gas producers, and natural gas pipeline operators.",
         "keywords": ["LNG", "natural gas", "liquefied natural gas", "gas export", "gas producer"],
+        "sector_tags": ["Energy"],
+        "macro_sensitivities": ["nat gas prices", "export demand", "Europe energy", "winter demand"],
     },
 
     "midstream_pipelines": {
@@ -1233,6 +1411,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["energy"],
         "description": "Pipeline, storage, and gathering & processing MLPs and midstream companies.",
         "keywords": ["midstream", "pipelines", "MLP", "storage", "gathering", "processing"],
+        "sector_tags": ["Energy"],
+        "macro_sensitivities": ["production volumes", "throughput fees", "interest rates"],
     },
 
     "oil_services": {
@@ -1246,6 +1426,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["energy"],
         "description": "Oilfield services, drilling, completion, and well services.",
         "keywords": ["oil services", "drilling", "completion", "oilfield services", "fracking", "wellbore"],
+        "sector_tags": ["Energy"],
+        "macro_sensitivities": ["oil price", "rig count", "E&P capex", "OPEC production levels"],
     },
 
     # ── Under Industrial Automation ───────────────────────────────────────────
@@ -1260,6 +1442,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "technology"],
         "description": "Industrial robots, collaborative robots, automated assembly, and robotic-process automation.",
         "keywords": ["robotics", "automation", "cobots", "industrial robots", "RPA", "autonomous mobile robots"],
+        "sector_tags": ["Technology", "Industrials"],
+        "macro_sensitivities": ["labor costs", "AI adoption", "capex", "manufacturing reshoring"],
     },
 
     "industrial_controls_sensors": {
@@ -1273,6 +1457,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "technology"],
         "description": "PLC/DCS process control, industrial sensors, IoT instrumentation, and factory automation software.",
         "keywords": ["process control", "PLC", "DCS", "industrial sensors", "IoT", "SCADA"],
+        "sector_tags": ["Industrials", "Technology"],
+        "macro_sensitivities": ["industrial capex", "automation trend", "IoT growth"],
     },
 
     # ── Under Construction & Infrastructure ───────────────────────────────────
@@ -1287,6 +1473,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials"],
         "description": "Engineering, procurement, and construction (EPC) contractors and infrastructure builders.",
         "keywords": ["EPC", "engineering", "construction", "infrastructure projects", "civil engineering"],
+        "sector_tags": ["Industrials"],
+        "macro_sensitivities": ["infrastructure spending", "government contracts", "interest rates"],
     },
 
     "heavy_equipment": {
@@ -1300,6 +1488,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials"],
         "description": "Heavy construction equipment, mining machinery, and large industrial machinery.",
         "keywords": ["heavy equipment", "excavators", "bulldozers", "cranes", "mining equipment"],
+        "sector_tags": ["Industrials"],
+        "macro_sensitivities": ["construction activity", "commodity prices", "global growth"],
     },
 
     "building_products": {
@@ -1313,6 +1503,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials", "materials"],
         "description": "Aggregates, cement, insulation, windows, flooring, and building product manufacturers.",
         "keywords": ["building products", "aggregates", "cement", "insulation", "flooring", "building materials"],
+        "sector_tags": ["Industrials", "Materials"],
+        "macro_sensitivities": ["housing starts", "renovation spending", "commodity costs"],
     },
 
     # ── Under Transportation & Mobility ───────────────────────────────────────
@@ -1327,6 +1519,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["consumer_discretionary", "industrials"],
         "description": "Airlines, cruise lines, hotels, travel services, and leisure businesses.",
         "keywords": ["travel", "airlines", "cruise", "hotels", "leisure", "tourism"],
+        "sector_tags": ["Consumer Discretionary", "Industrials"],
+        "macro_sensitivities": ["consumer spending", "fuel costs", "post-COVID recovery"],
     },
 
     "freight_logistics": {
@@ -1340,6 +1534,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["industrials"],
         "description": "Freight carriers, rail, trucking, supply chain logistics, and parcel delivery.",
         "keywords": ["freight", "logistics", "trucking", "rail", "supply chain", "parcel", "shipping"],
+        "sector_tags": ["Industrials"],
+        "macro_sensitivities": ["global trade", "fuel costs", "e-commerce volumes", "supply chain"],
     },
 
     # ── Under Crypto Equities / Blockchain ────────────────────────────────────
@@ -1354,6 +1550,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "Bitcoin mining operations and hash-rate infrastructure businesses.",
         "keywords": ["bitcoin mining", "hash rate", "ASICs", "BTC miner", "proof of work"],
+        "sector_tags": ["Technology", "Energy"],
+        "macro_sensitivities": ["bitcoin price", "energy costs", "regulatory risk", "hash rate"],
     },
 
     "digital_asset_platforms": {
@@ -1367,6 +1565,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["financials", "technology"],
         "description": "Crypto exchanges, custodians, brokers, and digital-asset treasury companies.",
         "keywords": ["crypto exchange", "digital assets", "custody", "bitcoin treasury", "crypto brokerage"],
+        "sector_tags": ["Financials", "Technology"],
+        "macro_sensitivities": ["crypto market cap", "regulatory risk", "retail engagement"],
     },
 
     "blockchain_infrastructure": {
@@ -1380,6 +1580,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "rollup_sector_ids": ["technology"],
         "description": "Blockchain technology, DeFi infrastructure, smart-contract platforms, and Web3 equities.",
         "keywords": ["blockchain", "DeFi", "Web3", "smart contracts", "Layer 2", "infrastructure"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["DeFi activity", "ETH price", "regulatory risk"],
     },
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -1400,6 +1602,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "candidate_symbols": ["NEM", "GOLD", "AEM"],
         "description": "Gold commodity price exposure and gold-miner performance lens. Not an assignable stock-taxonomy bucket.",
         "keywords": ["gold", "GLD", "gold miners", "bullion"],
+        "sector_tags": ["Materials", "Commodities"],
+        "macro_sensitivities": ["real yields", "USD", "inflation", "geopolitical risk"],
         "aliases": ["gold_commodity"],
     },
 
@@ -1415,6 +1619,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "candidate_symbols": ["PAAS", "AG", "MAG"],
         "description": "Silver commodity price exposure and silver-miner performance lens. Not an assignable stock-taxonomy bucket.",
         "keywords": ["silver", "SLV", "silver miners"],
+        "sector_tags": ["Materials", "Commodities"],
+        "macro_sensitivities": ["gold price", "industrial demand", "real yields", "solar growth"],
         "aliases": ["silver_commodity"],
     },
 
@@ -1430,6 +1636,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "candidate_symbols": ["FCX", "SCCO", "TECK", "HBM"],
         "description": "Copper commodity price exposure and copper-miner performance lens. Structural stock membership: use Base Metals & Diversified Mining.",
         "keywords": ["copper", "COPX", "copper miners"],
+        "sector_tags": ["Materials", "Commodities"],
+        "macro_sensitivities": ["China manufacturing", "electrification demand", "USD", "global growth"],
         "aliases": ["copper_miners", "copper_commodity"],
     },
 
@@ -1451,6 +1659,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "description": "DEPRECATED — split into dc_connectivity_silicon (Semiconductors) and networking_fabric_infra (Data Center Infrastructure).",
         "migration_targets": ["dc_connectivity_silicon", "networking_fabric_infra"],
         "keywords": ["AI networking", "ai_networking", "DC networking silicon"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["AI capex", "data center buildout", "hyperscaler spending"],
         "aliases": ["ai_networking"],
     },
 
@@ -1466,6 +1676,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "description": "DEPRECATED — split stock-by-stock into semicap_equip, semicap_materials_node, test_measurement, packaging_substrates.",
         "migration_targets": ["semicap_equip", "semicap_materials_node", "test_measurement", "packaging_substrates"],
         "keywords": ["semicap", "semiconductor equipment", "semi materials"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["fab capex cycles", "leading-edge node ramp", "China restrictions"],
         "aliases": [
             "semicap_equipment", "semicap", "semiconductor_equipment",
             "semi_equipment", "semi_materials", "semiconductor_materials",
@@ -1484,6 +1696,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "description": "DEPRECATED — lithium miners → lithium (Metals & Mining); battery/storage → battery_tech_storage (Clean Energy).",
         "migration_targets": ["lithium", "battery_tech_storage"],
         "keywords": ["lithium", "battery tech", "LIT", "BATT"],
+        "sector_tags": ["Materials", "Industrials"],
+        "macro_sensitivities": ["EV adoption", "China supply", "critical minerals policy"],
         "aliases": ["lithium_battery"],
     },
 
@@ -1498,6 +1712,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "description": "DEPRECATED — replaced by nuclear_energy parent theme with four children.",
         "migration_targets": ["nuclear_energy", "uranium_nuclear_fuel", "nuclear_equipment_services", "smr_advanced_reactors", "nuclear_utilities_operators"],
         "keywords": ["uranium", "nuclear energy", "URA", "URNM", "NLR"],
+        "sector_tags": ["Energy", "Utilities"],
+        "macro_sensitivities": ["AI power demand", "energy policy", "carbon neutrality"],
         "aliases": ["uranium_nuclear"],
     },
 
@@ -1512,6 +1728,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "description": "DEPRECATED — replaced by advanced_materials parent theme.",
         "migration_targets": ["advanced_materials"],
         "keywords": ["chemicals", "materials", "specialty materials", "XLB"],
+        "sector_tags": ["Materials"],
+        "macro_sensitivities": ["energy costs", "China demand", "construction activity"],
         "aliases": ["chemicals_materials"],
     },
 
@@ -1526,6 +1744,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "description": "DEPRECATED — replaced by photonics_optical parent theme (optical_components_lasers child).",
         "migration_targets": ["photonics_optical", "optical_components_lasers", "optical_interconnects"],
         "keywords": ["photonics", "lasers", "optical", "IPGP", "COHR"],
+        "sector_tags": ["Technology"],
+        "macro_sensitivities": ["AI data center buildout", "telecom capex", "defense optics spending"],
         "aliases": ["photonics_lasers"],
     },
 
@@ -1541,6 +1761,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "description": "DEPRECATED — replaced by packaging_substrates (Packaging & Substrates) under Semiconductors.",
         "migration_targets": ["packaging_substrates"],
         "keywords": ["substrates", "packaging", "AMKR", "KLIC"],
+        "sector_tags": ["Technology", "Semiconductors"],
+        "macro_sensitivities": ["AI chip demand", "fab capex cycles", "leading-edge packaging ramp"],
         "aliases": ["substrates_packaging"],
     },
 
@@ -1555,6 +1777,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "description": "DEPRECATED — replaced by transportation_mobility parent theme (travel_leisure + freight_logistics children).",
         "migration_targets": ["transportation_mobility", "travel_leisure", "freight_logistics"],
         "keywords": ["travel", "transportation", "airlines", "JETS", "IYT"],
+        "sector_tags": ["Industrials", "Consumer Discretionary"],
+        "macro_sensitivities": ["consumer spending", "fuel costs", "post-COVID recovery"],
         "aliases": ["travel_transportation"],
     },
 }

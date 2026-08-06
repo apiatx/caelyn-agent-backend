@@ -171,7 +171,9 @@ def test_cybersecurity_parent():
 # ── 9. Industrials → Defense hierarchy ───────────────────────────────────────
 
 def test_defense_rollup():
-    assert node("defense")["rollup_sector_ids"] == ["industrials"]
+    # Contract 2: defense rolls up to both industrials AND technology
+    rollup = set(node("defense")["rollup_sector_ids"])
+    assert rollup == {"industrials", "technology"}, f"defense rollup expected {{industrials,technology}}, got {rollup}"
 
 def test_drones_parent():
     assert node("drones")["parent_theme_id"] == "defense"
@@ -190,8 +192,11 @@ def test_clean_energy_rollup():
     assert rollup == {"utilities", "industrials", "energy"}
 
 def test_datacenter_infra_rollup():
+    # Contract 2: datacenter_infra must also include industrials (power_cooling players)
     rollup = set(node("datacenter_infra")["rollup_sector_ids"])
-    assert rollup == {"technology", "utilities", "real_estate"}
+    assert rollup == {"technology", "utilities", "real_estate", "industrials"}, (
+        f"datacenter_infra rollup expected {{technology,utilities,real_estate,industrials}}, got {rollup}"
+    )
 
 
 # ── 11. rollup_sector_ids values must all be canonical sector IDs ─────────────
@@ -250,12 +255,12 @@ def test_list_endpoint_fields_present():
     """
     All pre-existing fields that GET /api/themes/list returns must still be
     present on every registry node (backward compat).
+    Includes sector_tags and macro_sensitivities (Contract 4: restored in corrective commit).
     """
-    # sector_tags and macro_sensitivities were dropped in taxonomy v2 (unused).
-    # They are no longer required on every node.
     required_keys = {
         "classification", "parent_sector", "proxy_type", "proxy_symbols",
         "candidate_symbols", "keywords", "display_name",
+        "sector_tags", "macro_sensitivities",
     }
     missing = []
     for tid, meta in REG.items():
@@ -437,12 +442,15 @@ class TestGetEffectiveRollupSectorIds:
         assert set(r) == {"utilities", "industrials", "energy"}
 
     def test_datacenter_infra_explicit_cross_sector(self):
+        # Contract 2 fix: datacenter_infra now includes industrials (power/cooling players)
         r = get_effective_rollup_sector_ids("datacenter_infra", REG)
-        assert set(r) == {"technology", "utilities", "real_estate"}
+        assert set(r) == {"technology", "utilities", "real_estate", "industrials"}
 
     def test_defense_explicit(self):
+        # Contract 2 fix: defense now includes both industrials and technology
         r = get_effective_rollup_sector_ids("defense", REG)
         assert "industrials" in r
+        assert "technology" in r
 
     # Nodes with NO explicit rollup_sector_ids — inherit via parent_sector
     def test_gold_inherits_via_parent_sector(self):
@@ -1920,3 +1928,316 @@ class TestThemeTaxonomyClassifier:
         params = sig.parameters
         assert "tickers"        in params
         assert "write_artifacts" in params
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CORRECTIVE COMMIT — Contract Tests (Contracts 2–16)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Contract 2 detail: rollup field corrections ───────────────────────────────
+
+def test_defense_rollup_includes_technology():
+    """Contract 2 explicit: defense.rollup_sector_ids must contain 'technology'."""
+    rollup = set(node("defense")["rollup_sector_ids"])
+    assert "technology" in rollup, f"defense rollup missing technology; got {rollup}"
+    assert "industrials" in rollup, f"defense rollup missing industrials; got {rollup}"
+
+
+def test_datacenter_infra_rollup_includes_industrials():
+    """Contract 2 explicit: datacenter_infra.rollup_sector_ids must contain 'industrials'."""
+    rollup = set(node("datacenter_infra")["rollup_sector_ids"])
+    assert "industrials" in rollup, f"datacenter_infra rollup missing industrials; got {rollup}"
+
+
+# ── Contract 3: AAOI placement ────────────────────────────────────────────────
+
+def test_aaoi_not_in_photonics_optical_candidates():
+    """AAOI must NOT appear in photonics_optical.candidate_symbols."""
+    assert "AAOI" not in node("photonics_optical").get("candidate_symbols", []), (
+        "AAOI must be removed from photonics_optical.candidate_symbols "
+        "(it belongs under optical_interconnects specifically)"
+    )
+
+
+def test_aaoi_in_optical_interconnects_or_dc_connectivity():
+    """AAOI (silicon photonics interconnect) should be in optical_interconnects or dc_connectivity_silicon."""
+    in_oi = "AAOI" in node("optical_interconnects").get("candidate_symbols", [])
+    in_dc = "AAOI" in node("dc_connectivity_silicon").get("candidate_symbols", [])
+    assert in_oi or in_dc, (
+        "AAOI should appear in optical_interconnects or dc_connectivity_silicon candidates"
+    )
+
+
+# ── Contract 4: sector_tags and macro_sensitivities on every node ─────────────
+
+class TestSectorTagsAndMacroSensitivities:
+    def test_all_nodes_have_sector_tags(self):
+        missing = [tid for tid, m in REG.items() if "sector_tags" not in m]
+        assert missing == [], f"Nodes missing sector_tags: {missing}"
+
+    def test_all_nodes_have_macro_sensitivities(self):
+        missing = [tid for tid, m in REG.items() if "macro_sensitivities" not in m]
+        assert missing == [], f"Nodes missing macro_sensitivities: {missing}"
+
+    def test_sector_tags_are_lists(self):
+        bad = [tid for tid, m in REG.items() if not isinstance(m.get("sector_tags"), list)]
+        assert bad == [], f"sector_tags must be lists: {bad}"
+
+    def test_macro_sensitivities_are_lists(self):
+        bad = [tid for tid, m in REG.items() if not isinstance(m.get("macro_sensitivities"), list)]
+        assert bad == [], f"macro_sensitivities must be lists: {bad}"
+
+    def test_assignable_nodes_have_nonempty_sector_tags(self):
+        from services.theme_rs_universe import THEME_RS_UNIVERSE
+        bad = [
+            tid for tid, m in THEME_RS_UNIVERSE.items()
+            if m.get("assignable", True)
+            and m.get("classification") in ("theme", "sub_theme")
+            and not m.get("sector_tags")
+        ]
+        assert bad == [], f"Assignable nodes have empty sector_tags: {bad}"
+
+
+# ── Contract 5: AI Networking merge-layer mapping ─────────────────────────────
+
+def test_section_map_ai_networking_points_to_deprecated_node():
+    """_SECTION_TO_THEME_ID['AI Networking'] must NOT blindly redirect to networking_fabric_infra."""
+    from services.theme_merge_layer import _SECTION_TO_THEME_ID
+    val = _SECTION_TO_THEME_ID.get("AI Networking")
+    assert val != "networking_fabric_infra", (
+        f"AI Networking must map to deprecated ai_networking node, not networking_fabric_infra; got {val!r}"
+    )
+    assert val == "ai_networking", f"Expected 'ai_networking', got {val!r}"
+
+
+def test_category_map_ai_networking_points_to_deprecated_node():
+    """_CATEGORY_TO_THEME_ID['AI Networking'] must NOT blindly redirect to networking_fabric_infra."""
+    from services.theme_merge_layer import _CATEGORY_TO_THEME_ID
+    val = _CATEGORY_TO_THEME_ID.get("AI Networking")
+    assert val != "networking_fabric_infra", (
+        f"AI Networking must map to deprecated ai_networking node, not networking_fabric_infra; got {val!r}"
+    )
+    assert val == "ai_networking", f"Expected 'ai_networking', got {val!r}"
+
+
+# ── Contract 8: Provider gate ─────────────────────────────────────────────────
+
+class TestProviderGate:
+    def _reload_clf(self, monkeypatch):
+        import importlib
+        import services.theme_taxonomy_classifier as clf
+        importlib.reload(clf)
+        return clf
+
+    def test_detect_provider_rejects_anthropic_fallback(self, monkeypatch):
+        """With only ANTHROPIC_API_KEY set, provider must be 'none'."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-anthropic")
+        for k in ("SOL56_MODEL_ID", "SOL_MODEL_ID", "OPENAI_API_KEY",
+                  "THEME_CLASSIFIER_MODEL", "GEMINI_API_KEY"):
+            monkeypatch.delenv(k, raising=False)
+        clf = self._reload_clf(monkeypatch)
+        provider, _ = clf._detect_provider()
+        assert provider == "none", f"Anthropic must not be auto-selected; got {provider!r}"
+
+    def test_detect_provider_rejects_gemini_fallback(self, monkeypatch):
+        """With only GEMINI_API_KEY set, provider must be 'none'."""
+        monkeypatch.setenv("GEMINI_API_KEY", "AIza-test")
+        for k in ("SOL56_MODEL_ID", "SOL_MODEL_ID", "OPENAI_API_KEY",
+                  "THEME_CLASSIFIER_MODEL", "ANTHROPIC_API_KEY"):
+            monkeypatch.delenv(k, raising=False)
+        clf = self._reload_clf(monkeypatch)
+        provider, _ = clf._detect_provider()
+        assert provider == "none", f"Gemini must not be auto-selected; got {provider!r}"
+
+    def test_detect_provider_accepts_sol56(self, monkeypatch):
+        """SOL56_MODEL_ID present → provider is sol56."""
+        monkeypatch.setenv("SOL56_MODEL_ID", "sol-5.6-turbo")
+        for k in ("OPENAI_API_KEY", "THEME_CLASSIFIER_MODEL"):
+            monkeypatch.delenv(k, raising=False)
+        clf = self._reload_clf(monkeypatch)
+        provider, model_id = clf._detect_provider()
+        assert provider == "sol56", f"Expected sol56, got {provider!r}"
+        assert model_id == "sol-5.6-turbo"
+
+    def test_detect_provider_requires_explicit_model_for_openai(self, monkeypatch):
+        """OPENAI_API_KEY alone is insufficient — THEME_CLASSIFIER_MODEL must also be set."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-openai")
+        for k in ("SOL56_MODEL_ID", "SOL_MODEL_ID", "THEME_CLASSIFIER_MODEL"):
+            monkeypatch.delenv(k, raising=False)
+        clf = self._reload_clf(monkeypatch)
+        provider, _ = clf._detect_provider()
+        assert provider == "none", f"OpenAI without explicit model must not be selected; got {provider!r}"
+
+    def test_detect_provider_accepts_openai_with_explicit_model(self, monkeypatch):
+        """OPENAI_API_KEY + THEME_CLASSIFIER_MODEL → provider is openai."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-openai")
+        monkeypatch.setenv("THEME_CLASSIFIER_MODEL", "gpt-4o")
+        for k in ("SOL56_MODEL_ID", "SOL_MODEL_ID"):
+            monkeypatch.delenv(k, raising=False)
+        clf = self._reload_clf(monkeypatch)
+        provider, model_id = clf._detect_provider()
+        assert provider == "openai", f"Expected openai, got {provider!r}"
+        assert model_id == "gpt-4o"
+
+    def test_no_provider_returns_config_error_not_placeholder_proposals(self, monkeypatch):
+        """When no provider is configured, run_sample must return config_error with zero proposals."""
+        for k in ("SOL56_MODEL_ID", "SOL_MODEL_ID", "OPENAI_API_KEY",
+                  "THEME_CLASSIFIER_MODEL", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"):
+            monkeypatch.delenv(k, raising=False)
+        clf = self._reload_clf(monkeypatch)
+        result = clf.run_sample(tickers=["AAPL"], write_artifacts=False)
+        assert "config_error" in result, f"Must include config_error when no provider; keys={list(result)}"
+        assert result.get("proposals") == [], f"proposals must be empty, got {result.get('proposals')}"
+        assert result.get("quarantined") == [], f"quarantined must be empty, got {result.get('quarantined')}"
+
+
+# ── Contract 9: Input completeness gate ───────────────────────────────────────
+
+class TestInputCompletenessGate:
+    def _reload_clf_no_provider(self, monkeypatch):
+        import importlib
+        import services.theme_taxonomy_classifier as clf
+        for k in ("SOL56_MODEL_ID", "SOL_MODEL_ID", "OPENAI_API_KEY",
+                  "THEME_CLASSIFIER_MODEL", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"):
+            monkeypatch.delenv(k, raising=False)
+        importlib.reload(clf)
+        return clf
+
+    def test_quarantines_ticker_with_missing_company_name(self, monkeypatch):
+        """Ticker whose company name defaults to ticker symbol must be quarantined INPUT_INCOMPLETE."""
+        # Give it a provider so config gate doesn't fire first
+        monkeypatch.setenv("SOL56_MODEL_ID", "sol-5.6-turbo")
+        import importlib, services.theme_taxonomy_classifier as clf
+        importlib.reload(clf)
+        monkeypatch.setattr(clf, "_get_fundamentals_cache", lambda: {})
+        monkeypatch.setattr(clf, "_get_llm_overrides", lambda: {})
+        monkeypatch.setattr(clf, "_get_current_assignments", lambda: {})
+        # Patch _call_llm to raise (should never be reached for incomplete input)
+        monkeypatch.setattr(clf, "_call_llm", lambda *a, **k: (_ for _ in ()).throw(AssertionError("_call_llm must not be called for incomplete input")))
+        result = clf.run_sample(tickers=["XYZQ"], write_artifacts=False)
+        quarantined_tickers = [q["ticker"] for q in result.get("quarantined", [])]
+        reasons = [q.get("reason", "") for q in result.get("quarantined", []) if q.get("ticker") == "XYZQ"]
+        assert "XYZQ" in quarantined_tickers, f"XYZQ must be quarantined; got quarantined={result.get('quarantined')}"
+        assert any("INPUT_INCOMPLETE" in r for r in reasons), f"Reason must contain INPUT_INCOMPLETE; got {reasons}"
+
+    def test_quarantines_ticker_with_missing_description(self, monkeypatch):
+        """Ticker with company name but no description must be quarantined INPUT_INCOMPLETE."""
+        monkeypatch.setenv("SOL56_MODEL_ID", "sol-5.6-turbo")
+        import importlib, services.theme_taxonomy_classifier as clf
+        importlib.reload(clf)
+        fake_cache = {"TSLA": {"fields": {"companyName": "Tesla Inc", "description": ""}}}
+        monkeypatch.setattr(clf, "_get_fundamentals_cache", lambda: fake_cache)
+        monkeypatch.setattr(clf, "_get_llm_overrides", lambda: {})
+        monkeypatch.setattr(clf, "_get_current_assignments", lambda: {})
+        monkeypatch.setattr(clf, "_call_llm", lambda *a, **k: (_ for _ in ()).throw(AssertionError("_call_llm must not be called for incomplete input")))
+        result = clf.run_sample(tickers=["TSLA"], write_artifacts=False)
+        quarantined_tickers = [q["ticker"] for q in result.get("quarantined", [])]
+        reasons = [q.get("reason", "") for q in result.get("quarantined", []) if q.get("ticker") == "TSLA"]
+        assert "TSLA" in quarantined_tickers, f"TSLA must be quarantined; got {result.get('quarantined')}"
+        assert any("INPUT_INCOMPLETE" in r for r in reasons), f"Reason must contain INPUT_INCOMPLETE; got {reasons}"
+
+
+# ── Contract 10: Identity guard ────────────────────────────────────────────────
+
+class TestIdentityGuard:
+    def test_identity_guard_flags_or_similar(self):
+        """Rationale containing 'or similar' must trigger identity guard quarantine."""
+        from services.theme_taxonomy_classifier import _validate_proposal, _get_assignable_registry
+        reg = _get_assignable_registry()
+        proposal = {
+            "ticker": "CRDO",
+            "proposed_primary_theme_id": "dc_connectivity_silicon",
+            "proposed_additional_theme_ids": [],
+            "confidence": 0.7,
+            "rationale": "This appears to be a connectivity or similar networking company.",
+            "evidence": [],
+            "warnings": [],
+        }
+        _, quarantine_reasons = _validate_proposal(
+            proposal, reg, {}, company_name="Credo Technology Group"
+        )
+        assert any("IDENTITY" in r.upper() or "identity" in r.lower() for r in quarantine_reasons), (
+            f"'or similar' in rationale must trigger identity guard; got {quarantine_reasons}"
+        )
+
+    def test_identity_guard_flags_ticker_only_guess_no_evidence(self):
+        """Empty evidence + no company mention in rationale must trigger identity guard."""
+        from services.theme_taxonomy_classifier import _validate_proposal, _get_assignable_registry
+        reg = _get_assignable_registry()
+        proposal = {
+            "ticker": "LPTH",
+            "proposed_primary_theme_id": "optical_components_lasers",
+            "proposed_additional_theme_ids": [],
+            "confidence": 0.5,
+            "rationale": "Based on the ticker symbol this is likely a photonics company.",
+            "evidence": [],
+            "warnings": [],
+        }
+        _, quarantine_reasons = _validate_proposal(
+            proposal, reg, {}, company_name="LightPath Technologies"
+        )
+        assert any("IDENTITY" in r.upper() or "identity" in r.lower() for r in quarantine_reasons), (
+            f"Ticker-only guess without evidence must trigger identity guard; got {quarantine_reasons}"
+        )
+
+    def test_identity_guard_accepts_good_rationale_with_company_name(self):
+        """Good rationale that references the company name must pass identity guard."""
+        from services.theme_taxonomy_classifier import _validate_proposal, _get_assignable_registry
+        reg = _get_assignable_registry()
+        proposal = {
+            "ticker": "ALAB",
+            "proposed_primary_theme_id": "dc_connectivity_silicon",
+            "proposed_additional_theme_ids": [],
+            "confidence": 0.97,
+            "rationale": "Astera Labs provides CXL and PCIe retimer silicon for AI data center connectivity.",
+            "evidence": ["CXL retimers", "PCIe switch chips for AI servers"],
+            "warnings": [],
+        }
+        _, quarantine_reasons = _validate_proposal(
+            proposal, reg, {}, company_name="Astera Labs"
+        )
+        assert quarantine_reasons == [], f"Good proposal must pass identity guard: {quarantine_reasons}"
+
+    def test_identity_guard_accepts_proposal_without_company_arg(self):
+        """When company_name is not supplied, identity guard must not quarantine."""
+        from services.theme_taxonomy_classifier import _validate_proposal, _get_assignable_registry
+        reg = _get_assignable_registry()
+        proposal = {
+            "ticker": "NVDA",
+            "proposed_primary_theme_id": "ai_accelerators",
+            "proposed_additional_theme_ids": [],
+            "confidence": 0.99,
+            "rationale": "Dominant GPU maker for AI training.",
+            "evidence": ["H100 GPU", "NVLink"],
+            "warnings": [],
+        }
+        _, quarantine_reasons = _validate_proposal(proposal, reg, {})  # no company_name
+        assert quarantine_reasons == [], f"No company_name supplied — identity guard must be skipped: {quarantine_reasons}"
+
+
+# ── Contract 15: Generated artifacts not tracked in git ───────────────────────
+
+def test_proposals_json_not_git_tracked():
+    """theme-taxonomy-v2-proposals.json must not be tracked by git."""
+    import subprocess
+    result = subprocess.run(
+        ["git", "ls-files", "backend/data/theme-taxonomy-v2-proposals.json"],
+        capture_output=True, text=True, cwd="/home/runner/workspace",
+    )
+    assert result.stdout.strip() == "", (
+        "theme-taxonomy-v2-proposals.json must not be git-tracked; "
+        "run git rm --cached backend/data/theme-taxonomy-v2-proposals.json"
+    )
+
+
+def test_proposals_csv_not_git_tracked():
+    """theme-taxonomy-v2-proposals.csv must not be tracked by git."""
+    import subprocess
+    result = subprocess.run(
+        ["git", "ls-files", "backend/data/theme-taxonomy-v2-proposals.csv"],
+        capture_output=True, text=True, cwd="/home/runner/workspace",
+    )
+    assert result.stdout.strip() == "", (
+        "theme-taxonomy-v2-proposals.csv must not be git-tracked; "
+        "run git rm --cached backend/data/theme-taxonomy-v2-proposals.csv"
+    )

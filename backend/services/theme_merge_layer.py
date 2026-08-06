@@ -84,7 +84,7 @@ _SECTION_TO_THEME_ID: dict[str, Optional[str]] = {
     "Wind & Renewable Generation":     "wind_renewable",
 
     # Legacy section name → best new node (backward compat)
-    "AI Networking":               "networking_fabric_infra",   # v1 catch-all → DC networking
+    "AI Networking":               "ai_networking",              # v1 catch-all → deprecated node (do not redirect to child)
     "AI Accelerators & Compute Silicon": "ai_accelerators",
     "AI Cloud & Data Center Operators":  "ai_cloud_dc_operators",
     "AI Software & Data Platforms":      "ai_software_platforms",
@@ -236,7 +236,7 @@ _CATEGORY_TO_THEME_ID: dict[str, Optional[str]] = {
     # Legacy labels (v1 backward compat)
     "Fintech":                           "fintech",
     "Uranium & Nuclear Energy":          "nuclear_energy",
-    "AI Networking":                     "networking_fabric_infra",
+    "AI Networking":                     "ai_networking",
 }
 
 # Watchlist section names that collapsed into an existing theme_id under a
