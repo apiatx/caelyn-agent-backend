@@ -1,0 +1,1170 @@
+REPLIT AGENT — CORRECT TAXONOMY V2 IMPLEMENTATION, MAKE MULTI-MEMBERSHIP WRITES TRULY ATOMIC, AND REBUILD THE AI DRY RUN FROM AUTHORITATIVE COMPANY DATA
+
+Work only in the live backend Replit workspace:
+
+`/home/runner/workspace`
+
+The live Replit filesystem, database configuration, and runtime are authoritative.
+
+GitHub is reference and backup only.
+
+Do not reset, revert, rebase, amend, or replace the live work with an older GitHub state.
+
+The current implementation commit is:
+
+```text
+94bc54cf feat: add canonical theme taxonomy v2
+```
+
+Correct it with exactly one new commit on top.
+
+Do not push.
+
+---
+
+# Mandatory first step
+
+Before changing anything:
+
+1. Find and read backend `AGENTS.md` completely.
+2. Follow every applicable instruction.
+3. Record:
+
+   * repository root
+   * branch
+   * current HEAD
+   * `git status -sb`
+   * ahead/behind state
+4. Preserve unrelated live changes.
+5. Read the complete implementation report for `94bc54cf`.
+6. Inspect the actual committed diff.
+7. Trace every existing source, writer, reader, endpoint, serializer, cache, and persistence path involved in:
+
+   * primary themes
+   * additional memberships
+   * Watchlist category overrides
+   * `theme_ticker_overrides`
+   * theme resolver precedence
+   * bulk reassignment
+   * OpenAI/plugin integration
+   * cached company profiles
+   * Theme RS registry metadata
+
+Do not begin the full Watchlist AI run until all correction gates below pass.
+
+---
+
+# Objective
+
+Preserve the largely correct Taxonomy v2 hierarchy while fixing these proven defects:
+
+1. The new `PUT /api/themes/admin/ticker-taxonomy/{ticker}` endpoint is not atomic.
+2. Additional membership writes can overwrite the requested primary theme.
+3. Cache invalidation occurs repeatedly rather than once.
+4. Partial failures can leave partial state.
+5. The classifier silently used an unauthorized Anthropic fallback.
+6. The 12-symbol sample contains obvious company-identity hallucinations.
+7. The company-profile input pipeline is incomplete.
+8. Exact taxonomy rollups drifted from the approved contract.
+9. Ambiguous old themes are being blindly mapped to one replacement.
+10. Existing metadata such as `sector_tags` and `macro_sensitivities` was dropped and tests were weakened.
+11. Generated proposal JSON/CSV files were committed.
+12. The complete Primary Watchlist dry-run proposal was not produced.
+
+Do not modify frontend files.
+
+Do not apply AI proposals to Neon.
+
+Do not begin frontend integration.
+
+---
+
+# Contract 1 — preserve the accepted Taxonomy v2 structure
+
+Preserve the approved:
+
+```text
+11 sectors
+23 parent themes
+67 subthemes
+maximum depth: Sector → Theme → Subtheme
+```
+
+Preserve stable IDs where semantically correct.
+
+Do not broadly rewrite the registry again.
+
+Correct only proven drift and missing metadata.
+
+---
+
+# Contract 2 — restore exact approved rollups
+
+Correct these parent rollups exactly:
+
+```text
+Defense & Aerospace
+rollup_sector_ids:
+  - industrials
+  - technology
+```
+
+```text
+Data Center Infrastructure
+rollup_sector_ids:
+  - technology
+  - industrials
+  - utilities
+  - real_estate
+```
+
+Do not remove a rollup simply because one child primarily belongs to that sector.
+
+Parent rollups describe the whole cross-sector ecosystem.
+
+Verify all other parent and child rollups against the approved Taxonomy v2 specification from the prior task.
+
+Report every discrepancy found and corrected.
+
+---
+
+# Contract 3 — correct semiconductor versus optical membership seeds
+
+`Data Center Connectivity & Interconnect Silicon` is for semiconductor products such as:
+
+* PCIe/CXL retimers
+* SerDes
+* memory connectivity
+* memory pooling/fabric silicon
+* active-electrical-cable silicon
+* optical DSP silicon
+
+Likely examples include:
+
+```text
+ALAB
+CRDO
+relevant MRVL or AVGO exposure where materially justified
+```
+
+Do not place AAOI in this semiconductor-silicon node merely because it participates in AI networking.
+
+AAOI belongs structurally under:
+
+```text
+Data Center Infrastructure
+  → Optical Interconnects
+```
+
+Audit all static:
+
+* proxy symbols
+* candidate symbols
+* seed symbols
+* custom baskets
+* legacy aliases
+
+for this same chip-versus-system-versus-optical distinction.
+
+Do not hardcode unsupported examples merely because they appeared in a prompt.
+
+---
+
+# Contract 4 — restore registry metadata instead of weakening tests
+
+Compare `theme_rs_universe.py` before `94bc54cf` with the current Taxonomy v2 registry.
+
+Audit preservation of:
+
+```text
+proxy_type
+proxy_symbols
+candidate_symbols
+sector_tags
+macro_sensitivities
+keywords
+descriptions
+leader configuration
+basket configuration
+all other fields consumed by Theme RS, macro, Themes page, Options Flow, or Watchlist
+```
+
+Do not delete prior useful metadata merely because the taxonomy changed.
+
+For retained semantic nodes:
+
+* carry forward prior metadata
+* update only what the new meaning requires
+
+For new nodes:
+
+* populate defensible metadata following the existing registry conventions
+* use empty values only when no valid value exists
+* do not invent ETF symbols
+
+Restore the pre-existing required-field tests that were weakened or removed.
+
+Do not solve missing metadata by deleting test assertions.
+
+Audit all consumers before deciding any old field is obsolete.
+
+If a field is genuinely obsolete:
+
+* prove no production consumer uses it
+* report that evidence
+* do not remove it without explicit approval
+
+---
+
+# Contract 5 — ambiguous legacy themes must not receive blind one-to-one mappings
+
+The following are stock-level splits:
+
+```text
+AI Networking
+Semi Equipment & Materials
+Lithium & Battery Tech
+Chemicals & Materials
+Uranium & Nuclear Energy
+Gold / Silver / Copper stock memberships
+```
+
+Do not blindly map every member of one of these old groups into one new child.
+
+## AI Networking
+
+The old basket may contain:
+
+```text
+connectivity silicon
+networking systems/fabrics
+optical interconnects
+```
+
+Therefore this mapping is invalid:
+
+```text
+AI Networking → Networking & Fabric Infrastructure
+```
+
+for every stock.
+
+Preserve the deprecated legacy ID for compatibility until individual companies are migrated, or use an existing explicit migration-pending mechanism.
+
+Do not silently funnel the entire old basket into one child.
+
+## Semi Equipment & Materials
+
+Do not map every member to Semiconductor Equipment.
+
+Stocks must split among:
+
+```text
+Semiconductor Equipment
+Semiconductor Materials
+Test & Measurement
+Packaging & Substrates
+```
+
+## Lithium & Battery Tech
+
+Stocks must split between:
+
+```text
+Metals & Mining → Lithium
+Clean Energy → Battery Technology & Energy Storage
+```
+
+## Uranium & Nuclear Energy
+
+Stocks must split among:
+
+```text
+Uranium Mining & Nuclear Fuel
+Nuclear Equipment & Services
+SMRs & Advanced Reactors
+Nuclear Utilities & Operators
+```
+
+## Compatibility requirements
+
+Deprecated IDs may remain resolvable during migration, but must be:
+
+```text
+assignable = false
+visible for assignment = false
+migration_pending = true or equivalent existing metadata
+```
+
+Do not expose them as new assignment choices.
+
+Do not relabel a deprecated mixed basket as though it were already migrated.
+
+---
+
+# Contract 6 — rebuild the atomic assignment architecture correctly
+
+The existing endpoint:
+
+```http
+PUT /api/themes/admin/ticker-taxonomy/{ticker}
+```
+
+currently calls `_perform_membership_write()` repeatedly.
+
+That is not atomic because `_perform_membership_write()`:
+
+* writes one membership
+* may cross-sync the primary theme
+* invalidates caches
+* triggers side effects
+
+Do not use that helper repeatedly inside the atomic endpoint.
+
+## Trace the actual persistence architecture first
+
+Identify exactly where these are stored:
+
+```text
+primary assignment
+additional memberships
+category_overrides
+theme_ticker_overrides
+theme_ticker_mapper / LLM overrides
+manual provenance
+```
+
+Determine which stores share the same Neon transaction and which do not.
+
+If a true all-or-nothing operation cannot be implemented without a new table or major architecture change:
+
+* stop
+* report the exact obstacle
+* do not claim the operation is atomic
+
+Do not create a second source of truth.
+
+## Required endpoint semantics
+
+One request:
+
+```json
+{
+  "primary_theme_id": "dc_connectivity_silicon",
+  "additional_theme_ids": [
+    "networking_fabric_infra"
+  ]
+}
+```
+
+must result in exactly:
+
+```text
+Primary:
+dc_connectivity_silicon
+
+Additional:
+networking_fabric_infra
+```
+
+The requested primary must never depend on set iteration order.
+
+Additional memberships must never write into or overwrite the primary store.
+
+## Required processing order
+
+1. Authenticate.
+2. Normalize ticker.
+3. Validate all taxonomy IDs.
+4. Normalize:
+
+   * remove duplicates
+   * remove primary from additional
+   * remove redundant ancestors
+5. Read authoritative current state.
+6. Begin one transaction or proven rollback-safe unit of work.
+7. Set or clear primary explicitly through the canonical primary path.
+8. Diff and update additional memberships through the canonical additional-membership path.
+9. Preserve manual provenance.
+10. Commit only after all writes succeed.
+11. On any failure:
+
+    * rollback all writes
+    * return failure
+    * do not continue
+12. Invalidate caches exactly once after success.
+13. Trigger downstream noncritical hints only after successful commit.
+14. Return the authoritative final reread.
+
+Do not:
+
+* catch one membership failure and continue
+* return `ok=false` after partial mutation
+* invalidate caches once per membership
+* call a primary cross-sync for every additional membership
+* determine final active memberships by searching every theme basket containing the ticker
+* infer explicit assignments from `proxy_symbols` or `candidate_symbols`
+
+## Final response
+
+Return:
+
+```text
+ticker
+sector_id when available through the established company-sector source
+primary_theme_id
+additional_theme_ids
+theme_ids with primary first
+subtheme_ids
+memberships_added
+memberships_removed
+```
+
+`theme_ids` must be:
+
+```text
+primary first
+then normalized deterministic additions
+```
+
+Do not alphabetically move the primary away from the first position.
+
+---
+
+# Contract 7 — production failure-injection tests for atomicity
+
+Add tests using the real endpoint/service path.
+
+Prove:
+
+1. Primary-only update works.
+2. Primary plus one additional works.
+3. Primary plus multiple cross-branch additions works.
+4. Requested primary remains primary regardless of additional ID ordering.
+5. Additional memberships never update primary storage.
+6. Clearing primary works where allowed.
+7. Duplicate inputs normalize.
+8. Redundant parent is removed when child is present.
+9. Cross-branch membership is preserved.
+10. Unknown, sector, deprecated, and market-lens IDs are rejected.
+11. Failure during the first write changes nothing.
+12. Failure during a middle write rolls back earlier writes.
+13. Failure during the final write rolls back everything.
+14. Cache invalidation count is zero after rollback.
+15. Cache invalidation count is exactly one after success.
+16. Downstream optional hook failure does not corrupt committed taxonomy state.
+17. Response is based on authoritative stored assignments, not theme-basket inclusion.
+18. Primary is first in `theme_ids`.
+19. Existing legacy single-membership routes still work.
+
+Do not satisfy these tests with copied simulations.
+
+Use production service functions with controlled storage boundaries.
+
+---
+
+# Contract 8 — remove unauthorized provider fallback behavior
+
+The prior task explicitly required:
+
+```text
+Use the existing OpenAI plugin / SOL 5.6 path.
+Do not silently substitute another model.
+If unavailable, stop before the full model run.
+```
+
+Remove automatic fallback to:
+
+```text
+Anthropic
+Gemini
+unapproved OpenAI model aliases
+```
+
+Do not choose a provider merely because its Python package and API key exist.
+
+Do not use Anthropic for this migration.
+
+Do not use Gemini for this migration.
+
+Do not spend further provider credits until the authorized path is confirmed.
+
+## Discover the actual OpenAI integration
+
+Search the live project and Replit integrations for the existing:
+
+```text
+OpenAI orchestrator
+OpenAI plugin
+OpenAI client wrapper
+model policy
+configured model aliases
+SOL 5.6 route
+structured-output helper
+```
+
+The project API reference identifies OpenAI as the orchestrator.
+
+Do not assume the model must appear under environment variables named:
+
+```text
+SOL56_MODEL_ID
+SOL_MODEL_ID
+```
+
+Inspect actual plugin configuration and existing OpenAI calls.
+
+Never expose API keys.
+
+## Required provider gate
+
+The classifier must require an explicit authorized configuration.
+
+Example logical behavior:
+
+```text
+authorized provider = OpenAI plugin
+authorized model alias = resolved SOL 5.6 identifier
+
+if unavailable:
+    stop with configuration report
+    make zero model calls
+```
+
+No provider auto-detection.
+
+No silent fallback.
+
+No hardcoded GPT-4o-mini fallback.
+
+---
+
+# Contract 9 — repair company identity and evidence inputs
+
+The 12-symbol sample proved the input pipeline is incomplete.
+
+The classifier must use authoritative or cached company information before asking the model to classify anything.
+
+## Watchlist membership source
+
+Use:
+
+```text
+public.watchlist.tickers
+```
+
+or the established canonical Watchlist membership path that reads it.
+
+Do not use CSV as authoritative membership.
+
+## Company evidence
+
+Use existing stored/cached data such as:
+
+```text
+ticker
+canonical company name
+actual sector
+industry
+company profile description
+business description
+product/segment information when already cached
+current primary theme
+current additional memberships
+manual-protection state
+existing classification rationale
+```
+
+Prefer the canonical FMP company-profile cache already maintained by the backend.
+
+Do not make one new provider call per ticker.
+
+Do not fabricate missing profile information.
+
+## Input completeness gate
+
+Before any AI request, validate every sample record.
+
+For the representative sample:
+
+```text
+ALAB
+CRDO
+AEHR
+TER
+AMKR
+POWI
+BE
+LPTH
+LWLG
+IREN
+NBIS
+VRT
+```
+
+require:
+
+```text
+correct company name
+actual sector source
+nonempty industry or description
+current assignment state
+```
+
+If company name or business evidence is missing:
+
+* do not ask the model to guess
+* quarantine the ticker as `INPUT_INCOMPLETE`
+* report which source was missing
+
+The sample must not proceed with lines such as:
+
+```text
+Company: ?
+Description: ?
+```
+
+for these well-covered public companies.
+
+---
+
+# Contract 10 — ticker/company identity guard
+
+Add deterministic identity validation before accepting a model proposal.
+
+The output rationale and evidence must refer to the supplied company identity.
+
+Quarantine proposals when:
+
+* the company name clearly belongs to a different ticker
+* the rationale identifies another company
+* the stated business conflicts with the supplied company description
+* evidence contains unsupported products not found in the input
+* the model says “or similar”
+* the model is guessing from the ticker symbol alone
+
+Examples that must be rejected:
+
+```text
+ALAB described as Alabaster
+LPTH described as Lumentum
+LWLG described as Lightwave Microsystems
+VRT guessed to mean virtualization
+```
+
+Do not accept a high confidence score when identity validation fails.
+
+---
+
+# Contract 11 — exact sample quality anchors
+
+The corrected sample should produce results consistent with these anchors unless stronger current company evidence justifies a documented exception.
+
+## ALAB — Astera Labs
+
+```text
+Primary:
+Semiconductors
+  → Data Center Connectivity & Interconnect Silicon
+
+Additional:
+Data Center Infrastructure
+  → Networking & Fabric Infrastructure
+```
+
+Do not add AI Accelerators & Compute Silicon without material product evidence.
+
+## CRDO — Credo Technology
+
+```text
+Primary:
+Semiconductors
+  → Data Center Connectivity & Interconnect Silicon
+
+Additional:
+Data Center Infrastructure
+  → Networking & Fabric Infrastructure
+```
+
+Optical Interconnects may also be additional when evidence supports its optical DSP/AEC exposure.
+
+## AEHR — Aehr Test Systems
+
+```text
+Primary:
+Semiconductors
+  → Test & Measurement
+```
+
+Potential additional:
+
+```text
+Memory & Storage
+```
+
+Do not classify it as general Semiconductor Equipment merely because the old mixed bucket contained it.
+
+## TER — Teradyne
+
+```text
+Primary:
+Semiconductors
+  → Test & Measurement
+
+Additional:
+Industrial Automation
+  → Robotics & Automation
+```
+
+Verify actual company sector from the canonical profile source.
+
+## AMKR — Amkor Technology
+
+```text
+Primary:
+Semiconductors
+  → Packaging & Substrates
+```
+
+Do not add Semiconductor Equipment.
+
+## POWI — Power Integrations
+
+```text
+Primary:
+Semiconductors
+  → Analog, Power & Mixed-Signal
+```
+
+Potential additional:
+
+```text
+Grid & Electrification
+```
+
+only when the material exposure rule is satisfied.
+
+## BE — Bloom Energy
+
+```text
+Primary:
+Clean Energy
+  → Hydrogen & Fuel Cells
+
+Additional:
+Data Center Infrastructure
+  → Power & Cooling
+
+Additional:
+Grid & Electrification
+  → Distributed & Backup Power
+```
+
+Do not redundantly add parent `clean_energy` when a Clean Energy child is primary.
+
+## LPTH — LightPath Technologies
+
+```text
+Primary:
+Photonics & Optical Systems
+  → Optical Components & Lasers
+```
+
+Do not identify it as Lumentum.
+
+Do not classify it as semiconductor-fabrication equipment.
+
+## LWLG — Lightwave Logic
+
+Likely:
+
+```text
+Primary:
+Data Center Infrastructure
+  → Optical Interconnects
+
+Additional:
+Advanced Materials
+  → Electronic & Semiconductor Materials
+```
+
+Do not describe it as a wafer-chemical or process-gas supplier.
+
+## IREN
+
+Evaluate current business mix between:
+
+```text
+AI Cloud & Data Center Operators
+Bitcoin Miners
+```
+
+One may be primary and the other additional.
+
+Require manual review if the business mix is rapidly changing or the evidence is insufficient.
+
+Do not add Servers & Compute Systems merely because IREN operates compute capacity.
+
+## NBIS — Nebius
+
+Likely:
+
+```text
+Primary:
+Data Center Infrastructure
+  → AI Cloud & Data Center Operators
+```
+
+Do not make Servers & Compute Systems primary unless evidence shows it primarily sells server hardware.
+
+## VRT — Vertiv
+
+```text
+Primary:
+Data Center Infrastructure
+  → Power & Cooling
+```
+
+Potential additional:
+
+```text
+Grid & Electrification
+  → Grid Hardware & Electrical Equipment
+```
+
+Do not classify Vertiv as:
+
+```text
+AI Cloud & Data Center Operators
+Servers & Compute Systems
+```
+
+---
+
+# Contract 12 — low-confidence behavior
+
+If confidence is below the accepted threshold or evidence is insufficient:
+
+```text
+proposed_primary_theme_id = null
+requires_manual_review = true
+```
+
+Do not assign a generic parent simply to avoid an unassigned result.
+
+Do not treat a low-confidence guess as a proposed migration.
+
+---
+
+# Contract 13 — corrected sample gate before the full run
+
+Run the 12-symbol representative sample first.
+
+The full Watchlist dry run may begin only when all of these pass:
+
+1. All 12 company names are correct.
+2. All 12 have adequate company evidence or are explicitly quarantined.
+3. No identity hallucinations.
+4. No unauthorized provider use.
+5. No invalid taxonomy IDs.
+6. No redundant parent/child memberships.
+7. ALAB, CRDO, AEHR, TER, AMKR, POWI, BE, LPTH, LWLG, NBIS, and VRT satisfy the quality anchors.
+8. IREN is handled as an evidence-based mixed-business review case.
+9. Every non-obvious additional membership cites material business evidence.
+10. A human-readable sample audit is written.
+
+If any gate fails:
+
+* stop
+* do not run the full Watchlist
+* report the failure precisely
+
+---
+
+# Contract 14 — full Primary Watchlist dry run
+
+Only after the sample gate passes, generate a proposal for every canonical current Primary Watchlist ticker.
+
+Expected count must come from the live canonical Watchlist source.
+
+Do not hardcode 462.
+
+Record:
+
+```text
+canonical Watchlist count
+proposal count
+quarantine count
+missing-evidence count
+duplicate count
+protected manual override count
+```
+
+The relationship must reconcile exactly:
+
+```text
+proposal count
++ quarantined input count
+= unique canonical Watchlist ticker count
+```
+
+No ticker may silently disappear.
+
+Still do not apply anything to Neon.
+
+---
+
+# Contract 15 — generated artifacts are runtime outputs, not source
+
+Remove these generated files from Git tracking in the corrective commit:
+
+```text
+backend/data/theme-taxonomy-v2-proposals.json
+backend/data/theme-taxonomy-v2-proposals.csv
+```
+
+They may remain locally generated and untracked when permitted by `AGENTS.md`.
+
+Add an appropriate narrow ignore rule only if consistent with project conventions.
+
+Do not broadly ignore all backend data.
+
+Do not stage:
+
+* proposal files
+* model outputs
+* checkpoints
+* runtime caches
+* API responses
+* secrets
+
+The report may state their local paths.
+
+---
+
+# Contract 16 — report inconsistencies
+
+Correct the report so it matches actual artifacts.
+
+The previous report claimed VRT was assigned `power_cooling`, while the committed artifact assigned `ai_cloud_dc_operators`.
+
+Audit every summary table against the actual JSON.
+
+Do not manually write result summaries that disagree with the generated proposals.
+
+Generate summary counts from the same in-memory proposal collection used to write JSON/CSV.
+
+---
+
+# Required tests
+
+Use existing test conventions.
+
+Restore all valid pre-existing registry contract tests.
+
+At minimum add or correct tests for:
+
+## Registry
+
+1. 11 sectors, 23 themes, 67 subthemes.
+2. Exact parent/child hierarchy.
+3. Defense rollups include Industrials and Technology.
+4. Data Center Infrastructure rollups include Technology, Industrials, Utilities, and Real Estate.
+5. AAOI is not seeded into Data Center Connectivity & Interconnect Silicon.
+6. Deprecated ambiguous nodes are nonassignable.
+7. Mixed legacy nodes are not blindly mapped to one replacement child.
+8. Gold/Silver/Copper remain nonassignable lenses.
+9. Existing `sector_tags` and `macro_sensitivities` contracts are preserved.
+10. Existing proxy/basket metadata remains available.
+
+## Atomic endpoint
+
+11. Requested primary remains deterministic.
+12. Additional memberships cannot overwrite primary.
+13. Failure injection rolls back all state.
+14. No partial-success response.
+15. Cache invalidates once on success.
+16. Cache invalidates zero times on rollback.
+17. Response reads explicit stored assignments only.
+18. `theme_ids` returns primary first.
+19. Legacy write routes remain functional.
+
+## Provider gate
+
+20. Anthropic is never selected.
+21. Gemini is never selected.
+22. Unapproved OpenAI models are never selected.
+23. Missing authorized SOL 5.6 configuration results in zero model calls.
+24. No silent fallback occurs.
+25. Secrets never appear in logs or artifacts.
+
+## Input and identity
+
+26. Canonical Watchlist source is used.
+27. CSV is not used as authoritative membership.
+28. Correct sample company names are loaded.
+29. Missing company evidence quarantines rather than guesses.
+30. Wrong-company rationale is quarantined.
+31. “or similar” rationale is quarantined.
+32. Unsupported product claims are rejected or flagged.
+33. Low confidence with insufficient evidence produces null primary.
+
+## Sample anchors
+
+34. ALAB classification.
+35. CRDO classification.
+36. AEHR classification.
+37. TER primary/additional ordering.
+38. AMKR has no Semiconductor Equipment membership.
+39. POWI classification.
+40. BE has no redundant Clean Energy parent.
+41. LPTH identity and classification.
+42. LWLG identity and classification.
+43. NBIS classification.
+44. VRT classification.
+45. IREN manual-review behavior.
+
+## Full dry run
+
+46. Full run is impossible before sample gate passes.
+47. Full run reconciles exactly to canonical Watchlist count.
+48. Full run performs zero taxonomy writes.
+49. Manual overrides remain protected.
+50. Proposal artifacts are not staged or committed.
+
+---
+
+# Validation
+
+Run:
+
+```bash
+git diff --check
+```
+
+Run the full focused hierarchy, resolver, Watchlist identity, Theme RS, route, assignment, and classifier test suite.
+
+Run broader backend tests required by `AGENTS.md`.
+
+Report actual command exit codes.
+
+Do not call a failing command passed.
+
+Use safe read-only database checks to verify assignment sources.
+
+Do not apply the migration.
+
+Do not mutate production taxonomy assignments during validation.
+
+---
+
+# Scope restrictions
+
+Do not:
+
+* modify frontend files
+* apply AI proposals to Neon
+* run unauthorized Anthropic or Gemini calls
+* silently substitute an OpenAI model
+* create another taxonomy registry
+* create another membership table
+* create another source of truth
+* introduce a new provider
+* make live provider calls per ticker
+* weaken existing tests to fit the rewrite
+* remove existing metadata without a consumer audit
+* redesign unrelated Theme RS behavior
+* alter Watchlist membership
+* push
+
+---
+
+# Repository hygiene
+
+Do not use:
+
+```bash
+git add .
+git add -A
+```
+
+Stage exact corrective source and test files only.
+
+Remove committed generated proposal artifacts from Git tracking.
+
+Do not stage:
+
+* `.opencode-reports/latest.md` unless required by the live `AGENTS.md`
+* generated JSON/CSV proposals
+* checkpoints
+* runtime data
+* caches
+* logs
+* attached prompts
+* secrets
+* unrelated files
+
+Inspect:
+
+```bash
+git diff --cached --name-status
+git diff --cached
+```
+
+Create exactly one local correction commit.
+
+Suggested commit message:
+
+```text
+fix: harden taxonomy assignments and classification inputs
+```
+
+Do not push.
+
+---
+
+# Required report
+
+Write to the exact destination required by backend `AGENTS.md`.
+
+Include:
+
+1. Confirmation `AGENTS.md` was read first.
+2. Starting branch, HEAD, and status.
+3. Exact audit of commit `94bc54cf`.
+4. Registry structure preserved.
+5. Registry metadata restored.
+6. Exact rollup corrections.
+7. AAOI/optical correction.
+8. Ambiguous legacy-mapping corrections.
+9. Existing primary storage path.
+10. Existing additional-membership storage path.
+11. Whether true transactionality was possible.
+12. Exact atomic implementation.
+13. Failure rollback evidence.
+14. Cache invalidation count evidence.
+15. Provider/plugin discovery.
+16. Exact authorized model resolution.
+17. Confirmation no Anthropic/Gemini fallback remains.
+18. Company evidence source.
+19. Canonical Watchlist source.
+20. Input completeness results for all 12 sample tickers.
+21. Sample proposal table.
+22. Sample quality-gate results.
+23. Whether full run was permitted.
+24. Full-run count reconciliation when run.
+25. Proposal/quarantine summary.
+26. Confirmation no proposals were applied.
+27. Generated artifact local paths.
+28. Confirmation generated artifacts are not tracked.
+29. Exact files changed.
+30. Exact files staged.
+31. Tests and exit codes.
+32. `git diff --check`.
+33. Confirmation no frontend files changed.
+34. Confirmation no secrets were logged.
+35. Final `git status -sb`.
+36. Commit SHA and message.
+37. Complete correction-commit diff only.
+
+Stop rather than running the full Watchlist classification if the authorized SOL 5.6/OpenAI plugin path or the sample-quality gate cannot be proven.
