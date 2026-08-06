@@ -526,27 +526,38 @@ def _validate_basket_hashes(
         stored_hash  = row.get("basket_hash")
 
         # Always pull display_name from the live ENRICHED_THEME_RS_UNIVERSE so
-        # label changes (e.g. "Semiconductor Equipment" → "Semi Equipment & Materials")
-        # are reflected immediately without requiring a cache bust or LKG rewrite.
+        # label changes are reflected immediately without a cache bust or LKG rewrite.
         live_display = meta.get("display_name") or row.get("display_name", "")
 
-        # Hierarchy fields — always pulled from the live registry so display-name
-        # changes, parent_theme_id assignments, and effective rollup updates are
-        # reflected immediately without a full LKG rewrite.
-        _live_parent_tid = meta.get("parent_theme_id")
-        _live_rollup     = _get_effective_rollup(tid, THEME_RS_UNIVERSE)
+        # Canonical taxonomy fields — always refreshed from the live registry so
+        # reclassification, parent_theme_id changes, rollup updates, and
+        # promoted/demoted nodes surface immediately without a full LKG rewrite.
+        _live_classification = meta.get("classification") or row.get("classification", "")
+        _live_parent_sector  = meta.get("parent_sector")
+        _live_parent_tid     = meta.get("parent_theme_id")
+        _live_rollup         = _get_effective_rollup(tid, THEME_RS_UNIVERSE)
+        # assignable is True by default; market_lens and deprecated nodes carry False.
+        _live_assignable     = meta.get("assignable", True)
+
+        # Common repair fields applied in all three branches (legacy / stale / current)
+        _taxonomy_patch: dict = {
+            "display_name":      live_display,
+            "classification":    _live_classification,
+            "parent_sector":     _live_parent_sector,
+            "parent_theme_id":   _live_parent_tid,
+            "rollup_sector_ids": _live_rollup,
+            "assignable":        _live_assignable,
+        }
 
         if stored_hash is None:
             # Old-format row — no hash stored (pre-membership-hash LKG snapshot).
-            # We cannot verify whether the baked-in proxy_symbols are current, so
-            # always override membership fields from ENRICHED_THEME_RS_UNIVERSE so
-            # admin adds/removes are reflected immediately even from old LKG rows.
+            # Cannot verify proxy_symbols currency; override membership fields
+            # from ENRICHED_THEME_RS_UNIVERSE so admin adds/removes are reflected
+            # immediately even from old LKG rows.
             legacy_count += 1
             patched_rows.append({
                 **row,
-                "display_name":           live_display,
-                "parent_theme_id":        _live_parent_tid,
-                "rollup_sector_ids":      _live_rollup,
+                **_taxonomy_patch,
                 "proxy_symbols":          sorted(current_syms),
                 "theme_holdings":         sorted(current_syms),
                 "proxy_symbols_used":     sorted(current_syms),
@@ -559,17 +570,12 @@ def _validate_basket_hashes(
 
         elif stored_hash != current_hash:
             # Confirmed mismatch — basket changed since this row was computed.
-            # Do NOT serve stale curve data; return empty so the frontend can
-            # show a warming/pending state instead of a wrong-membership chart.
-            # IMPORTANT: override all membership fields from ENRICHED_THEME_RS_UNIVERSE
-            # so admin-added tickers appear immediately in proxy_symbols/theme_holdings
-            # without waiting for the background LKG rewrite to complete.
+            # Do NOT serve stale curve data; return empty so the frontend shows
+            # a warming/pending state instead of a wrong-membership chart.
             stale_count += 1
             patched_rows.append({
                 **row,
-                "display_name":           live_display,
-                "parent_theme_id":        _live_parent_tid,
-                "rollup_sector_ids":      _live_rollup,
+                **_taxonomy_patch,
                 "proxy_symbols":          sorted(current_syms),
                 "theme_holdings":         sorted(current_syms),
                 "proxy_symbols_used":     sorted(current_syms),
@@ -586,13 +592,11 @@ def _validate_basket_hashes(
             })
 
         else:
-            # Hash matches — basket is current-membership.
+            # Hash matches — basket is current-membership; still refresh taxonomy.
             patched_rows.append({
                 **row,
-                "display_name":      live_display,
-                "parent_theme_id":   _live_parent_tid,
-                "rollup_sector_ids": _live_rollup,
-                "curve_status":      "current",
+                **_taxonomy_patch,
+                "curve_status": "current",
             })
 
     patched_payload = {

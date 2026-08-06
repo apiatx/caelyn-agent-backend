@@ -1047,6 +1047,225 @@ async def admin_theme_basket(
 # leader_symbol is a stock ticker inside the theme basket, not the ETF representative_symbol.
 
 
+# ── Atomic multi-membership assignment ────────────────────────────────────────
+
+class TickerTaxonomyBody(BaseModel):
+    """
+    Atomic request to set primary + additional theme memberships for one ticker.
+
+    primary_theme_id  = one assignable canonical theme or sub_theme ID, or null to clear.
+    additional_theme_ids = zero or more additional memberships (deduplicated, sorted).
+
+    Validations applied server-side:
+    - All IDs must exist in the canonical assignable registry.
+    - Sector IDs are rejected as thematic memberships.
+    - Deprecated and market_lens IDs are rejected.
+    - primary is removed from additional_theme_ids.
+    - Redundant ancestor memberships are removed when a child already provides rollup.
+    - No duplicate IDs.
+    """
+    primary_theme_id:     Optional[str]      = None
+    additional_theme_ids: list[str]          = []
+    note:                 Optional[str]      = None
+    created_by:           Optional[str]      = "admin"
+
+    @field_validator("primary_theme_id")
+    @classmethod
+    def _normalize_primary(cls, v: Optional[str]) -> Optional[str]:
+        return v.strip().lower() if v else None
+
+    @field_validator("additional_theme_ids")
+    @classmethod
+    def _normalize_additional(cls, v: list[str]) -> list[str]:
+        return sorted({t.strip().lower() for t in v if t})
+
+
+@router.put("/admin/ticker-taxonomy/{ticker}")
+async def admin_put_ticker_taxonomy(
+    ticker:      str,
+    request:     Request,
+    body:        TickerTaxonomyBody,
+    x_api_key:   Optional[str] = Header(None, alias="X-API-Key"),
+):
+    """
+    [Admin] Atomically assign primary + additional theme memberships for one ticker.
+
+    Implements the canonical multi-membership model:
+      One primary membership  (theme or sub_theme, or null to clear)
+      Zero or more additional memberships  (different theme families)
+
+    Processing steps:
+      1. Authenticate admin.
+      2. Normalize ticker to uppercase.
+      3. Validate every ID against the assignable canonical registry.
+         - Reject sector IDs.
+         - Reject deprecated and market_lens IDs.
+      4. Remove primary from additional_theme_ids.
+      5. Remove duplicate additional IDs.
+      6. Remove redundant ancestor memberships when a child already provides rollup.
+      7. Diff requested set against active stored memberships:
+         - Deactivate (remove) memberships no longer requested.
+         - Insert or reactivate memberships now required.
+      8. Update primary through the canonical assign-primary-theme path.
+      9. Invalidate affected caches once.
+      10. Return final normalized canonical identity.
+
+    Reuses _perform_membership_write as the canonical storage path;
+    performs no additional Neon writes beyond that existing function.
+    """
+    err = _check_admin(request, x_api_key)
+    if err:
+        return err
+
+    ticker = ticker.strip().upper()
+    if not _SYM_RE.match(ticker):
+        raise HTTPException(status_code=422, detail=f"Invalid ticker format: '{ticker}'")
+
+    from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _uni
+    from services.theme_rs_universe import THEME_RS_UNIVERSE as _base_uni
+
+    # ── Validate IDs ──────────────────────────────────────────────────────────
+    sector_ids = {k for k, v in _base_uni.items() if v.get("classification") == "sector"}
+    assignable_ids = {
+        k for k, v in _base_uni.items()
+        if v.get("assignable", True) and v.get("classification") not in ("market_lens", "deprecated", "sector")
+    }
+
+    def _validate_theme_id(tid: str, field: str) -> None:
+        if tid in sector_ids:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{field} {tid!r}: sector IDs cannot be used as thematic memberships.",
+            )
+        meta = _base_uni.get(tid, {})
+        if meta.get("classification") in ("market_lens", "deprecated"):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{field} {tid!r}: market-lens and deprecated IDs are not assignable.",
+            )
+        if tid not in assignable_ids:
+            raise HTTPException(
+                status_code=404,
+                detail=f"{field} {tid!r}: not found in canonical assignable registry.",
+            )
+
+    if body.primary_theme_id:
+        _validate_theme_id(body.primary_theme_id, "primary_theme_id")
+
+    for atid in body.additional_theme_ids:
+        _validate_theme_id(atid, f"additional_theme_ids[{atid!r}]")
+
+    # ── Normalize: remove primary from additional, deduplicate ────────────────
+    additional: list[str] = sorted(
+        {t for t in body.additional_theme_ids if t != body.primary_theme_id}
+    )
+
+    # ── Remove redundant ancestor memberships ─────────────────────────────────
+    # If additional_theme_ids already contains a child of a theme, the parent
+    # itself is redundant because the child rolls up to the parent.
+    def _get_parent(tid: str) -> Optional[str]:
+        return _base_uni.get(tid, {}).get("parent_theme_id")
+
+    # Build set of parents covered by child memberships in the final set
+    final_ids = set(additional)
+    if body.primary_theme_id:
+        final_ids.add(body.primary_theme_id)
+
+    parents_covered = {_get_parent(t) for t in final_ids if _get_parent(t)}
+    # Remove ancestors only from additional (never strip the primary)
+    additional = [
+        t for t in additional
+        if not (t in parents_covered and any(
+            _get_parent(child) == t for child in final_ids if child != t
+        ))
+    ]
+
+    # ── Get current stored memberships ────────────────────────────────────────
+    current_memberships = _get_ticker_theme_memberships(ticker)
+    current_all: set[str] = set(current_memberships.get("theme_ids", []))
+
+    # Desired final set
+    desired_all: set[str] = set(additional)
+    if body.primary_theme_id:
+        desired_all.add(body.primary_theme_id)
+
+    to_remove = current_all - desired_all
+    to_add    = desired_all - current_all
+
+    errors_list: list[str] = []
+
+    # ── Remove unwanted memberships ───────────────────────────────────────────
+    for rem_tid in to_remove:
+        try:
+            _perform_membership_write(
+                theme_id=rem_tid,
+                symbol=ticker,
+                action="remove",
+                note=f"cleared by ticker-taxonomy PUT (replaced by {body.primary_theme_id or 'none'})",
+                created_by=body.created_by,
+            )
+        except HTTPException as _exc:
+            errors_list.append(f"remove {rem_tid}: {_exc.detail}")
+
+    # ── Add required memberships ──────────────────────────────────────────────
+    for add_tid in to_add:
+        try:
+            _perform_membership_write(
+                theme_id=add_tid,
+                symbol=ticker,
+                action="add",
+                note=body.note,
+                created_by=body.created_by,
+            )
+        except HTTPException as _exc:
+            errors_list.append(f"add {add_tid}: {_exc.detail}")
+
+    # Cache has already been invalidated inside each _perform_membership_write call.
+    # No extra invalidation needed.
+
+    # ── Build final normalized identity ───────────────────────────────────────
+    from services.theme_resolver import resolve_primary_theme_for_ticker
+    from services.theme_rs_universe import get_effective_rollup_sector_ids as _rollup
+
+    final_primary = resolve_primary_theme_for_ticker(ticker)
+    primary_id    = final_primary.get("theme_id")
+
+    # Collect all active memberships from enriched universe
+    from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _eu_final
+    manual_rows = {
+        k: v for k, v in _eu_final.items()
+        if ticker in (v.get("proxy_symbols") or [])
+           or ticker in (v.get("candidate_symbols") or [])
+    }
+    final_theme_ids = sorted(manual_rows.keys())
+    if primary_id and primary_id not in final_theme_ids:
+        final_theme_ids = [primary_id] + final_theme_ids
+
+    final_subtheme_ids = [
+        t for t in final_theme_ids
+        if _base_uni.get(t, {}).get("classification") == "sub_theme"
+    ]
+
+    return {
+        "ok":                   len(errors_list) == 0,
+        "ticker":               ticker,
+        "primary_theme_id":     primary_id,
+        "additional_theme_ids": [t for t in final_theme_ids if t != primary_id],
+        "theme_ids":            final_theme_ids,
+        "subtheme_ids":         final_subtheme_ids,
+        "sector_id":            None,   # resolved by Watchlist enrichment, not here
+        "memberships_removed":  sorted(to_remove),
+        "memberships_added":    sorted(to_add),
+        "errors":               errors_list,
+        "message": (
+            f"Ticker '{ticker}' taxonomy updated. "
+            f"Added: {sorted(to_add) or 'none'}. "
+            f"Removed: {sorted(to_remove) or 'none'}."
+            + (f" Errors: {errors_list}" if errors_list else "")
+        ),
+    }
+
+
 class LeaderEdit(BaseModel):
     theme_id:      str
     leader_symbol: str

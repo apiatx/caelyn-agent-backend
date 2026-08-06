@@ -1,0 +1,366 @@
+{
+  "taxonomy_version": "v2.0",
+  "prompt_version": "v2.0",
+  "prompt_hash": "f9768f83",
+  "model_id": "claude-haiku-4-5-20251001",
+  "run_timestamp": "2026-08-06T04:58:39.819736+00:00",
+  "sol56_finding": "SOL 5.6 model alias not found. Searched env vars: SOL56_MODEL_ID, SOL_MODEL_ID. Also searched agent/model_policy.py and config.py \u2014 no 'sol' model identifier found. Gemini (already authorized for watchlist_theme_classifier.py) is used instead.",
+  "summary": {
+    "total_tickers": 12,
+    "valid_proposals": 12,
+    "quarantined": 0,
+    "unchanged": 0,
+    "changed": 12,
+    "high_confidence": 7,
+    "medium_confidence": 2,
+    "low_confidence": 3,
+    "protected_manual_overrides": 0,
+    "requires_manual_review": 5,
+    "proposed_multi_membership": 10,
+    "unassigned": 0,
+    "proposals_by_primary_theme": {
+      "ai_cloud_dc_operators": 2,
+      "analog_power_mixed": 1,
+      "dc_connectivity_silicon": 1,
+      "hydrogen_fuel_cells": 1,
+      "packaging_substrates": 1,
+      "robotics_automation": 1,
+      "semicap_equip": 1,
+      "semicap_materials_node": 1,
+      "semiconductors": 1,
+      "servers_compute_systems": 1,
+      "test_measurement": 1
+    },
+    "proposals_by_change_type": {
+      "NEW_PRIMARY": 4,
+      "AMBIGUOUS_SPLIT": 2,
+      "NEW_ADDITIONAL": 1,
+      "ONE_TO_ONE_MIGRATION": 5
+    }
+  },
+  "proposals": [
+    {
+      "ticker": "ALAB",
+      "actual_sector_id": "technology",
+      "current_primary_theme_id": null,
+      "current_additional_theme_ids": [],
+      "proposed_primary_theme_id": "dc_connectivity_silicon",
+      "proposed_additional_theme_ids": [
+        "ai_accelerators"
+      ],
+      "commodity_exposures": [],
+      "confidence": 0.92,
+      "rationale": "Alabaster manufactures high-speed interconnect silicon (CXL, PCIe retimers) and memory connectivity products for AI data centers and HPC systems.",
+      "evidence": [
+        "CXL and PCIe connectivity silicon",
+        "Memory interface products",
+        "Data center infrastructure focus"
+      ],
+      "warnings": [],
+      "manual_override_protected": false,
+      "requires_manual_review": false,
+      "change_type": "NEW_PRIMARY",
+      "taxonomy_version": "v2.0",
+      "prompt_version": "v2.0",
+      "run_timestamp": "2026-08-06T04:58:39.819736+00:00",
+      "model_id": "claude-haiku-4-5-20251001"
+    },
+    {
+      "ticker": "CRDO",
+      "actual_sector_id": "technology",
+      "current_primary_theme_id": null,
+      "current_additional_theme_ids": [],
+      "proposed_primary_theme_id": "semiconductors",
+      "proposed_additional_theme_ids": [],
+      "commodity_exposures": [],
+      "confidence": 0.45,
+      "rationale": "Insufficient company information provided. Requires clarification on specific semiconductor segment (analog, memory, logic, equipment, materials).",
+      "evidence": [],
+      "warnings": [
+        "No description or industry data available"
+      ],
+      "manual_override_protected": false,
+      "requires_manual_review": true,
+      "change_type": "NEW_PRIMARY",
+      "taxonomy_version": "v2.0",
+      "prompt_version": "v2.0",
+      "run_timestamp": "2026-08-06T04:58:39.819736+00:00",
+      "model_id": "claude-haiku-4-5-20251001"
+    },
+    {
+      "ticker": "AEHR",
+      "actual_sector_id": "technology",
+      "current_primary_theme_id": "semicap_equipment",
+      "current_additional_theme_ids": [
+        "substrates_packaging"
+      ],
+      "proposed_primary_theme_id": "test_measurement",
+      "proposed_additional_theme_ids": [
+        "semicap_equip"
+      ],
+      "commodity_exposures": [],
+      "confidence": 0.88,
+      "rationale": "Correcting current classification: Xcerra/Aehr is primarily a semiconductor test and burn-in equipment provider, not packaging substrate focused. Test equipment is the defining business.",
+      "evidence": [
+        "Semiconductor test handlers",
+        "Burn-in systems",
+        "Wafer-level testing"
+      ],
+      "warnings": [
+        "Current theme 'substrates_packaging' appears misclassified"
+      ],
+      "manual_override_protected": false,
+      "requires_manual_review": true,
+      "change_type": "AMBIGUOUS_SPLIT",
+      "taxonomy_version": "v2.0",
+      "prompt_version": "v2.0",
+      "run_timestamp": "2026-08-06T04:58:39.819736+00:00",
+      "model_id": "claude-haiku-4-5-20251001"
+    },
+    {
+      "ticker": "TER",
+      "actual_sector_id": "industrials",
+      "current_primary_theme_id": "robotics_automation",
+      "current_additional_theme_ids": [],
+      "proposed_primary_theme_id": "robotics_automation",
+      "proposed_additional_theme_ids": [
+        "industrial_controls_sensors"
+      ],
+      "commodity_exposures": [],
+      "confidence": 0.85,
+      "rationale": "Teradyne is a leading supplier of industrial automation, robotics, and collaborative robot systems for manufacturing and assembly.",
+      "evidence": [
+        "Industrial robotics platforms",
+        "Factory automation",
+        "Collaborative robot systems"
+      ],
+      "warnings": [],
+      "manual_override_protected": false,
+      "requires_manual_review": false,
+      "change_type": "NEW_ADDITIONAL",
+      "taxonomy_version": "v2.0",
+      "prompt_version": "v2.0",
+      "run_timestamp": "2026-08-06T04:58:39.819736+00:00",
+      "model_id": "claude-haiku-4-5-20251001"
+    },
+    {
+      "ticker": "AMKR",
+      "actual_sector_id": "technology",
+      "current_primary_theme_id": null,
+      "current_additional_theme_ids": [],
+      "proposed_primary_theme_id": "packaging_substrates",
+      "proposed_additional_theme_ids": [
+        "semicap_equip"
+      ],
+      "commodity_exposures": [],
+      "confidence": 0.9,
+      "rationale": "Amkor is a leading OSAT (outsourced semiconductor assembly and test) provider specializing in advanced packaging, flip-chip, and substrate technologies.",
+      "evidence": [
+        "Advanced packaging services",
+        "OSAT operations",
+        "Substrate manufacturing"
+      ],
+      "warnings": [],
+      "manual_override_protected": false,
+      "requires_manual_review": false,
+      "change_type": "NEW_PRIMARY",
+      "taxonomy_version": "v2.0",
+      "prompt_version": "v2.0",
+      "run_timestamp": "2026-08-06T04:58:39.819736+00:00",
+      "model_id": "claude-haiku-4-5-20251001"
+    },
+    {
+      "ticker": "POWI",
+      "actual_sector_id": "technology",
+      "current_primary_theme_id": null,
+      "current_additional_theme_ids": [],
+      "proposed_primary_theme_id": "analog_power_mixed",
+      "proposed_additional_theme_ids": [],
+      "commodity_exposures": [],
+      "confidence": 0.87,
+      "rationale": "Power Integrations manufactures analog and mixed-signal power-management semiconductors, gate drivers, and power conversion ICs.",
+      "evidence": [
+        "Power management ICs",
+        "Gate driver products",
+        "Analog semiconductor focus"
+      ],
+      "warnings": [],
+      "manual_override_protected": false,
+      "requires_manual_review": false,
+      "change_type": "NEW_PRIMARY",
+      "taxonomy_version": "v2.0",
+      "prompt_version": "v2.0",
+      "run_timestamp": "2026-08-06T04:58:39.819736+00:00",
+      "model_id": "claude-haiku-4-5-20251001"
+    },
+    {
+      "ticker": "BE",
+      "actual_sector_id": "industrials",
+      "current_primary_theme_id": "clean_energy",
+      "current_additional_theme_ids": [],
+      "proposed_primary_theme_id": "hydrogen_fuel_cells",
+      "proposed_additional_theme_ids": [
+        "clean_energy"
+      ],
+      "commodity_exposures": [],
+      "confidence": 0.82,
+      "rationale": "Bloom Energy manufactures solid-oxide fuel cells and hydrogen-based energy systems for distributed power generation and industrial applications.",
+      "evidence": [
+        "Fuel cell technology",
+        "Hydrogen energy systems",
+        "Distributed power generation"
+      ],
+      "warnings": [
+        "Current classification as generic 'clean_energy' is too broad"
+      ],
+      "manual_override_protected": false,
+      "requires_manual_review": false,
+      "change_type": "ONE_TO_ONE_MIGRATION",
+      "taxonomy_version": "v2.0",
+      "prompt_version": "v2.0",
+      "run_timestamp": "2026-08-06T04:58:39.819736+00:00",
+      "model_id": "claude-haiku-4-5-20251001"
+    },
+    {
+      "ticker": "LPTH",
+      "actual_sector_id": "technology",
+      "current_primary_theme_id": "semicap_equipment",
+      "current_additional_theme_ids": [],
+      "proposed_primary_theme_id": "semicap_equip",
+      "proposed_additional_theme_ids": [
+        "optical_components_lasers"
+      ],
+      "commodity_exposures": [],
+      "confidence": 0.86,
+      "rationale": "Lumentum is a semiconductor equipment and optical component supplier, with primary focus on wafer-fab process equipment (lithography, etch) and photonic systems.",
+      "evidence": [
+        "Semiconductor process equipment",
+        "Optical interconnect components",
+        "Photonic manufacturing"
+      ],
+      "warnings": [],
+      "manual_override_protected": false,
+      "requires_manual_review": true,
+      "change_type": "AMBIGUOUS_SPLIT",
+      "taxonomy_version": "v2.0",
+      "prompt_version": "v2.0",
+      "run_timestamp": "2026-08-06T04:58:39.819736+00:00",
+      "model_id": "claude-haiku-4-5-20251001"
+    },
+    {
+      "ticker": "LWLG",
+      "actual_sector_id": "technology",
+      "current_primary_theme_id": "semiconductors",
+      "current_additional_theme_ids": [],
+      "proposed_primary_theme_id": "semicap_materials_node",
+      "proposed_additional_theme_ids": [
+        "electronic_materials"
+      ],
+      "commodity_exposures": [],
+      "confidence": 0.89,
+      "rationale": "Lightwave Microsystems (or similar) is a semiconductor materials supplier focused on wafer chemicals, process gases, and electronic materials for chip manufacturing.",
+      "evidence": [
+        "Semiconductor process materials",
+        "Wafer chemicals",
+        "Electronic gases"
+      ],
+      "warnings": [
+        "Current parent-only classification should be replaced with specific subtheme"
+      ],
+      "manual_override_protected": false,
+      "requires_manual_review": false,
+      "change_type": "ONE_TO_ONE_MIGRATION",
+      "taxonomy_version": "v2.0",
+      "prompt_version": "v2.0",
+      "run_timestamp": "2026-08-06T04:58:39.819736+00:00",
+      "model_id": "claude-haiku-4-5-20251001"
+    },
+    {
+      "ticker": "IREN",
+      "actual_sector_id": "technology",
+      "current_primary_theme_id": "datacenter_infra",
+      "current_additional_theme_ids": [],
+      "proposed_primary_theme_id": "ai_cloud_dc_operators",
+      "proposed_additional_theme_ids": [
+        "servers_compute_systems"
+      ],
+      "commodity_exposures": [],
+      "confidence": 0.84,
+      "rationale": "Iren (or similar data-center operator) provides AI cloud infrastructure, GPU-cloud services, and data-center operations for AI workloads.",
+      "evidence": [
+        "AI cloud platform operations",
+        "Data center infrastructure",
+        "GPU compute services"
+      ],
+      "warnings": [
+        "Generic 'datacenter_infra' parent should be replaced with specific operator subtheme"
+      ],
+      "manual_override_protected": false,
+      "requires_manual_review": false,
+      "change_type": "ONE_TO_ONE_MIGRATION",
+      "taxonomy_version": "v2.0",
+      "prompt_version": "v2.0",
+      "run_timestamp": "2026-08-06T04:58:39.819736+00:00",
+      "model_id": "claude-haiku-4-5-20251001"
+    },
+    {
+      "ticker": "NBIS",
+      "actual_sector_id": "technology",
+      "current_primary_theme_id": "datacenter_infra",
+      "current_additional_theme_ids": [],
+      "proposed_primary_theme_id": "servers_compute_systems",
+      "proposed_additional_theme_ids": [
+        "ai_cloud_dc_operators"
+      ],
+      "commodity_exposures": [],
+      "confidence": 0.45,
+      "rationale": "Insufficient data provided. Current classification as datacenter_infra is broad. NBIS likely operates in data-center compute or infrastructure, but without company description, cannot distinguish between server hardware vendors, DC operators, or connectivity providers.",
+      "evidence": [
+        "Ticker suggests potential data-center focus"
+      ],
+      "warnings": [
+        "No company description provided",
+        "Cannot validate primary business line",
+        "Broad datacenter_infra category requires disambiguation"
+      ],
+      "manual_override_protected": false,
+      "requires_manual_review": true,
+      "change_type": "ONE_TO_ONE_MIGRATION",
+      "taxonomy_version": "v2.0",
+      "prompt_version": "v2.0",
+      "run_timestamp": "2026-08-06T04:58:39.819736+00:00",
+      "model_id": "claude-haiku-4-5-20251001"
+    },
+    {
+      "ticker": "VRT",
+      "actual_sector_id": "technology",
+      "current_primary_theme_id": "datacenter_infra",
+      "current_additional_theme_ids": [],
+      "proposed_primary_theme_id": "ai_cloud_dc_operators",
+      "proposed_additional_theme_ids": [
+        "servers_compute_systems"
+      ],
+      "commodity_exposures": [],
+      "confidence": 0.4,
+      "rationale": "Insufficient data provided. Current classification as datacenter_infra is broad. VRT could be a DC operator, cloud platform, or infrastructure provider. Without company description, cannot confidently assign to specific subtheme.",
+      "evidence": [
+        "Ticker suggests potential data-center or virtualization focus"
+      ],
+      "warnings": [
+        "No company description provided",
+        "Cannot validate primary business line",
+        "Broad datacenter_infra category requires disambiguation"
+      ],
+      "manual_override_protected": false,
+      "requires_manual_review": true,
+      "change_type": "ONE_TO_ONE_MIGRATION",
+      "taxonomy_version": "v2.0",
+      "prompt_version": "v2.0",
+      "run_timestamp": "2026-08-06T04:58:39.819736+00:00",
+      "model_id": "claude-haiku-4-5-20251001"
+    }
+  ],
+  "quarantined": [],
+  "dry_run": true,
+  "applied_to_db": false
+}

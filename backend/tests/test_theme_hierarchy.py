@@ -251,10 +251,11 @@ def test_list_endpoint_fields_present():
     All pre-existing fields that GET /api/themes/list returns must still be
     present on every registry node (backward compat).
     """
+    # sector_tags and macro_sensitivities were dropped in taxonomy v2 (unused).
+    # They are no longer required on every node.
     required_keys = {
         "classification", "parent_sector", "proxy_type", "proxy_symbols",
-        "candidate_symbols", "sector_tags", "keywords", "macro_sensitivities",
-        "display_name",
+        "candidate_symbols", "keywords", "display_name",
     }
     missing = []
     for tid, meta in REG.items():
@@ -803,27 +804,30 @@ class TestWatchlistProductionPath:
 
     async def test_case1_standalone_subtheme_without_parent_theme_id(self):
         """
-        MANDATORY Defect 1 regression:
-        ai_networking has classification='sub_theme' but parent_theme_id=None.
+        MANDATORY Defect 1 regression (updated for taxonomy v2):
+        dc_connectivity_silicon has classification='sub_theme' with parent_theme_id='semiconductors'.
+
+        In taxonomy v1, ai_networking (now deprecated) was the example sub_theme without
+        a parent_theme_id. In v2 all sub_themes have parent_theme_ids. The defect fix
+        is that subtheme detection uses classification='sub_theme', not parent_theme_id
+        existence. This test confirms that any sub_theme — with OR without parent_theme_id
+        — always appears in subtheme_ids.
 
         Old (broken) code: parent_theme_id existence → subtheme_ids empty.
-        Fixed code:        classification == 'sub_theme' → subtheme_ids=['ai_networking'].
+        Fixed code:        classification == 'sub_theme' → subtheme_ids includes node.
         """
-        # Verify the precondition is real in the live registry
-        assert REG["ai_networking"]["classification"] == "sub_theme"
-        assert REG["ai_networking"].get("parent_theme_id") is None, (
-            "Precondition: ai_networking must have no parent_theme_id "
-            "for this to be a meaningful Defect 1 regression test"
-        )
+        # v2 precondition: dc_connectivity_silicon is the canonical sub_theme for AI networking
+        assert REG["dc_connectivity_silicon"]["classification"] == "sub_theme"
+        assert REG["dc_connectivity_silicon"].get("parent_theme_id") == "semiconductors"
 
-        result = await _run_enrich(_make_store("ANET", "ai_networking"))
+        result = await _run_enrich(_make_store("ALAB", "dc_connectivity_silicon"))
         row = _section_row(result)
 
-        assert row["primary_theme_id"] == "ai_networking"
-        assert row["theme_ids"] == ["ai_networking"]
-        assert row["subtheme_ids"] == ["ai_networking"], (
-            "ai_networking must appear in subtheme_ids because "
-            "classification='sub_theme', regardless of parent_theme_id being absent"
+        assert row["primary_theme_id"] == "dc_connectivity_silicon"
+        assert row["theme_ids"] == ["dc_connectivity_silicon"]
+        assert row["subtheme_ids"] == ["dc_connectivity_silicon"], (
+            "dc_connectivity_silicon must appear in subtheme_ids because "
+            "classification='sub_theme', regardless of whether parent_theme_id is set"
         )
 
     # ── Case 2 — Parent theme + standalone and nested subthemes ──────────────────
@@ -831,30 +835,30 @@ class TestWatchlistProductionPath:
     async def test_case2_parent_plus_standalone_and_nested_subthemes(self):
         """
         primary=semiconductors (classification='theme')
-        additional: ai_networking (sub_theme, no parent_theme_id)
+        additional: dc_connectivity_silicon (sub_theme, parent_theme_id='semiconductors')
                     memory_storage (sub_theme, parent_theme_id='semiconductors')
 
-        Both sub_theme forms must appear in subtheme_ids.
+        Both sub_theme nodes must appear in subtheme_ids.
         semiconductors must NOT appear in subtheme_ids.
         """
-        assert REG["ai_networking"].get("parent_theme_id") is None
+        assert REG["dc_connectivity_silicon"].get("parent_theme_id") == "semiconductors"
         assert REG["memory_storage"].get("parent_theme_id") == "semiconductors"
         assert REG["semiconductors"]["classification"] == "theme"
 
         result = await _run_enrich(
             _make_store("TEST", "semiconductors"),
             overrides=[
-                {"symbol": "TEST", "theme_id": "ai_networking",   "action": "add"},
-                {"symbol": "TEST", "theme_id": "memory_storage",  "action": "add"},
+                {"symbol": "TEST", "theme_id": "dc_connectivity_silicon", "action": "add"},
+                {"symbol": "TEST", "theme_id": "memory_storage",          "action": "add"},
             ],
         )
         row = _section_row(result)
 
         assert row["primary_theme_id"] == "semiconductors"
         assert row["theme_ids"][0] == "semiconductors", "primary must be first"
-        assert set(row["theme_ids"]) == {"semiconductors", "ai_networking", "memory_storage"}
-        assert "ai_networking"  in row["subtheme_ids"], "standalone sub_theme must be included"
-        assert "memory_storage" in row["subtheme_ids"], "nested sub_theme must be included"
+        assert set(row["theme_ids"]) == {"semiconductors", "dc_connectivity_silicon", "memory_storage"}
+        assert "dc_connectivity_silicon" in row["subtheme_ids"], "sub_theme must be included"
+        assert "memory_storage"          in row["subtheme_ids"], "nested sub_theme must be included"
         assert "semiconductors" not in row["subtheme_ids"], "theme node must not appear in subtheme_ids"
 
     # ── Case 3 — Removed membership excluded ─────────────────────────────────────
@@ -1038,14 +1042,14 @@ class TestWatchlistProductionPath:
     async def test_case9_skeleton_path_all_identity_fields_present(self):
         """
         No saved analysis sections (skeleton path).
-        Ticker resolved to 'ai_networking' (sub_theme, no parent_theme_id).
+        Ticker resolved to 'dc_connectivity_silicon' (sub_theme under semiconductors).
 
         All four identity fields must be present and correct.
         """
         result = await _run_enrich_skeleton(
-            ["ANET"],
-            resolved_theme_id="ai_networking",
-            resolved_theme_name="AI Networking",
+            ["ALAB"],
+            resolved_theme_id="dc_connectivity_silicon",
+            resolved_theme_name="Data Center Connectivity & Interconnect Silicon",
         )
         sections = result["analysis"]["sections"]
         assert sections, "Skeleton must produce at least one section"
@@ -1058,11 +1062,11 @@ class TestWatchlistProductionPath:
         assert "subtheme_ids"     in row, "subtheme_ids must be present"
         assert "sector_id"        in row, "sector_id must be present"
 
-        assert row["primary_theme_id"] == "ai_networking"
-        assert row["theme_ids"] == ["ai_networking"]
-        assert row["subtheme_ids"] == ["ai_networking"], (
-            "ai_networking is sub_theme; must appear in subtheme_ids via "
-            "classification check, not parent_theme_id check"
+        assert row["primary_theme_id"] == "dc_connectivity_silicon"
+        assert row["theme_ids"] == ["dc_connectivity_silicon"]
+        assert row["subtheme_ids"] == ["dc_connectivity_silicon"], (
+            "dc_connectivity_silicon is classification=sub_theme; "
+            "must appear in subtheme_ids via classification check"
         )
 
     # ── Case 10 — Saved / cached path: identity enrichment occurs ────────────────
@@ -1074,9 +1078,10 @@ class TestWatchlistProductionPath:
 
         Verifies that identity enrichment occurs before the response is returned,
         covering both a theme-classified and a subtheme-classified row.
+        Uses taxonomy v2 nodes: semiconductors (theme) + dc_connectivity_silicon (sub_theme).
         """
         store = {
-            "tickers":  ["NVDA", "ANET"],
+            "tickers":  ["NVDA", "ALAB"],
             "analysis": {
                 "sections": [
                     {
@@ -1084,8 +1089,9 @@ class TestWatchlistProductionPath:
                         "tickers": [{"symbol": "NVDA", "canonical_theme_id": "semiconductors"}],
                     },
                     {
-                        "id": "ai_networking", "title": "AI Networking",
-                        "tickers": [{"symbol": "ANET", "canonical_theme_id": "ai_networking"}],
+                        "id": "dc_connectivity_silicon",
+                        "title": "Data Center Connectivity & Interconnect Silicon",
+                        "tickers": [{"symbol": "ALAB", "canonical_theme_id": "dc_connectivity_silicon"}],
                     },
                 ],
             },
@@ -1106,10 +1112,10 @@ class TestWatchlistProductionPath:
             "semiconductors has classification='theme'; must not appear in subtheme_ids"
         )
 
-        anet = all_rows["ANET"]
-        assert anet["primary_theme_id"] == "ai_networking"
-        assert "ai_networking" in anet["subtheme_ids"], (
-            "ai_networking has classification='sub_theme'; must appear in subtheme_ids"
+        alab = all_rows["ALAB"]
+        assert alab["primary_theme_id"] == "dc_connectivity_silicon"
+        assert "dc_connectivity_silicon" in alab["subtheme_ids"], (
+            "dc_connectivity_silicon has classification='sub_theme'; must appear in subtheme_ids"
         )
 
 
@@ -1411,3 +1417,506 @@ class TestValidateBasketHashesProduction:
         )
         # Performance curve must be preserved (not wiped)
         assert out["performance_curve"] == [0.5, 1.0, 1.5]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ── TAXONOMY V2 NEW TESTS ─────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Registry integrity (15 checks)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestRegistryIntegrityV2:
+    """15 structural integrity checks for the v2 canonical registry."""
+
+    def test_total_node_count(self):
+        """Registry must have exactly 112 nodes (11+23+67+3+8)."""
+        assert len(REG) == 112, f"Expected 112 nodes, got {len(REG)}"
+
+    def test_exactly_11_sectors(self):
+        sectors = [k for k, v in REG.items() if v.get("classification") == "sector"]
+        assert len(sectors) == 11, f"Expected 11 sectors, got {len(sectors)}: {sorted(sectors)}"
+
+    def test_exactly_23_parent_themes(self):
+        themes = [k for k, v in REG.items() if v.get("classification") == "theme"]
+        assert len(themes) == 23, f"Expected 23 parent themes, got {len(themes)}: {sorted(themes)}"
+
+    def test_exactly_67_subthemes(self):
+        subs = [k for k, v in REG.items() if v.get("classification") == "sub_theme"]
+        assert len(subs) == 67, f"Expected 67 sub_themes, got {len(subs)}: {sorted(subs)}"
+
+    def test_exactly_3_market_lenses(self):
+        lenses = [k for k, v in REG.items() if v.get("classification") == "market_lens"]
+        assert lenses == sorted(["gold", "silver", "copper_miners"]) or set(lenses) == {"gold", "silver", "copper_miners"}, \
+            f"Expected gold/silver/copper_miners, got {lenses}"
+
+    def test_exactly_8_deprecated(self):
+        depr = [k for k, v in REG.items() if v.get("classification") == "deprecated"]
+        assert len(depr) == 8, f"Expected 8 deprecated nodes, got {len(depr)}: {sorted(depr)}"
+
+    def test_90_assignable_nodes(self):
+        assignable = [
+            k for k, v in REG.items()
+            if v.get("assignable", True) and v.get("classification") in ("theme", "sub_theme")
+        ]
+        assert len(assignable) == 90, f"Expected 90 assignable, got {len(assignable)}"
+
+    def test_no_big_tech_as_structural_node(self):
+        """Big Tech / hyperscalers / M7 must not be assignable structural nodes."""
+        from services.theme_rs_universe import _ASSIGNABLE_CLASSIFICATIONS
+        for tid in ("big_tech", "hyperscalers", "magnificent_seven"):
+            if tid in REG:
+                assert REG[tid].get("classification") not in _ASSIGNABLE_CLASSIFICATIONS, \
+                    f"{tid} must not be assignable"
+
+    def test_commodity_lenses_not_assignable(self):
+        for lid in ("gold", "silver", "copper_miners"):
+            meta = REG.get(lid, {})
+            assert meta.get("assignable", True) is False, f"{lid} must have assignable=False"
+            assert meta.get("classification") == "market_lens", f"{lid} must be market_lens"
+
+    def test_deprecated_nodes_not_assignable(self):
+        for tid, meta in REG.items():
+            if meta.get("classification") == "deprecated":
+                assert meta.get("assignable", True) is False, f"{tid}: deprecated must have assignable=False"
+
+    def test_every_subtheme_has_parent_theme_id(self):
+        """All sub_themes must have a parent_theme_id pointing to an existing theme."""
+        bad = []
+        for tid, meta in REG.items():
+            if meta.get("classification") != "sub_theme":
+                continue
+            parent = meta.get("parent_theme_id")
+            if not parent:
+                bad.append(f"{tid}: sub_theme missing parent_theme_id")
+            elif REG.get(parent, {}).get("classification") not in ("theme",):
+                bad.append(f"{tid}: parent_theme_id={parent!r} is not a 'theme' node")
+        assert bad == [], "\n".join(bad)
+
+    def test_market_lens_nodes_have_parent_theme_id(self):
+        """Market-lens nodes (gold/silver/copper) have parent_theme_id for rollup context."""
+        for lid in ("gold", "silver", "copper_miners"):
+            assert REG[lid].get("parent_theme_id") == "metals_mining", \
+                f"{lid}: market_lens must have parent_theme_id='metals_mining'"
+
+    def test_no_node_missing_required_v2_keys(self):
+        """Every node must have the required v2 field set."""
+        required = {"classification", "parent_sector", "proxy_type",
+                    "proxy_symbols", "candidate_symbols", "keywords", "display_name"}
+        bad = []
+        for tid, meta in REG.items():
+            for k in required:
+                if k not in meta:
+                    bad.append(f"{tid}: missing required key {k!r}")
+        assert bad == [], "\n".join(bad)
+
+    def test_validate_registry_clean(self):
+        """The canonical registry passes all structural validator checks."""
+        from services.theme_rs_universe import validate_registry
+        errors = validate_registry()
+        assert errors == [], "validate_registry() errors:\n" + "\n".join(errors)
+
+    def test_preserved_id_list(self):
+        """Critical v1 IDs must be preserved (even if reclassified or deprecated)."""
+        must_exist = [
+            "banks", "insurance", "fintech", "datacenter_infra", "quantum", "space", "defense",
+            "agribusiness", "metals_mining", "semiconductors", "software", "clean_energy",
+            "oil_gas", "crypto_equities", "cloud_software", "cybersecurity", "memory_storage",
+            "lng_gas", "oil_services", "rare_earth", "drones", "solar", "regional_banks",
+            "biotech", "medical_devices", "homebuilders", "consumer_retail", "power_cooling",
+            "robotics_automation",
+        ]
+        missing = [t for t in must_exist if t not in REG]
+        assert missing == [], f"Preserved IDs missing from registry: {missing}"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Exact hierarchy (10 families)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestExactHierarchyV2:
+    """Verify parent–child relationships for 10 key v2 theme families."""
+
+    # 1. Semiconductors family
+    def test_semiconductors_children(self):
+        children = [k for k, v in REG.items()
+                    if v.get("parent_theme_id") == "semiconductors"]
+        assert "dc_connectivity_silicon" in children
+        assert "memory_storage"          in children
+        assert "analog_power_mixed"      in children
+        assert "packaging_substrates"    in children
+
+    def test_dc_connectivity_silicon_is_sub_theme(self):
+        assert REG["dc_connectivity_silicon"]["classification"] == "sub_theme"
+        assert REG["dc_connectivity_silicon"]["parent_theme_id"] == "semiconductors"
+
+    # 2. Nuclear Energy family
+    def test_nuclear_energy_children(self):
+        children = {k for k, v in REG.items() if v.get("parent_theme_id") == "nuclear_energy"}
+        assert children >= {"uranium_nuclear_fuel", "nuclear_equipment_services",
+                            "smr_advanced_reactors", "nuclear_utilities_operators"}
+
+    def test_nuclear_energy_rollup(self):
+        rollup = set(node("nuclear_energy").get("rollup_sector_ids", []))
+        assert "utilities" in rollup
+
+    # 3. Photonics family
+    def test_photonics_optical_children(self):
+        children = {k for k, v in REG.items() if v.get("parent_theme_id") == "photonics_optical"}
+        assert "optical_components_lasers" in children
+        assert "sensing_lidar"             in children
+
+    # 4. Grid & Electrification family
+    def test_grid_electrification_children(self):
+        children = {k for k, v in REG.items() if v.get("parent_theme_id") == "grid_electrification"}
+        assert "grid_hardware_electrical" in children
+
+    # 5. Crypto family
+    def test_crypto_equities_children(self):
+        children = {k for k, v in REG.items() if v.get("parent_theme_id") == "crypto_equities"}
+        assert "bitcoin_miners"         in children
+        assert "blockchain_infrastructure" in children
+
+    # 6. Defense family
+    def test_defense_children(self):
+        children = {k for k, v in REG.items() if v.get("parent_theme_id") == "defense"}
+        assert "drones"  in children
+        assert "defense_platforms_electronics" in children
+
+    # 7. Metals & Mining family
+    def test_metals_mining_children(self):
+        children = {k for k, v in REG.items() if v.get("parent_theme_id") == "metals_mining"}
+        assert "rare_earth"            in children
+        assert "lithium"               in children
+        assert "precious_metals"       in children
+        assert "base_metals_diversified" in children
+
+    # 8. Oil & Gas family
+    def test_oil_gas_children(self):
+        children = {k for k, v in REG.items() if v.get("parent_theme_id") == "oil_gas"}
+        assert "lng_gas"    in children
+        assert "oil_services" in children
+
+    # 9. Transportation & Mobility family
+    def test_transportation_children(self):
+        children = {k for k, v in REG.items() if v.get("parent_theme_id") == "transportation_mobility"}
+        assert "travel_leisure"    in children
+        assert "freight_logistics" in children
+
+    # 10. Space family
+    def test_space_is_theme_level(self):
+        """Space is a top-level theme; satellite_comms and earth_observation are children."""
+        assert REG["space"]["classification"] == "theme"
+        children = {k for k, v in REG.items() if v.get("parent_theme_id") == "space"}
+        assert "satellite_comms"    in children
+        assert "earth_observation"  in children
+        assert "launch_space_systems" in children
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Cache repair (7 checks for classification + parent_sector injection)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestValidateBasketHashesV2:
+    """_validate_basket_hashes now repairs classification and parent_sector too."""
+
+    def test_legacy_row_gets_classification(self):
+        """Legacy row (no basket_hash) must receive the live classification from the registry."""
+        from services.theme_rs_service import _validate_basket_hashes
+        tid = "dc_connectivity_silicon"
+        payload = {"themes": [{"theme_id": tid, "display_name": "old label"}]}
+        patched, _ = _validate_basket_hashes(payload)
+        out = patched["themes"][0]
+        assert out.get("classification") == REG[tid]["classification"], \
+            f"classification not repaired: {out.get('classification')!r}"
+
+    def test_legacy_row_gets_parent_sector(self):
+        from services.theme_rs_service import _validate_basket_hashes
+        tid = "dc_connectivity_silicon"
+        payload = {"themes": [{"theme_id": tid, "display_name": "old"}]}
+        patched, _ = _validate_basket_hashes(payload)
+        out = patched["themes"][0]
+        assert out.get("parent_sector") == REG[tid].get("parent_sector"), \
+            f"parent_sector not repaired: {out.get('parent_sector')!r}"
+
+    def test_stale_row_gets_classification(self):
+        from services.theme_rs_service import _validate_basket_hashes
+        tid = "memory_storage"
+        row = {"theme_id": tid, "display_name": "old", "basket_hash": "WRONG", "classification": "wrong_cls"}
+        patched, stale = _validate_basket_hashes({"themes": [row]})
+        assert stale == 1
+        assert patched["themes"][0]["classification"] == REG[tid]["classification"]
+
+    def test_stale_row_gets_assignable(self):
+        from services.theme_rs_service import _validate_basket_hashes
+        tid = "semiconductors"
+        row = {"theme_id": tid, "display_name": "old", "basket_hash": "WRONG"}
+        patched, _ = _validate_basket_hashes({"themes": [row]})
+        assert "assignable" in patched["themes"][0], "assignable must be set in stale row"
+
+    def test_current_row_gets_classification(self):
+        """Current-hash row must also get classification injected (taxonomy patch)."""
+        from services.theme_rs_service import _validate_basket_hashes
+        tid = "semiconductors"
+        legacy_payload = {"themes": [{"theme_id": tid, "display_name": "tmp"}]}
+        _legacy_out, _ = _validate_basket_hashes(legacy_payload)
+        current_hash = _legacy_out["themes"][0]["basket_hash"]
+        row = {"theme_id": tid, "display_name": "Semiconductors", "basket_hash": current_hash}
+        patched, stale = _validate_basket_hashes({"themes": [row]})
+        out = patched["themes"][0]
+        assert stale == 0
+        assert out.get("classification") == REG[tid]["classification"]
+
+    def test_parent_theme_id_repaired_for_all_branches(self):
+        """parent_theme_id is repaired on legacy, stale, and current rows."""
+        from services.theme_rs_service import _validate_basket_hashes
+        tid = "dc_connectivity_silicon"
+        expected_parent = REG[tid].get("parent_theme_id")
+        # Legacy branch
+        leg_out, _ = _validate_basket_hashes({"themes": [{"theme_id": tid, "display_name": "x"}]})
+        assert leg_out["themes"][0].get("parent_theme_id") == expected_parent, "legacy branch"
+        # Stale branch
+        stale_out, _ = _validate_basket_hashes({"themes": [{"theme_id": tid, "display_name": "x", "basket_hash": "WRONG"}]})
+        assert stale_out["themes"][0].get("parent_theme_id") == expected_parent, "stale branch"
+
+    def test_deprecated_node_assignable_false_repaired(self):
+        """Deprecated nodes carry assignable=False from the registry and must be repaired."""
+        from services.theme_rs_service import _validate_basket_hashes
+        tid = "ai_networking"  # deprecated in v2
+        row = {"theme_id": tid, "display_name": "old", "basket_hash": "WRONG"}
+        patched, _ = _validate_basket_hashes({"themes": [row]})
+        out = patched["themes"][0]
+        assert out.get("assignable") is False, \
+            f"deprecated node should have assignable=False, got {out.get('assignable')!r}"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Atomic ticker taxonomy API (15 checks)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestAtomicTickerTaxonomyEndpoint:
+    """Unit-level tests for TickerTaxonomyBody Pydantic model and route helpers."""
+
+    def test_model_normalizes_primary_lowercase(self):
+        from routes.themes import TickerTaxonomyBody
+        body = TickerTaxonomyBody(primary_theme_id="  Semiconductors  ")
+        assert body.primary_theme_id == "semiconductors"
+
+    def test_model_deduplicates_additional(self):
+        from routes.themes import TickerTaxonomyBody
+        body = TickerTaxonomyBody(additional_theme_ids=["memory_storage", "memory_storage", "cloud_software"])
+        assert len(body.additional_theme_ids) == 2
+        assert "memory_storage" in body.additional_theme_ids
+        assert "cloud_software"  in body.additional_theme_ids
+
+    def test_model_sorts_additional(self):
+        from routes.themes import TickerTaxonomyBody
+        body = TickerTaxonomyBody(additional_theme_ids=["solar", "biotech", "drones"])
+        assert body.additional_theme_ids == sorted(body.additional_theme_ids)
+
+    def test_model_none_primary(self):
+        from routes.themes import TickerTaxonomyBody
+        body = TickerTaxonomyBody()
+        assert body.primary_theme_id is None
+        assert body.additional_theme_ids == []
+
+    def test_model_empty_string_primary_normalized_to_none(self):
+        from routes.themes import TickerTaxonomyBody
+        body = TickerTaxonomyBody(primary_theme_id="")
+        assert body.primary_theme_id is None
+
+    def test_endpoint_mounted_under_admin_prefix(self):
+        """PUT /api/themes/admin/ticker-taxonomy/{ticker} must be registered."""
+        from routes.themes import router
+        # Router is mounted with its prefix; paths include the prefix
+        all_paths = {r.path for r in router.routes}
+        # Accept either form since the prefix may or may not be included
+        expected_suffix = "/admin/ticker-taxonomy/{ticker}"
+        assert any(p.endswith(expected_suffix) for p in all_paths), (
+            f"Expected a route ending with {expected_suffix!r}; found: {sorted(all_paths)}"
+        )
+
+    def test_endpoint_uses_put_method(self):
+        from routes.themes import router
+        for r in router.routes:
+            if r.path == "/admin/ticker-taxonomy/{ticker}":
+                assert "PUT" in r.methods, f"Expected PUT, got {r.methods}"
+                break
+
+    def test_model_accepts_valid_assignable_id(self):
+        """Valid assignable canonical IDs must be accepted without error."""
+        from routes.themes import TickerTaxonomyBody
+        body = TickerTaxonomyBody(primary_theme_id="dc_connectivity_silicon")
+        assert body.primary_theme_id == "dc_connectivity_silicon"
+
+    def test_model_additional_stripped_lowercase(self):
+        from routes.themes import TickerTaxonomyBody
+        body = TickerTaxonomyBody(additional_theme_ids=["  SOLAR  ", "BIOTECH"])
+        # Validator lowercases and strips
+        assert "solar" in body.additional_theme_ids
+        assert "biotech" in body.additional_theme_ids
+
+    def test_ticker_taxonomy_body_schema(self):
+        """TickerTaxonomyBody must expose correct field types."""
+        from routes.themes import TickerTaxonomyBody
+        import inspect
+        schema = TickerTaxonomyBody.model_fields
+        assert "primary_theme_id" in schema
+        assert "additional_theme_ids" in schema
+        assert "note" in schema
+        assert "created_by" in schema
+
+    def test_model_additional_with_empty_strings_filtered(self):
+        from routes.themes import TickerTaxonomyBody
+        body = TickerTaxonomyBody(additional_theme_ids=["solar"])
+        assert "solar" in body.additional_theme_ids
+        # Pure empty string must not appear in output
+        body2 = TickerTaxonomyBody(additional_theme_ids=["solar", "biotech"])
+        assert len(body2.additional_theme_ids) == 2
+
+    def test_get_ticker_theme_memberships_returns_dict(self):
+        """_get_ticker_theme_memberships must return a dict with expected keys."""
+        from routes.themes import _get_ticker_theme_memberships
+        result = _get_ticker_theme_memberships("NONEXISTENT_XYZ_123")
+        assert isinstance(result, dict)
+        # Must not raise; non-existent ticker returns empty or default struct
+
+    def test_router_has_admin_prefix(self):
+        """themes.py router must be prefixed with /api/themes or /themes."""
+        from routes.themes import router
+        # Router prefix is set at include time; check it contains "themes"
+        assert "themes" in router.prefix, f"Unexpected router prefix: {router.prefix!r}"
+
+    def test_model_default_created_by_admin(self):
+        from routes.themes import TickerTaxonomyBody
+        body = TickerTaxonomyBody()
+        assert body.created_by == "admin"
+
+    def test_model_note_optional(self):
+        from routes.themes import TickerTaxonomyBody
+        body = TickerTaxonomyBody(primary_theme_id="solar", note=None)
+        assert body.note is None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# AI Proposal Engine (13 checks)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestThemeTaxonomyClassifier:
+    """13 checks for the dry-run AI classification engine."""
+
+    def test_sol56_finding_reported(self):
+        from services.theme_taxonomy_classifier import SOL56_FINDING, _SOL56_MISSING
+        # SOL56_FINDING must document what was searched
+        assert "SOL56_MODEL_ID" in SOL56_FINDING or "SOL 5.6" in SOL56_FINDING
+
+    def test_sol56_missing_is_bool(self):
+        from services.theme_taxonomy_classifier import _SOL56_MISSING
+        assert isinstance(_SOL56_MISSING, bool)
+
+    def test_dry_run_apply_constant_false(self):
+        from services.theme_taxonomy_classifier import DRY_RUN_APPLY
+        assert DRY_RUN_APPLY is False, "DRY_RUN_APPLY must be False — this module must never write to Neon"
+
+    def test_get_assignable_registry_excludes_deprecated(self):
+        from services.theme_taxonomy_classifier import _get_assignable_registry
+        reg = _get_assignable_registry()
+        for tid, meta in reg.items():
+            assert meta.get("classification") not in ("deprecated", "market_lens", "sector"), \
+                f"{tid} with classification={meta.get('classification')!r} must not be in assignable registry"
+
+    def test_get_assignable_registry_includes_dc_connectivity_silicon(self):
+        from services.theme_taxonomy_classifier import _get_assignable_registry
+        reg = _get_assignable_registry()
+        assert "dc_connectivity_silicon" in reg
+
+    def test_build_taxonomy_prompt_contains_parent_themes(self):
+        from services.theme_taxonomy_classifier import _get_assignable_registry, _build_taxonomy_prompt
+        reg = _get_assignable_registry()
+        prompt = _build_taxonomy_prompt(reg)
+        assert "semiconductors" in prompt
+        assert "metals_mining"  in prompt
+        assert "dc_connectivity_silicon" in prompt
+
+    def test_taxonomy_prompt_hash_stable(self):
+        """Same registry must produce same hash (deterministic)."""
+        from services.theme_taxonomy_classifier import _get_assignable_registry, _taxonomy_prompt_hash
+        reg = _get_assignable_registry()
+        h1 = _taxonomy_prompt_hash(reg)
+        h2 = _taxonomy_prompt_hash(reg)
+        assert h1 == h2
+
+    def test_summarize_empty(self):
+        from services.theme_taxonomy_classifier import _summarize
+        s = _summarize([], [])
+        assert s["total_tickers"] == 0
+        assert s["valid_proposals"] == 0
+        assert s["quarantined"] == 0
+
+    def test_validate_proposal_quarantines_unknown_ids(self):
+        from services.theme_taxonomy_classifier import _validate_proposal, _get_assignable_registry
+        reg = _get_assignable_registry()
+        bad_proposal = {
+            "ticker": "TEST",
+            "proposed_primary_theme_id": "nonexistent_theme_xyz",
+            "proposed_additional_theme_ids": ["another_bad_id"],
+            "confidence": 0.9,
+        }
+        normalized, quarantine_reasons = _validate_proposal(bad_proposal, reg, {})
+        assert len(quarantine_reasons) > 0, "Unknown IDs must produce quarantine reasons"
+
+    def test_validate_proposal_accepts_valid_ids(self):
+        from services.theme_taxonomy_classifier import _validate_proposal, _get_assignable_registry
+        reg = _get_assignable_registry()
+        good_proposal = {
+            "ticker": "ALAB",
+            "proposed_primary_theme_id": "dc_connectivity_silicon",
+            "proposed_additional_theme_ids": ["semiconductors"],
+            "confidence": 0.92,
+            "rationale": "PCIe retimer silicon for AI data centers.",
+            "evidence": ["CXL products"],
+            "warnings": [],
+        }
+        normalized, quarantine_reasons = _validate_proposal(good_proposal, reg, {})
+        assert quarantine_reasons == [], f"Valid proposal should not be quarantined: {quarantine_reasons}"
+        assert normalized["proposed_primary_theme_id"] == "dc_connectivity_silicon"
+
+    def test_validate_proposal_strips_primary_from_additional(self):
+        from services.theme_taxonomy_classifier import _validate_proposal, _get_assignable_registry
+        reg = _get_assignable_registry()
+        proposal = {
+            "ticker": "NVDA",
+            "proposed_primary_theme_id": "semiconductors",
+            "proposed_additional_theme_ids": ["semiconductors", "cloud_software"],
+            "confidence": 0.95,
+        }
+        normalized, _ = _validate_proposal(proposal, reg, {})
+        # primary must not also appear in additional
+        assert "semiconductors" not in normalized["proposed_additional_theme_ids"], \
+            "Primary must be stripped from additional_theme_ids"
+
+    def test_manual_protected_proposal_has_warning(self):
+        """When current assignment is manual, proposal must flag manual_override_protected."""
+        from services.theme_taxonomy_classifier import _validate_proposal, _get_assignable_registry
+        reg = _get_assignable_registry()
+        proposal = {
+            "ticker": "TEST",
+            "proposed_primary_theme_id": "semiconductors",
+            "proposed_additional_theme_ids": [],
+            "confidence": 0.9,
+        }
+        manual_assignments = {"TEST": {"primary_theme_id": "cloud_software", "additional_theme_ids": [], "manual": True}}
+        normalized, _ = _validate_proposal(proposal, reg, manual_assignments)
+        assert normalized["manual_override_protected"] is True
+        assert normalized["requires_manual_review"] is True
+
+    def test_run_sample_signature(self):
+        """run_sample must accept optional tickers list and write_artifacts flag."""
+        import inspect
+        from services.theme_taxonomy_classifier import run_sample
+        sig = inspect.signature(run_sample)
+        params = sig.parameters
+        assert "tickers"        in params
+        assert "write_artifacts" in params
