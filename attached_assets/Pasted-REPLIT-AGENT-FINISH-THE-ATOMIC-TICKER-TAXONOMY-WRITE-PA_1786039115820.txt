@@ -1,0 +1,557 @@
+REPLIT AGENT — FINISH THE ATOMIC TICKER-TAXONOMY WRITE PATH
+
+Work only in the live backend Replit workspace:
+
+`/home/runner/workspace`
+
+The live Replit filesystem and database architecture are authoritative.
+
+GitHub is reference only.
+
+Current corrective commit:
+
+```text
+22545317 fix: harden taxonomy assignments and classification inputs
+```
+
+Create exactly one new correction commit on top.
+
+Do not reset, revert, amend, rebase, or push.
+
+---
+
+# Mandatory first step
+
+1. Find and read backend `AGENTS.md` completely.
+2. Follow its report-path and repository instructions.
+3. Record:
+
+   * branch
+   * HEAD
+   * `git status -sb`
+   * recent commits
+4. Preserve unrelated live changes.
+5. Inspect the current implementations of:
+
+   * `admin_put_ticker_taxonomy`
+   * `_perform_membership_write`
+   * `_perform_theme_membership_only_write`
+   * `_get_ticker_theme_memberships`
+   * `atomic_taxonomy_write_db`
+   * category-override storage
+   * primary-theme resolver precedence
+   * LLM/theme-mapper side effects
+
+Do not modify the Taxonomy v2 hierarchy, registry metadata, AI classifier, or frontend in this task unless a focused test import requires a minimal adjustment.
+
+---
+
+# Proven remaining defect
+
+Commit `22545317` added `atomic_taxonomy_write_db()` but did not wire it into:
+
+```http
+PUT /api/themes/admin/ticker-taxonomy/{ticker}
+```
+
+The endpoint still performs independent per-membership writes.
+
+Current defects:
+
+1. The route does not call `atomic_taxonomy_write_db()`.
+2. Per-membership helpers invalidate caches during every operation.
+3. The route invalidates caches again afterward.
+4. Additional-membership failures return partial mutation.
+5. The undo stack uses independent compensating writes and can itself fail.
+6. Promoting an existing additional membership to primary does not update the primary store.
+7. Clearing primary does not reliably clear the category override.
+8. The response assigns `primary_id = body.primary_theme_id` instead of rereading authoritative state.
+
+Fix only this write path and its production tests.
+
+---
+
+# Required architecture
+
+The endpoint must perform exactly one authoritative database transaction containing:
+
+```text
+All theme_ticker_overrides changes
++
+the primary category-override change
+```
+
+No per-membership storage helper may be called inside the endpoint.
+
+The existing legacy endpoints may continue using their current helpers.
+
+## Authoritative data roles
+
+Preserve the existing architecture:
+
+```text
+watchlist_category_overrides
+  = canonical primary-theme identity
+
+theme_ticker_overrides
+  = explicit primary/additional theme-basket memberships
+
+resolver precedence
+  = existing canonical resolver behavior
+```
+
+Do not create a new table or source of truth.
+
+---
+
+# Contract 1 — extend the low-level transaction primitive
+
+Use and, where necessary, minimally extend:
+
+```python
+atomic_taxonomy_write_db(...)
+```
+
+It must support in one transaction:
+
+1. Upserting `add` or `remove` rows for every affected `theme_ticker_overrides` membership.
+2. Setting the canonical primary category override when `primary_theme_id` is non-null.
+3. Deleting the canonical primary category override when `primary_theme_id` is null.
+4. Replacing an old primary with a new one.
+5. Promoting an already-existing additional membership to primary without requiring another membership insert.
+
+Preferred explicit primary operation shape:
+
+```python
+primary_operation = {
+    "action": "set",
+    "user_id": "default",
+    "ticker": "ALAB",
+    "category": "Data Center Connectivity & Interconnect Silicon",
+    "source": "themes_page_manual",
+    "reason": "themes_page:dc_connectivity_silicon",
+}
+```
+
+or:
+
+```python
+primary_operation = {
+    "action": "clear",
+    "user_id": "default",
+    "ticker": "ALAB",
+}
+```
+
+Use naming consistent with the live storage module.
+
+Do not overload a missing dictionary to ambiguously mean clear.
+
+## Transaction behavior
+
+Within one connection:
+
+```text
+BEGIN
+all theme-membership statements
+primary set or clear
+COMMIT
+```
+
+On any statement failure:
+
+```text
+ROLLBACK
+no partial state
+```
+
+Return a failure result or raise a typed storage exception.
+
+Do not log secrets or full connection details.
+
+---
+
+# Contract 2 — route must call the transaction exactly once
+
+Rewrite `admin_put_ticker_taxonomy()` so it:
+
+1. Authenticates.
+2. Normalizes and validates the ticker.
+3. Validates all taxonomy IDs.
+4. Removes:
+
+   * duplicates
+   * primary from additions
+   * redundant ancestors
+5. Reads current explicit memberships and current canonical primary.
+6. Computes deterministic desired state.
+7. Builds one complete transaction payload.
+8. Calls `atomic_taxonomy_write_db()` exactly once.
+9. Raises immediately when the transaction fails.
+10. Performs no compensating membership writes.
+11. Invalidates caches exactly once after successful commit.
+12. Runs optional downstream hints only after commit.
+13. Rereads authoritative state.
+14. Returns that reread.
+
+Remove:
+
+```text
+undo_stack
+per-membership route loops
+errors_list partial-success behavior
+best-effort rollback
+```
+
+The route must not call:
+
+```python
+_perform_membership_write(...)
+_perform_theme_membership_only_write(...)
+```
+
+Those remain for legacy endpoints only.
+
+---
+
+# Contract 3 — deterministic primary handling
+
+These cases must work:
+
+## New primary not previously assigned
+
+Current:
+
+```text
+Primary: old_theme
+Additional: []
+```
+
+Requested:
+
+```text
+Primary: new_theme
+Additional: []
+```
+
+Result:
+
+```text
+Primary: new_theme
+Additional: []
+```
+
+## Promote existing additional membership
+
+Current:
+
+```text
+Primary: old_theme
+Additional: new_theme
+```
+
+Requested:
+
+```text
+Primary: new_theme
+Additional: old_theme
+```
+
+Result must exactly match the request.
+
+The fact that `new_theme` already exists in membership rows must not prevent its promotion.
+
+## Clear primary
+
+Current:
+
+```text
+Primary: old_theme
+Additional: secondary_theme
+```
+
+Requested:
+
+```text
+Primary: null
+Additional: secondary_theme
+```
+
+Result:
+
+```text
+Primary: null
+Additional: secondary_theme
+```
+
+The category override must be removed in the same transaction.
+
+## Primary unchanged, additions changed
+
+Do not rewrite the primary unnecessarily, but the final stored state must remain authoritative.
+
+---
+
+# Contract 4 — explicit desired membership state
+
+Build:
+
+```text
+desired_theme_ids =
+  primary when non-null
+  +
+  normalized additional memberships
+```
+
+For every currently explicit membership:
+
+* desired → final action `add`
+* not desired → final action `remove`
+
+For every desired membership not currently active:
+
+* final action `add`
+
+The transaction payload must be deterministic and sorted.
+
+Primary must be first only in the returned normalized identity—not because database iteration order controls identity.
+
+---
+
+# Contract 5 — side effects after commit only
+
+After a successful transaction:
+
+1. Invalidate Theme RS/enriched-universe/options-sector caches once.
+2. Send Options Flow high-priority hints for newly added memberships once.
+3. Update any nonauthoritative legacy LLM/theme-mapper file only when still required by current consumers.
+
+These side effects are not part of the database transaction.
+
+If a nonauthoritative post-commit side effect fails:
+
+* do not roll back committed authoritative state
+* log a safe warning
+* return authoritative taxonomy success with a nonfatal warning field when current API conventions allow
+
+Do not call cache invalidation before commit.
+
+Do not invalidate on rollback.
+
+---
+
+# Contract 6 — authoritative response
+
+After successful commit and cache refresh, reread:
+
+```text
+canonical primary from the existing resolver/category store
+explicit active memberships from theme_ticker_overrides
+```
+
+Return:
+
+```json
+{
+  "ok": true,
+  "ticker": "ALAB",
+  "primary_theme_id": "dc_connectivity_silicon",
+  "additional_theme_ids": [
+    "networking_fabric_infra"
+  ],
+  "theme_ids": [
+    "dc_connectivity_silicon",
+    "networking_fabric_infra"
+  ],
+  "subtheme_ids": [
+    "dc_connectivity_silicon",
+    "networking_fabric_infra"
+  ],
+  "memberships_added": [],
+  "memberships_removed": []
+}
+```
+
+Requirements:
+
+* `primary_theme_id` comes from the authoritative reread, never directly from the request body.
+* Primary is first in `theme_ids`.
+* Additions are deterministic and deduplicated.
+* `additional_theme_ids` excludes primary.
+* Deprecated, invalid, market-lens, and sector IDs are absent.
+* Do not infer explicit memberships from proxy or candidate baskets.
+
+If the reread does not match the requested normalized state:
+
+* return/raise a server error
+* include safe diagnostics
+* do not falsely report success
+
+---
+
+# Required production tests
+
+Use the real route/service and storage boundaries.
+
+Do not rely only on source-pattern assertions.
+
+## Transaction primitive
+
+1. All successful statements commit once.
+2. Failure on first membership statement rolls back.
+3. Failure on middle membership statement rolls back prior statements.
+4. Failure on primary-set statement rolls back membership statements.
+5. Failure on primary-clear statement rolls back membership statements.
+6. No commit occurs after any failure.
+7. Rollback occurs exactly once.
+8. Connection returns to the pool.
+
+## Route behavior
+
+9. Route calls `atomic_taxonomy_write_db()` exactly once.
+10. Route never calls either per-membership helper.
+11. Cache invalidation occurs exactly once after success.
+12. Cache invalidation occurs zero times after transaction failure.
+13. No undo-stack or compensating writes remain.
+14. Additional-membership failure cannot produce partial state.
+15. Primary-only save works.
+16. Primary plus additions works.
+17. Replacing primary works.
+18. Promoting an existing addition to primary works.
+19. Clearing primary works.
+20. Primary unchanged with changed additions works.
+21. Requested primary remains primary regardless of input ordering.
+22. Redundant ancestor normalization remains correct.
+23. Cross-branch additions remain correct.
+24. Unknown, sector, deprecated, and market-lens IDs remain rejected.
+25. Response primary comes from authoritative reread.
+26. Primary appears first in `theme_ids`.
+27. Reread mismatch fails rather than reporting false success.
+28. Legacy single-membership endpoints remain functional.
+
+## Regression
+
+29. All existing Taxonomy v2 hierarchy tests continue passing.
+30. Provider gate and input-completeness tests continue passing.
+31. No frontend files change.
+32. No AI model call occurs.
+33. No Watchlist assignments are modified during tests.
+
+---
+
+# Live validation
+
+Use a transaction rollback fixture or dedicated safe test symbol according to existing project conventions.
+
+Do not mutate a real Watchlist ticker without restoring it transactionally.
+
+Demonstrate:
+
+```text
+primary only
+primary + two additions
+promote addition to primary
+clear primary
+injected middle failure
+```
+
+For each, record:
+
+* transaction calls
+* commit/rollback count
+* cache invalidation count
+* final authoritative reread
+
+---
+
+# Validation commands
+
+Run focused tests and:
+
+```bash
+cd /home/runner/workspace/backend
+python3.11 -m pytest tests/test_theme_hierarchy.py -q
+git diff --check
+```
+
+Also run additional backend test commands required by `AGENTS.md`.
+
+Report actual exit codes.
+
+Do not call a failing command passed.
+
+---
+
+# Scope restrictions
+
+Do not:
+
+* modify the taxonomy hierarchy
+* modify registry rollups
+* modify classifier/provider selection
+* run the AI sample
+* run the full Watchlist classification
+* apply theme migrations
+* modify frontend files
+* create a new table
+* replace existing resolver precedence
+* install dependencies
+* push
+
+---
+
+# Repository hygiene
+
+Do not use:
+
+```bash
+git add .
+git add -A
+```
+
+Stage exact source, test, and required report files only.
+
+Do not stage:
+
+* generated proposal artifacts
+* caches
+* database files
+* checkpoints
+* attached prompts
+* secrets
+* unrelated runtime files
+
+Create exactly one commit:
+
+```text
+fix: make ticker taxonomy updates truly atomic
+```
+
+---
+
+# Required report
+
+Write to the exact path required by `AGENTS.md`.
+
+Include:
+
+1. Confirmation `AGENTS.md` was read first.
+2. Starting HEAD and status.
+3. Proof that the old route did not use `atomic_taxonomy_write_db`.
+4. Old repeated-invalidation count.
+5. Old partial-success path.
+6. Old promote-existing-addition defect.
+7. Old clear-primary defect.
+8. Transaction primitive changes.
+9. Exact route rewrite.
+10. Primary-set and primary-clear behavior.
+11. Proof per-membership helpers are absent from the route.
+12. Commit/rollback failure-injection evidence.
+13. Cache invalidation evidence.
+14. Authoritative reread evidence.
+15. Tests and exit codes.
+16. Exact files changed and staged.
+17. Confirmation no taxonomy/classifier/frontend changes.
+18. Final status.
+19. Commit SHA and message.
+20. Complete correction-commit diff only.
