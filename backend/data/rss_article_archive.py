@@ -51,40 +51,62 @@ def _sanitize_url(url: str | None) -> str | None:
 
 
 _DB_URL = _sanitize_url(os.getenv("NEON_DATABASE_URL") or os.getenv("DATABASE_URL"))
+# ThreadedConnectionPool is thread-safe (uses internal locking on getconn/putconn).
+# SimpleConnectionPool is NOT — concurrent asyncio.to_thread workers calling
+# getconn/putconn simultaneously corrupt its C-level internals → malloc crash →
+# SIGABRT.  The RSS sweeper dispatches many upsert_with_cache calls concurrently
+# via asyncio.to_thread, so thread-safety is required here.
 _pool: Any = None
+_pool_lock: Any = None  # threading.Lock, created on first use to avoid import-time cost
+
+
+def _get_pool_lock():
+    global _pool_lock
+    if _pool_lock is None:
+        import threading
+        _pool_lock = threading.Lock()
+    return _pool_lock
 
 
 def _get_conn():
     global _pool
     if not _DB_URL or not _PSYCOPG2_OK:
         return None
+    lock = _get_pool_lock()
     for _ in range(2):
-        if _pool is None:
-            try:
-                _pool = _pg_pool.SimpleConnectionPool(1, 5, _DB_URL)
-            except Exception as e:
-                print(f"[RSS_ARCHIVE] pool creation failed: {e}")
-                return None
+        with lock:
+            if _pool is None:
+                try:
+                    _pool = _pg_pool.ThreadedConnectionPool(1, 5, _DB_URL)
+                except Exception as e:
+                    print(f"[RSS_ARCHIVE] pool creation failed: {e}")
+                    return None
+            local_pool = _pool
         try:
-            conn = _pool.getconn()
+            conn = local_pool.getconn()
             cur = conn.cursor()
             cur.execute("SELECT 1")
             cur.close()
             conn.commit()
             return conn
         except Exception:
-            try:
-                _pool.closeall()
-            except Exception:
-                pass
-            _pool = None
+            with lock:
+                if _pool is local_pool:
+                    try:
+                        _pool.closeall()
+                    except Exception:
+                        pass
+                    _pool = None
     return None
 
 
 def _put_conn(conn):
-    if _pool and conn:
+    lock = _get_pool_lock()
+    with lock:
+        local_pool = _pool
+    if local_pool and conn:
         try:
-            _pool.putconn(conn)
+            local_pool.putconn(conn)
         except Exception:
             pass
 

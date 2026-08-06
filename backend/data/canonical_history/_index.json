@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-08-06T17:22:51.762063+00:00",
+  "updated_at": "2026-08-06T22:38:30.398505+00:00",
   "symbols": {
     "TEST_MARA": {
       "symbol": "TEST_MARA",
@@ -33577,44 +33577,40 @@
     },
     "GILT": {
       "symbol": "GILT",
-      "provider": "tradier",
-      "canonical_history_provider": "tradier",
-      "canonical_history_provider_rank": 1,
+      "provider": "tradier_reaction",
+      "canonical_history_provider": "tradier_reaction",
+      "canonical_history_provider_rank": 3,
       "canonical_history_quality": "full_10y_tradier_unverified",
       "canonical_history_adjusted_status": "unknown",
       "canonical_history_refresh_mode": "incremental_daily_append",
-      "bar_count": 2517,
-      "oldest_bar_date": "2016-07-28",
-      "newest_bar_date": "2026-08-04",
+      "bar_count": 2518,
+      "oldest_bar_date": "2016-07-29",
+      "newest_bar_date": "2026-08-06",
       "years_available": 10.0,
-      "fetched_at": "2026-08-05T05:54:24.129726+00:00",
-      "stale_after": "2026-08-07T05:54:24.129735+00:00",
+      "fetched_at": "2026-08-06T20:10:31.698706+00:00",
+      "stale_after": "2026-08-08T20:10:31.698715+00:00",
       "history_status": "available_10y_fresh",
       "base_history_status": "available_10y",
       "error_reason": null,
-      "source_priority": 1,
+      "source_priority": 3,
       "is_actual_limit": false,
       "is_lifetime_under_10y": false,
       "is_provider_cap": false,
       "depth_confidence": 1.0,
       "fib_scope": "full_10y",
-      "last_attempt_at": "2026-08-05T05:54:24.129726+00:00",
-      "next_retry_at": "2026-08-07T05:54:24.129735+00:00",
+      "last_attempt_at": "2026-08-06T20:10:31.698706+00:00",
+      "next_retry_at": "2026-08-08T20:10:31.698715+00:00",
       "cache_usable": true,
       "is_10y_complete": true,
-      "volume_change_1d_pct": 33.726589,
-      "volume_change_7d_pct": -11.014234,
-      "volume_change_30d_pct": -47.986816,
-      "volume_acceleration_pp": 36.972582,
-      "volume_metrics_as_of": "2026-08-04",
+      "volume_change_1d_pct": 59.521079,
+      "volume_change_7d_pct": 5.393358,
+      "volume_change_30d_pct": -46.418306,
+      "volume_acceleration_pp": 51.811664,
+      "volume_metrics_as_of": "2026-08-05",
       "volume_metrics_status": "ok",
-      "change_7d": 10.687732,
-      "change_30d": -7.531056,
+      "change_7d": 11.089866,
+      "change_30d": -11.229947,
       "comparison_close_tail": [
-        [
-          "2026-05-04",
-          18.34
-        ],
         [
           "2026-05-05",
           20.07
@@ -33866,6 +33862,10 @@
         [
           "2026-08-04",
           11.91
+        ],
+        [
+          "2026-08-05",
+          11.62
         ]
       ]
     },
