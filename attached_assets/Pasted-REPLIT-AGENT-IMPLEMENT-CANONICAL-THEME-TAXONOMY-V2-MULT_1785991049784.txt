@@ -1,0 +1,1992 @@
+REPLIT AGENT — IMPLEMENT CANONICAL THEME TAXONOMY V2, MULTI-MEMBERSHIP WRITES, AND AI-ASSISTED WATCHLIST MIGRATION DRY RUN
+
+Work only in the live backend Replit workspace:
+
+`/home/runner/workspace`
+
+The live Replit filesystem, database configuration, runtime behavior, and current branch are authoritative.
+
+GitHub is reference and backup only.
+
+Do not reset, revert, rebase, or replace live Replit work to match GitHub.
+
+Do not push.
+
+---
+
+# Mandatory first step
+
+Before inspecting or modifying anything:
+
+1. Find and read the backend `AGENTS.md` completely.
+2. Follow every applicable instruction.
+3. Use the report destination defined by `AGENTS.md`.
+4. Inspect current branch, HEAD, status, and recent commits.
+5. Preserve all unrelated live changes.
+6. Locate the existing theme-assignment, override, bulk-import, and AI-classification systems before proposing new paths.
+
+This project already has substantial theme infrastructure. Reuse and extend it rather than creating a competing taxonomy system.
+
+Known canonical areas from prior work include paths resembling:
+
+```text
+backend/services/theme_rs_universe.py
+backend/services/theme_resolver.py
+theme_ticker_overrides storage/routes
+Watchlist canonical-row construction
+Theme Relative Strength services
+```
+
+Use the actual live paths when they differ.
+
+---
+
+# Objective
+
+Implement the finalized canonical model:
+
+```text
+One actual economic sector
++
+One primary thematic membership
++
+Zero or more additional thematic memberships
+```
+
+A thematic membership can point directly to:
+
+* a parent theme, or
+* a subtheme
+
+The user-facing hierarchy must remain at a maximum of:
+
+```text
+Sector → Theme → Subtheme
+```
+
+Do not create subthemes beneath subthemes.
+
+A company may belong directly to a parent theme when no narrower subtheme fits.
+
+A company may have meaningful memberships across multiple theme families.
+
+Example:
+
+```text
+ALAB
+
+Actual sector:
+Technology
+
+Primary:
+Semiconductors
+  → Data Center Connectivity & Interconnect Silicon
+
+Additional:
+Data Center Infrastructure
+  → Networking & Fabric Infrastructure
+```
+
+Do not store redundant parent memberships when a stored child already rolls up to that parent.
+
+Selecting a parent in the frontend must continue to find:
+
+* direct parent members
+* every member of its children
+
+Selecting a child must remain exact.
+
+Sector filtering must continue to include:
+
+* companies whose actual sector matches
+* companies whose thematic memberships roll up to that sector
+
+---
+
+# Preserve the existing canonical response contract
+
+Do not replace the existing Watchlist or Theme APIs.
+
+Preserve and correctly populate the established fields, including their live equivalents:
+
+```text
+sector_id
+primary_theme_id
+theme_ids
+subtheme_ids
+```
+
+Required normalization:
+
+```text
+primary_theme_id
+  = one valid assignable non-sector taxonomy ID or null
+
+theme_ids
+  = primary first, followed by sorted/deduplicated additional memberships
+
+subtheme_ids
+  = only IDs whose canonical classification is sub_theme
+
+sector_id
+  = actual company sector, independent from thematic rollups
+```
+
+An optional explicit `additional_theme_ids` response field may be added only if it is backward-compatible and there is no existing equivalent.
+
+Do not make the frontend derive sector identity from thematic membership.
+
+Do not let an AI classifier overwrite the actual economic sector in this task. It may flag a suspected sector error for review, but it must not mutate it.
+
+---
+
+# Phase 1 — discover and reuse the current architecture
+
+Before editing, search the entire live backend for:
+
+```text
+theme_ticker_overrides
+theme assignment
+assign theme
+primary_theme
+additional theme
+bulk theme
+bulk assignment
+bulk import
+reclassify
+recategorize
+taxonomy
+classification
+OpenAI
+SOL 5.6
+plugin
+LLM
+batch classify
+watchlist migration
+theme migration
+admin theme
+```
+
+Document:
+
+1. Current source of truth for primary theme assignments.
+2. Current source of truth for additional memberships.
+3. Existing database tables and constraints.
+4. Existing admin endpoints.
+5. Existing transaction helpers.
+6. Existing bulk-upload or reassignment engine.
+7. Existing AI classification or OpenAI-plugin path.
+8. Existing model configuration and exact model alias.
+9. Existing provenance/manual-override fields.
+10. Existing cache invalidation behavior.
+11. Existing audit logging.
+12. Existing retry, rate-limit, and batch behavior.
+
+The user believes a prior bulk theme-reassignment system already exists.
+
+Assume they may be correct.
+
+Reuse it when present.
+
+Do not create a second migration engine, second override table, second membership model, or second LLM client merely because its naming is unfamiliar.
+
+If the existing architecture differs materially from the assumptions below, preserve the live architecture and explain the adaptation in the report.
+
+---
+
+# Phase 2 — canonical Taxonomy v2 registry
+
+## Classification rules
+
+Use the existing canonical sector IDs.
+
+Do not rename or recreate the 11 sectors.
+
+The 11 sectors remain:
+
+```text
+Communication Services
+Consumer Discretionary
+Consumer Staples
+Energy
+Financials
+Health Care
+Industrials
+Materials
+Real Estate
+Technology
+Utilities
+```
+
+All top-level thematic nodes must use:
+
+```text
+classification = "theme"
+parent_theme_id = null
+```
+
+All children must use:
+
+```text
+classification = "sub_theme"
+parent_theme_id = <one top-level theme ID>
+```
+
+No child may itself own children.
+
+Each node must have:
+
+* stable canonical ID
+* exact display name
+* classification
+* parent theme when applicable
+* principal sector where the existing model requires one
+* complete `rollup_sector_ids`
+* assignable/visible status
+* proxy or custom-basket configuration where supported
+* description suitable for both users and the AI classifier
+
+Preserve existing IDs when the semantic meaning remains the same.
+
+Do not churn IDs merely because the display label changes.
+
+Create new IDs when an old node is being split into multiple genuinely different concepts.
+
+---
+
+# Exact finalized taxonomy
+
+## 1. Agribusiness
+
+```text
+Agribusiness
+  Agricultural Inputs & Fertilizers
+  Farm Machinery & Equipment
+  Food Producers & Processors
+```
+
+Principal sector:
+
+```text
+Consumer Staples
+```
+
+Rollup sectors:
+
+```text
+Consumer Staples
+Materials
+Industrials
+```
+
+---
+
+## 2. Consumer & Housing
+
+```text
+Consumer & Housing
+  Consumer Retail
+  Homebuilders
+```
+
+Principal sector:
+
+```text
+Consumer Discretionary
+```
+
+Rollup sectors:
+
+```text
+Consumer Discretionary
+Consumer Staples
+Real Estate
+```
+
+Do not add speculative future children such as Restaurants or Apparel in this task.
+
+---
+
+## 3. Banking
+
+```text
+Banking
+  Regional Banks
+```
+
+Principal and rollup sector:
+
+```text
+Financials
+```
+
+Do not create a `Financial Services` parent above Banking.
+
+That would create unnecessary Theme → Subtheme → Subtheme depth.
+
+---
+
+## 4. Insurance
+
+Keep as a direct top-level theme with no forced child.
+
+Principal and rollup sector:
+
+```text
+Financials
+```
+
+---
+
+## 5. Fintech & Digital Payments
+
+Keep as a direct top-level theme with no forced child.
+
+Principal sector:
+
+```text
+Financials
+```
+
+Rollup sectors:
+
+```text
+Financials
+Technology
+```
+
+---
+
+## 6. Healthcare Innovation
+
+```text
+Healthcare Innovation
+  Biotech
+  Medical Devices
+  Diagnostics & Life Science Tools
+```
+
+Principal and rollup sector:
+
+```text
+Health Care
+```
+
+---
+
+## 7. Metals & Mining
+
+```text
+Metals & Mining
+  Precious Metals
+  Base Metals & Diversified Mining
+  Rare Earths & Strategic Minerals
+  Lithium
+  Steel & Ferrous Metals
+```
+
+Principal and rollup sector:
+
+```text
+Materials
+```
+
+Definitions:
+
+### Precious Metals
+
+Companies primarily exposed to:
+
+* gold
+* silver
+* platinum-group metals
+* precious-metal royalties or streaming
+
+A company does not have to be a pure-play gold or silver producer.
+
+### Base Metals & Diversified Mining
+
+Companies primarily exposed to:
+
+* copper
+* nickel
+* zinc
+* lead
+* aluminum
+* iron ore
+* diversified mining portfolios
+
+### Rare Earths & Strategic Minerals
+
+Companies exposed to:
+
+* rare earth elements
+* magnet materials
+* graphite
+* antimony
+* other strategic-mineral supply chains
+
+### Lithium
+
+Lithium extraction, brines, hard-rock production, refining, and chemical conversion.
+
+Lithium miners do not belong in Battery Technology merely because lithium is used in batteries.
+
+### Steel & Ferrous Metals
+
+Steelmakers, ferrous-metal processors, and closely related metallurgical feedstock businesses.
+
+Do not call this broad category `Industrial Metals`.
+
+That term overlaps too heavily with base metals, steel, alloys, and processed products.
+
+---
+
+# Commodity lenses are not structural stock buckets
+
+The old assignable structural nodes:
+
+```text
+Gold
+Silver
+Copper
+```
+
+must not remain assignable canonical stock-taxonomy buckets.
+
+They should become commodity-exposure lenses or proxy series where the current architecture supports that distinction.
+
+Requirements:
+
+* preserve useful GDX/SIL/COPX-style performance series or proxy data
+* do not surface Gold, Silver, or Copper as assignable canonical Theme chips
+* do not destroy historical market-proxy functionality
+* do not force diversified miners into false single-commodity identities
+* preserve commodity exposure information in the migration proposal
+
+If an existing market-lens, benchmark, tag, or metadata mechanism exists, reuse it.
+
+If no such mechanism exists:
+
+* do not invent an entire commodity UI in this task
+* retain the proxy configuration separately from the assignable taxonomy
+* include proposed `commodity_exposures` in the migration artifact for future use
+* report the exact architectural gap
+
+---
+
+## 8. Advanced Materials
+
+```text
+Advanced Materials
+  Specialty Alloys & Engineered Metals
+  Electronic & Semiconductor Materials
+  Composites & Specialty Materials
+```
+
+Principal sector:
+
+```text
+Materials
+```
+
+Rollup sectors:
+
+```text
+Materials
+Industrials
+Technology
+```
+
+Definitions:
+
+```text
+Metals & Mining
+  = extraction and bulk primary metals
+
+Advanced Materials
+  = engineered, processed, specialty, and high-performance materials
+```
+
+This replaces the vague structural use of `Chemicals & Materials`.
+
+Preserve truly chemical businesses appropriately through the closest valid category or direct Advanced Materials membership rather than forcing every company into a child.
+
+---
+
+## 9. Semiconductors
+
+```text
+Semiconductors
+  AI Accelerators & Compute Silicon
+  Data Center Connectivity & Interconnect Silicon
+  Memory & Storage
+  Analog, Power & Mixed-Signal
+  Foundry & Manufacturing
+  Semiconductor Equipment
+  Semiconductor Materials
+  Test & Measurement
+  Packaging & Substrates
+```
+
+Principal sector:
+
+```text
+Technology
+```
+
+Primary rollup sector:
+
+```text
+Technology
+```
+
+Use child-specific cross-sector rollups where justified.
+
+### AI Accelerators & Compute Silicon
+
+Processor and accelerator silicon, including:
+
+* GPUs
+* CPUs
+* AI accelerators
+* custom compute ASICs
+* compute-related semiconductor IP
+
+This does not include companies merely operating compute infrastructure.
+
+### Data Center Connectivity & Interconnect Silicon
+
+Silicon and semiconductor IP for:
+
+* SerDes
+* PCIe
+* CXL
+* retimers
+* memory connectivity
+* memory pooling
+* fabric connectivity
+* active electrical cables
+* optical DSPs
+* high-speed data movement
+
+This is the primary category intended for companies such as ALAB and CRDO.
+
+### Memory & Storage
+
+Memory, storage devices, controllers, storage systems, and memory-related semiconductor IP where material.
+
+Preserve the existing semantically compatible ID when possible.
+
+### Analog, Power & Mixed-Signal
+
+Analog, mixed-signal, power-management, and power-semiconductor companies.
+
+This is where power-semiconductor businesses belong—not under generic compute.
+
+### Foundry & Manufacturing
+
+Wafer fabrication, foundry operations, and integrated manufacturing where that is the defining role.
+
+### Semiconductor Equipment
+
+Wafer-fab and process equipment.
+
+### Semiconductor Materials
+
+Wafers, chemicals, gases, electronic materials, and other semiconductor-production inputs.
+
+Rollup sectors should include Materials where appropriate.
+
+### Test & Measurement
+
+Semiconductor testing, inspection, metrology, burn-in, handlers, and relevant electronic test systems.
+
+Expected candidates include businesses such as:
+
+```text
+AEHR
+TER
+FORM
+COHU
+CAMT
+ONTO
+NVMI
+INTT
+```
+
+Do not hardcode assignments based solely on this list. Use business evidence.
+
+### Packaging & Substrates
+
+Advanced packaging, assembly, OSAT, substrates, and packaging equipment.
+
+Rename the display from `Substrates / Packaging`.
+
+Preserve a semantically compatible existing ID if doing so avoids needless data churn.
+
+---
+
+# Retire the combined semiconductor node
+
+The old combined node:
+
+```text
+Semi Equipment & Materials
+```
+
+must be retired as an assignable canonical node.
+
+Its members must be reassigned stock by stock among:
+
+```text
+Semiconductor Equipment
+Semiconductor Materials
+Test & Measurement
+Packaging & Substrates
+```
+
+Do not map every old member automatically to one replacement.
+
+Do not keep the old node visible merely to avoid migration work.
+
+Retain a deprecated alias or migration reference only where necessary for backward compatibility.
+
+---
+
+## 10. Data Center Infrastructure
+
+Promote this to a true top-level parent theme:
+
+```text
+Data Center Infrastructure
+  Networking & Fabric Infrastructure
+  Optical Interconnects
+  Servers & Compute Systems
+  AI Cloud & Data Center Operators
+  Power & Cooling
+```
+
+Principal sector:
+
+```text
+Technology
+```
+
+Rollup sectors:
+
+```text
+Technology
+Industrials
+Utilities
+Real Estate
+```
+
+### Networking & Fabric Infrastructure
+
+Networking systems, switches, routers, fabrics, and infrastructure products.
+
+Semiconductor companies may hold this as an additional membership while retaining a semiconductor subtheme as primary.
+
+### Optical Interconnects
+
+Optical communications, transceivers, optical components, coherent systems, photonic interconnects, and related infrastructure.
+
+### Servers & Compute Systems
+
+Server, rack, compute-system, and integrated hardware vendors.
+
+This does not include compute operators.
+
+### AI Cloud & Data Center Operators
+
+AI cloud platforms, GPU-cloud operators, data-center operators, colocation operators, and relevant REIT/operator businesses.
+
+Examples may include companies such as NBIS, IREN, APLD, GDS, VNET, EQIX, or DLR when their actual business exposure supports it.
+
+Do not blindly assign every named example.
+
+### Power & Cooling
+
+Electrical systems, cooling, thermal management, backup power, and data-center power infrastructure.
+
+Preserve the existing `Power / Cooling` semantics while correcting its parent relationship and display label.
+
+---
+
+## 11. Software
+
+```text
+Software
+  Cloud Software
+  Cybersecurity
+  AI Software & Data Platforms
+```
+
+Principal and rollup sector:
+
+```text
+Technology
+```
+
+Preserve existing Cloud Software and Cybersecurity IDs where semantically compatible.
+
+---
+
+## 12. Photonics & Optical Systems
+
+```text
+Photonics & Optical Systems
+  Optical Components & Lasers
+  Sensing & LiDAR
+```
+
+Principal sector:
+
+```text
+Technology
+```
+
+Rollup sectors:
+
+```text
+Technology
+Industrials
+```
+
+Data-center optical companies may additionally belong to:
+
+```text
+Data Center Infrastructure
+  → Optical Interconnects
+```
+
+Do not automatically classify every optical-materials company as Semiconductor Materials.
+
+---
+
+## 13. Defense & Aerospace
+
+```text
+Defense & Aerospace
+  Defense Platforms & Electronics
+  Drones & Autonomous Systems
+```
+
+Principal sector:
+
+```text
+Industrials
+```
+
+Rollup sectors:
+
+```text
+Industrials
+Technology
+```
+
+Defense does not structurally belong under Utilities.
+
+---
+
+## 14. Space Economy
+
+```text
+Space Economy
+  Launch & Space Systems
+  Satellite Communications
+  Earth Observation & Space Data
+```
+
+Principal sector:
+
+```text
+Industrials
+```
+
+Rollup sectors:
+
+```text
+Industrials
+Communication Services
+Technology
+```
+
+Space remains an independent parent theme.
+
+Defense may be an additional membership where the business exposure justifies it.
+
+---
+
+## 15. Clean Energy
+
+```text
+Clean Energy
+  Solar
+  Battery Technology & Energy Storage
+  Hydrogen & Fuel Cells
+  Wind & Renewable Generation
+```
+
+Principal sector:
+
+```text
+Utilities
+```
+
+Rollup sectors:
+
+```text
+Utilities
+Energy
+Industrials
+```
+
+Battery Technology & Energy Storage contains:
+
+* battery cells
+* battery components
+* storage systems
+* grid-storage platforms
+* storage integrators
+
+It does not contain lithium miners simply because they supply battery materials.
+
+---
+
+## 16. Grid & Electrification
+
+```text
+Grid & Electrification
+  Grid Hardware & Electrical Equipment
+  Power Generation & Turbines
+  Distributed & Backup Power
+```
+
+Principal sector:
+
+```text
+Industrials
+```
+
+Rollup sectors:
+
+```text
+Industrials
+Utilities
+```
+
+Cross-membership with Clean Energy and Data Center Infrastructure is allowed where economically meaningful.
+
+---
+
+## 17. Nuclear Energy
+
+```text
+Nuclear Energy
+  Uranium Mining & Nuclear Fuel
+  Nuclear Equipment & Services
+  SMRs & Advanced Reactors
+  Nuclear Utilities & Operators
+```
+
+Principal sector:
+
+```text
+Utilities
+```
+
+Parent rollup sectors:
+
+```text
+Utilities
+Energy
+Industrials
+Materials
+```
+
+Child-specific rollups:
+
+```text
+Uranium Mining & Nuclear Fuel
+  → Materials, Energy
+
+Nuclear Equipment & Services
+  → Industrials, Utilities
+
+SMRs & Advanced Reactors
+  → Industrials, Utilities
+
+Nuclear Utilities & Operators
+  → Utilities
+```
+
+This resolves the lithium/uranium consistency question:
+
+```text
+Lithium miner ≠ battery company
+Uranium miner ≠ electric utility
+```
+
+The parent value chain is cross-sector.
+
+Replace the old combined `Uranium & Nuclear Energy` structural node with this hierarchy.
+
+---
+
+## 18. Oil & Gas
+
+```text
+Oil & Gas
+  E&P / Upstream
+  Integrated Oil & Refining
+  LNG & Natural Gas
+  Midstream & Pipelines
+  Oil Services
+```
+
+Principal and rollup sector:
+
+```text
+Energy
+```
+
+Preserve existing LNG and Oil Services IDs where semantically compatible.
+
+---
+
+## 19. Industrial Automation
+
+```text
+Industrial Automation
+  Robotics & Automation
+  Industrial Controls & Sensors
+```
+
+Principal sector:
+
+```text
+Industrials
+```
+
+Rollup sectors:
+
+```text
+Industrials
+Technology
+```
+
+---
+
+## 20. Construction & Infrastructure
+
+```text
+Construction & Infrastructure
+  Engineering & Construction
+  Heavy Equipment
+  Building Products
+```
+
+Principal sector:
+
+```text
+Industrials
+```
+
+Rollup sectors:
+
+```text
+Industrials
+Materials
+```
+
+---
+
+## 21. Transportation & Mobility
+
+```text
+Transportation & Mobility
+  Travel & Leisure
+  Freight & Logistics
+```
+
+Principal sector:
+
+```text
+Industrials
+```
+
+Rollup sectors:
+
+```text
+Industrials
+Consumer Discretionary
+```
+
+Do not add eVTOL as a forced child in this task.
+
+It can remain a future extension if the universe later justifies it.
+
+---
+
+## 22. Quantum Computing
+
+Keep as a direct top-level theme with no forced children.
+
+Principal and rollup sector:
+
+```text
+Technology
+```
+
+Do not invent artificial subdivisions before the stock universe supports them.
+
+---
+
+## 23. Crypto Equities / Blockchain
+
+```text
+Crypto Equities / Blockchain
+  Bitcoin Miners
+  Digital Asset Platforms
+  Blockchain Infrastructure
+```
+
+Principal sector:
+
+```text
+Technology
+```
+
+Rollup sectors:
+
+```text
+Technology
+Financials
+```
+
+---
+
+# Explicit exclusions
+
+## Big Tech
+
+Do not create Big Tech as a canonical structural theme.
+
+Big Tech, Hyperscalers, Magnificent Seven, and AI Capex Spenders are curated collections or saved lenses—not value-chain taxonomy nodes.
+
+If an existing Big Tech display or collection exists, preserve it outside the assignable canonical taxonomy.
+
+## Sector-name duplication
+
+Do not allow sector names to appear again as themes.
+
+---
+
+# Phase 3 — old-to-new migration and compatibility
+
+Build an explicit migration map.
+
+Classify each old ID as:
+
+```text
+RETAIN
+RENAME_DISPLAY_ONLY
+MOVE_UNDER_PARENT
+ONE_TO_ONE_REPLACEMENT
+AMBIGUOUS_SPLIT_REQUIRING_STOCK_RECLASSIFICATION
+DEPRECATE_TO_MARKET_LENS
+REMOVE_AS_STRUCTURAL
+```
+
+At minimum address:
+
+```text
+Agribusiness
+AI Networking
+Banks
+Biotech
+Chemicals & Materials
+Clean Energy
+Cloud Software
+Consumer Retail
+Copper
+Crypto Equities / Blockchain
+Cybersecurity
+Data Center Infrastructure
+Defense
+Drones
+Fintech
+Gold
+Homebuilders
+Insurance
+Lithium & Battery Tech
+LNG & Natural Gas
+Medical Devices
+Memory & Storage
+Metals & Mining
+Oil & Gas
+Oil Services
+Photonics / Lasers
+Power / Cooling
+Quantum Computing
+Rare Earth Elements
+Regional Banks
+Robotics & Automation
+Semi Equipment & Materials
+Semiconductors
+Silver
+Software
+Solar
+Space Economy
+Substrates / Packaging
+Travel & Transportation
+Uranium & Nuclear Energy
+```
+
+Important ambiguous splits:
+
+```text
+Lithium & Battery Tech
+Semi Equipment & Materials
+Gold / Silver / Copper stock memberships
+Uranium & Nuclear Energy
+Chemicals & Materials
+AI Networking
+```
+
+Do not resolve an ambiguous split through a single blind alias.
+
+Use stock-level reassignment.
+
+For unambiguous renames, preserve stable existing IDs where possible.
+
+Deprecated IDs must not appear in:
+
+* canonical assignment dropdowns
+* taxonomy chips
+* new AI output
+* canonical registry results intended for assignment
+
+Backward-compatible resolution may continue where necessary during migration.
+
+---
+
+# Phase 4 — repair cached Theme RS metadata
+
+Audit the live Theme Relative Strength cache validation and repair path.
+
+Prior architecture included logic resembling:
+
+```text
+_validate_basket_hashes()
+```
+
+Ensure every legacy, stale-hash, and current-hash branch derives and repairs canonical values for:
+
+```text
+display_name
+classification
+parent_sector
+parent_theme_id
+rollup_sector_ids
+assignable/visible metadata when applicable
+```
+
+Do not allow stale cached rows to continue reporting promoted parents as `sub_theme`.
+
+Test both:
+
+* promoted parent themes
+* real child subthemes
+* standalone parent themes
+* deprecated/nonassignable market lenses
+
+Do not require a destructive cache reset as the only way to receive correct metadata.
+
+---
+
+# Phase 5 — atomic manual assignment API
+
+The existing frontend already has a Theme editor.
+
+The final editor will support:
+
+```text
+One primary membership
+Zero or more additional memberships
+One Save action
+```
+
+First inspect the existing assignment routes and storage functions.
+
+Reuse them.
+
+If one existing endpoint already supports the complete operation atomically, preserve it and document its contract.
+
+If the current API requires multiple sequential writes, add only a thin orchestration endpoint around the current canonical storage paths.
+
+Preferred contract when no equivalent exists:
+
+```http
+PUT /api/themes/admin/ticker-taxonomy/{ticker}
+```
+
+Preferred request:
+
+```json
+{
+  "primary_theme_id": "dc_connectivity_interconnect_silicon",
+  "additional_theme_ids": [
+    "networking_fabric_infrastructure"
+  ]
+}
+```
+
+Use actual stable IDs from the implemented registry.
+
+Required behavior:
+
+1. Require existing admin authentication and authorization.
+2. Normalize ticker.
+3. Validate every ID against the canonical assignable registry.
+4. Reject sector IDs as thematic memberships.
+5. Reject deprecated or market-lens IDs.
+6. Allow primary to be either a theme or subtheme.
+7. Allow no primary when explicitly clearing.
+8. Remove duplicate IDs.
+9. Remove primary from additional memberships.
+10. Remove redundant ancestor assignments when a child already provides the rollup.
+11. Preserve meaningful memberships from different branches.
+12. Diff requested additional memberships against active stored memberships.
+13. Insert or reactivate required overrides.
+14. Deactivate or remove memberships no longer selected using current conventions.
+15. Update primary assignment through its existing canonical path.
+16. Perform the operation in one database transaction when the live storage supports transactions.
+17. Roll back all changes if any part fails.
+18. Invalidate affected caches once.
+19. Return the final normalized canonical identity.
+20. Never perform one Neon write per frontend checkbox click.
+
+Preferred response shape:
+
+```json
+{
+  "ticker": "ALAB",
+  "sector_id": "technology",
+  "primary_theme_id": "dc_connectivity_interconnect_silicon",
+  "additional_theme_ids": [
+    "networking_fabric_infrastructure"
+  ],
+  "theme_ids": [
+    "dc_connectivity_interconnect_silicon",
+    "networking_fabric_infrastructure"
+  ],
+  "subtheme_ids": [
+    "dc_connectivity_interconnect_silicon",
+    "networking_fabric_infrastructure"
+  ]
+}
+```
+
+Adapt field names to the live established contract rather than creating needless aliases.
+
+Preserve old single-assignment endpoints for backward compatibility unless they are already unused and removal is explicitly safe.
+
+Do not migrate the frontend in this backend task.
+
+---
+
+# Phase 6 — discover and reuse the bulk reassignment engine
+
+The user has previously performed bulk theme reassignment and believes a reusable path already exists.
+
+Before building anything new, prove whether that is true.
+
+Search for:
+
+* CSV theme imports
+* admin bulk assignment routes
+* migration scripts
+* AI classification jobs
+* batch upserts
+* prior Watchlist enrichment
+* theme override imports
+* audit/review artifacts
+* resumable jobs
+
+If a suitable engine exists:
+
+* reuse its batching
+* reuse its validation
+* reuse its storage functions
+* reuse its audit trail
+* extend its output for primary + additional memberships
+
+If no suitable engine exists, build the smallest orchestration service around the current canonical assignment functions.
+
+Do not build a second data model.
+
+---
+
+# Phase 7 — AI-assisted classification using the existing OpenAI plugin
+
+The user wants to use the existing OpenAI integration and the configured path they refer to as:
+
+```text
+SOL 5.6
+```
+
+Do not assume the public model identifier.
+
+Inspect the live integration and report:
+
+* client path
+* plugin path
+* provider
+* configured model alias
+* exact model identifier sent over the wire
+* batch limits
+* token limits
+* retry behavior
+* cost controls
+* structured-output support
+
+Use the existing supported SOL 5.6 path only when it is actually configured and available.
+
+Do not silently substitute another model.
+
+If it is unavailable:
+
+* implement and test the classification engine
+* stop before the full model run
+* report the exact missing configuration
+* do not fall back to a different paid model without authorization
+
+Never print API keys, tokens, secrets, or full authorization headers.
+
+---
+
+# Classification inputs
+
+Use existing cached/backend data rather than making hundreds of new provider calls.
+
+Candidate inputs include the live equivalents of:
+
+* ticker
+* company name
+* actual sector
+* industry
+* company description/profile
+* products and business segments
+* current primary theme
+* current additional memberships
+* current Watchlist fields
+* relevant cached fundamentals
+* existing theme rationale
+* prior manually assigned metadata
+
+Do not make live web searches per ticker.
+
+Do not call FMP or another provider once per ticker when equivalent cached data already exists.
+
+If evidence is insufficient, return low confidence instead of hallucinating.
+
+---
+
+# AI output schema
+
+Require strict structured output.
+
+Each proposal must contain:
+
+```json
+{
+  "ticker": "ALAB",
+  "actual_sector_id": "technology",
+  "current_primary_theme_id": "ai_networking",
+  "current_additional_theme_ids": [],
+  "proposed_primary_theme_id": "dc_connectivity_interconnect_silicon",
+  "proposed_additional_theme_ids": [
+    "networking_fabric_infrastructure"
+  ],
+  "commodity_exposures": [],
+  "confidence": 0.97,
+  "rationale": "Primary business exposure is PCIe/CXL connectivity and retimer silicon used in AI data-center fabrics.",
+  "evidence": [
+    "CXL and PCIe connectivity products",
+    "retimers and memory-connectivity portfolio"
+  ],
+  "warnings": [],
+  "requires_manual_review": false
+}
+```
+
+Required constraints:
+
+* only canonical assignable IDs
+* exactly zero or one primary
+* zero or more additional memberships
+* default maximum of three additional memberships
+* more than three requires explicit warning and manual review
+* no sectors in theme membership fields
+* no deprecated IDs
+* no market-lens IDs
+* no redundant parent and child from the same branch
+* no duplicate memberships
+* primary represents the company’s defining business/value-chain identity
+* additional memberships require material exposure, not vague thematic association
+* actual sector is not changed
+* low-confidence companies remain review items
+* insufficient evidence must not produce fabricated certainty
+
+---
+
+# Manual assignment protection
+
+Determine how the current system distinguishes:
+
+* manually curated assignments
+* system-generated assignments
+* imported assignments
+* AI-generated assignments
+* overrides
+
+Never overwrite a known manually locked assignment in the dry-run or later apply flow unless an explicit force flag is supplied.
+
+If the current schema cannot distinguish manual from generated assignments:
+
+* do not overwrite existing overrides automatically
+* mark them as protected/review-required
+* report the limitation
+
+Preserve provenance whenever the existing storage supports it.
+
+---
+
+# Classification guidance examples
+
+These examples anchor the model but do not replace evidence-based classification.
+
+## ALAB
+
+Likely:
+
+```text
+Primary:
+Semiconductors
+  → Data Center Connectivity & Interconnect Silicon
+
+Additional:
+Data Center Infrastructure
+  → Networking & Fabric Infrastructure
+```
+
+## CRDO
+
+Likely:
+
+```text
+Primary:
+Semiconductors
+  → Data Center Connectivity & Interconnect Silicon
+
+Additional:
+Data Center Infrastructure
+  → Networking & Fabric Infrastructure
+
+Potential additional:
+Data Center Infrastructure
+  → Optical Interconnects
+```
+
+Only include Optical Interconnects when current business evidence supports material exposure.
+
+## AEHR
+
+Likely:
+
+```text
+Primary:
+Semiconductors
+  → Test & Measurement
+
+Potential additional:
+Semiconductors
+  → Memory & Storage
+```
+
+## TER
+
+Likely:
+
+```text
+Primary:
+Semiconductors
+  → Test & Measurement
+
+Potential additional:
+Industrial Automation
+  → Robotics & Automation
+```
+
+## AMKR
+
+Likely:
+
+```text
+Primary:
+Semiconductors
+  → Packaging & Substrates
+```
+
+## POWI
+
+Likely:
+
+```text
+Primary:
+Semiconductors
+  → Analog, Power & Mixed-Signal
+
+Potential additional:
+Grid & Electrification
+```
+
+## BE
+
+Likely:
+
+```text
+Primary:
+Clean Energy
+  → Hydrogen & Fuel Cells
+
+Additional:
+Data Center Infrastructure
+  → Power & Cooling
+
+Additional:
+Grid & Electrification
+  → Distributed & Backup Power
+```
+
+## LPTH
+
+Likely:
+
+```text
+Primary:
+Photonics & Optical Systems
+  → Optical Components & Lasers
+```
+
+## LWLG
+
+Likely:
+
+```text
+Primary:
+Data Center Infrastructure
+  → Optical Interconnects
+
+Potential additional:
+Advanced Materials
+  → Electronic & Semiconductor Materials
+```
+
+## IREN and other mixed AI-cloud/Bitcoin-mining companies
+
+Treat as potentially ambiguous.
+
+The model must evaluate the current business mix and may propose:
+
+* AI Cloud & Data Center Operators
+* Bitcoin Miners
+* one primary and one additional
+
+Mark for review when the primary business identity is changing rapidly or evidence is mixed.
+
+---
+
+# Batch execution requirements
+
+Do not classify one ticker per model request unless the existing integration requires it.
+
+Preferred behavior:
+
+* bounded batch size based on the live model context limit
+* deterministic taxonomy prompt
+* taxonomy version and prompt hash
+* checkpointed progress
+* resumable run
+* idempotent proposal generation
+* limited retries
+* no infinite retry loop
+* structured validation after every response
+* invalid records quarantined for review
+* duplicate ticker protection
+* recorded model identifier
+* recorded run timestamp
+* recorded proposal version
+* recorded call/token/cost metrics where available
+
+Run a representative sample first, including:
+
+```text
+ALAB
+CRDO
+AEHR
+TER
+AMKR
+POWI
+BE
+LPTH
+LWLG
+IREN
+NBIS
+VRT
+```
+
+Validate schema and category quality before launching the full Watchlist dry run.
+
+---
+
+# Dry run only — no bulk database apply
+
+This task must generate the full migration proposal but must not apply the AI proposals to Neon.
+
+Produce both:
+
+```text
+theme-taxonomy-v2-proposals.json
+theme-taxonomy-v2-proposals.csv
+```
+
+Place them under the non-source report/artifact location required or permitted by `AGENTS.md`.
+
+Do not stage runtime proposal artifacts unless `AGENTS.md` explicitly requires it.
+
+The proposal must include every current Primary Watchlist ticker and these fields:
+
+```text
+ticker
+company
+actual_sector
+current_primary
+current_additional
+proposed_primary
+proposed_additional
+commodity_exposures
+confidence
+rationale
+evidence
+warnings
+manual_override_protected
+requires_manual_review
+change_type
+```
+
+Allowed `change_type` values:
+
+```text
+UNCHANGED
+RENAME_ONLY
+PARENT_MOVE
+ONE_TO_ONE_MIGRATION
+AMBIGUOUS_SPLIT
+NEW_PRIMARY
+NEW_ADDITIONAL
+REMOVE_INVALID
+MANUAL_REVIEW
+```
+
+Also provide summary counts:
+
+* total tickers
+* unchanged
+* changed
+* high confidence
+* medium confidence
+* low confidence
+* protected manual overrides
+* invalid model outputs
+* unassigned
+* proposed multi-membership stocks
+* proposals by new parent theme
+* proposals by new subtheme
+* deprecated IDs still referenced
+
+Do not run the apply operation.
+
+---
+
+# Theme proxy and custom-basket integrity
+
+Audit proxy handling for every new or renamed node.
+
+Requirements:
+
+* preserve valid existing ETF proxies
+* preserve useful Gold/Silver/Copper commodity-market lenses
+* do not invent ticker symbols
+* use current custom-basket architecture when no valid ETF exists
+* ensure basket hashes include canonical taxonomy membership
+* do not let an empty newly created node masquerade as valid live performance
+* report nodes with no defensible proxy or sufficient member basket
+* preserve current Relative Strength endpoint shape
+
+Do not make external ETF research the focus of this task.
+
+Use current known mappings and existing project conventions.
+
+---
+
+# Required tests
+
+Use production functions, actual route handlers where feasible, and the existing test framework.
+
+Do not create tests that merely reimplement the desired logic.
+
+## Registry integrity
+
+At minimum prove:
+
+1. Exactly the existing 11 sectors remain.
+2. Every top-level thematic node has `classification == "theme"`.
+3. Every child has `classification == "sub_theme"`.
+4. Every child points directly to an existing top-level theme.
+5. No child has children.
+6. IDs are unique.
+7. Display names are unique among assignable nodes.
+8. Every rollup sector ID is valid.
+9. No sector is assignable as a theme.
+10. Direct parent membership is valid.
+11. Deprecated split nodes are not assignable.
+12. Gold, Silver, and Copper are not assignable structural taxonomy nodes.
+13. Big Tech is not an assignable structural taxonomy node.
+14. Sector names do not reappear as themes.
+15. Retained semantically compatible IDs remain stable.
+
+## Exact hierarchy
+
+Prove the full parent/child membership for every finalized family.
+
+At minimum include targeted tests for:
+
+* Metals & Mining
+* Semiconductors
+* Data Center Infrastructure
+* Nuclear Energy
+* Clean Energy
+* Grid & Electrification
+* Oil & Gas
+* Banking
+* Software
+* Defense & Aerospace
+
+## Resolver and Watchlist identity
+
+Prove:
+
+16. Parent selection includes direct members and child members.
+17. Child selection remains exact.
+18. Multi-selection remains union.
+19. Sector ecosystem filtering uses actual sector or rollup.
+20. Primary appears first in `theme_ids`.
+21. Additional memberships are deduplicated.
+22. Redundant ancestor memberships are removed.
+23. `subtheme_ids` contains children only.
+24. Invalid/deprecated IDs are excluded.
+25. A stock may be assigned directly to a parent.
+26. A stock may hold memberships from separate branches.
+27. Actual sector remains independent.
+
+## Cache repair
+
+Prove:
+
+28. Cached parent rows receive correct `classification`.
+29. Cached rows receive correct `parent_sector`.
+30. Cached rows receive current `parent_theme_id`.
+31. Cached rows receive current `rollup_sector_ids`.
+32. Every stale/current/legacy validation branch performs the repair.
+33. True child rows remain children.
+34. Nonassignable market lenses are not exposed as assignable nodes.
+
+## Atomic assignment API
+
+Prove:
+
+35. Primary-only save succeeds.
+36. Primary plus additional memberships succeeds.
+37. Clearing primary succeeds when allowed.
+38. Duplicate additional IDs normalize.
+39. Primary is removed from additional IDs.
+40. Redundant ancestor memberships normalize.
+41. Cross-branch memberships are retained.
+42. Sector IDs are rejected.
+43. Unknown IDs are rejected.
+44. Deprecated IDs are rejected.
+45. Unauthorized requests are rejected.
+46. Transaction rollback occurs on partial failure.
+47. Cache invalidation happens once.
+48. Response contains final normalized identity.
+49. Existing legacy assignment paths remain functional where retained.
+
+## AI proposal engine
+
+Prove:
+
+50. Dry-run performs zero assignment writes.
+51. Only canonical IDs are accepted from model output.
+52. Invalid IDs are quarantined.
+53. Missing primary is allowed when confidence/evidence is insufficient.
+54. Redundant parent and child are normalized.
+55. More than the configured additional-membership maximum requires review.
+56. Manual overrides are protected.
+57. Existing protected assignments are not overwritten.
+58. Re-running the same proposal version is idempotent.
+59. Partial runs can resume.
+60. Malformed model JSON does not corrupt the run.
+61. Failed batches have bounded retry behavior.
+62. Model secrets are never written to reports.
+
+---
+
+# Validation
+
+Run:
+
+```bash
+git diff --check
+```
+
+Run all focused taxonomy, resolver, Watchlist, Theme RS, assignment-route, and migration tests.
+
+Run the relevant broader backend test groups required by `AGENTS.md`.
+
+Run syntax/type/lint validation required by the project.
+
+Do not claim a failing command passed.
+
+Record actual exit codes.
+
+Perform safe read-only endpoint checks against the running backend where possible.
+
+Do not execute the bulk apply operation.
+
+---
+
+# Scope restrictions
+
+Do not:
+
+* modify frontend files
+* alter the 11-sector taxonomy
+* add subthemes beneath subthemes
+* build the future value-chain stock-map UI
+* add Big Tech as a canonical theme
+* keep Gold/Silver/Copper as assignable structural buckets
+* change actual company sectors through AI
+* replace the current Watchlist APIs
+* replace the Theme RS endpoint
+* create a second membership table
+* create a second LLM client when one already exists
+* perform one database write per ticker during dry-run
+* apply the AI-generated migration
+* expose secrets
+* install packages unless absolutely required and permitted by `AGENTS.md`
+* push
+
+---
+
+# Repository hygiene
+
+Do not use:
+
+```bash
+git add .
+git add -A
+```
+
+Do not stage:
+
+* runtime databases
+* cache JSON
+* generated proposal artifacts
+* model responses
+* prompt attachments
+* local reports not required by `AGENTS.md`
+* unrelated files
+* secrets
+* build output
+
+Stage exact intended source, migration-definition, test, and required report files only.
+
+Inspect:
+
+```bash
+git diff --cached --name-status
+```
+
+Create exactly one local commit.
+
+Suggested commit message:
+
+```text
+feat: add canonical theme taxonomy v2
+```
+
+Do not push.
+
+---
+
+# Required report
+
+Write the report to the exact destination specified by backend `AGENTS.md`.
+
+Include:
+
+1. Confirmation that `AGENTS.md` was read first.
+2. Starting branch and HEAD.
+3. Starting `git status -sb`.
+4. Exact files inspected.
+5. Existing primary-assignment architecture.
+6. Existing additional-membership architecture.
+7. Existing bulk-reassignment findings.
+8. Existing AI/OpenAI plugin findings.
+9. Exact configured model alias and identifier, without secrets.
+10. Exact canonical Taxonomy v2 registry.
+11. IDs retained.
+12. IDs created.
+13. IDs renamed by display only.
+14. IDs deprecated.
+15. Ambiguous split nodes.
+16. Market-lens handling for Gold/Silver/Copper.
+17. Big Tech handling.
+18. Complete old → new migration map.
+19. Parent and rollup-sector matrix.
+20. Cache metadata repair.
+21. Atomic assignment API contract.
+22. Transaction behavior.
+23. Cache invalidation behavior.
+24. AI proposal prompt/schema.
+25. Model batch configuration.
+26. Manual-override protection.
+27. Sample-run results.
+28. Full dry-run status.
+29. Full proposal summary counts.
+30. Locations of JSON and CSV proposal artifacts.
+31. Confirmation that no proposals were applied.
+32. Exact files changed.
+33. Exact files staged.
+34. Complete test commands and results.
+35. Validation command exit codes.
+36. `git diff --check`.
+37. Confirmation that no frontend files changed.
+38. Confirmation that no secrets were logged.
+39. Final `git status -sb`.
+40. Commit SHA and message.
+41. Complete diff for the commit only.
