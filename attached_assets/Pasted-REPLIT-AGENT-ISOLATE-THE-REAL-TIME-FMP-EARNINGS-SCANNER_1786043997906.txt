@@ -1,0 +1,828 @@
+REPLIT AGENT — ISOLATE THE REAL-TIME FMP EARNINGS SCANNER FROM USER-FACING READ REQUESTS WITHOUT CHANGING ITS FUNCTION
+
+Work only in the live backend Replit workspace:
+
+`/home/runner/workspace`
+
+The live Replit filesystem, database, environment, scheduler, running backend, and runtime logs are authoritative.
+
+GitHub is backup/reference only.
+
+Do not reset, revert, amend, rebase, or push.
+
+This is an earnings-performance task.
+
+It is not a taxonomy task.
+
+Do not inspect or modify the atomic ticker-taxonomy endpoint except to confirm it remains untouched.
+
+---
+
+# Mandatory first step
+
+Before editing anything:
+
+1. Find and read backend `AGENTS.md` completely.
+2. Follow every applicable instruction and required report path.
+3. Record:
+
+   * repository root
+   * current branch
+   * exact HEAD
+   * `git status -sb`
+   * ahead/behind state
+   * recent commits
+4. Confirm that the current live HEAD already contains:
+
+   ```text
+   2b0bddd4 fix: make ticker taxonomy updates truly atomic
+   ```
+
+   or its live equivalent.
+5. Preserve that completed work.
+6. Do not modify frontend files.
+7. Do not modify taxonomy registry, assignments, resolver behavior, or tests.
+
+If your planned files are primarily:
+
+```text
+backend/routes/themes.py
+backend/data/pg_storage.py
+backend/tests/test_theme_hierarchy.py
+```
+
+stop immediately because you are working on the wrong task.
+
+---
+
+# Critical product requirement
+
+CaelynAI actively scans FMP in real time when earnings are due so that actual EPS, actual revenue, surprises, and related results appear as soon as FMP publishes them.
+
+That real-time scanner must remain functionally identical.
+
+Preserve exactly:
+
+```text
+which tickers are eligible for real-time scanning
+how the due-for-earnings universe is determined
+the active scan window
+the scan frequency
+the FMP endpoint or endpoints
+the request parameters
+provider parsing
+actual EPS detection
+actual revenue detection
+partial-result handling
+completion detection
+storage behavior
+publication behavior
+time from FMP publication to application availability
+```
+
+Do not:
+
+* reduce scan frequency
+* add a ten-minute cooldown to active earnings scans
+* replace real-time scanning with ordinary cache refresh
+* require the user to open Watchlist or Home to trigger scans
+* make the scanner depend on frontend polling
+* remove earnings fields
+* reduce the eligible ticker universe
+* delay publication after FMP returns complete results
+* stop scanning during an active report window because previous provider attempts failed
+
+The goal is only to prevent scanner work from blocking the Watchlist, Home, and other user-facing requests.
+
+---
+
+# Current proven production symptoms
+
+A frontend diagnostic measured:
+
+```text
+/api/earnings/live-events
+  repeatedly returned 502 after approximately 10 seconds
+
+/api/home/dashboard
+  reached approximately 18.7 seconds
+
+/api/watchlist/{id}
+  reached approximately 15.5 seconds
+
+/api/watchlist/list
+  reached approximately 15–27 seconds
+```
+
+The frontend added a defensive circuit breaker around `/api/earnings/live-events`, but the Watchlist remains extremely slow and unstable, particularly around the Earnings section.
+
+The Watchlist separately calls:
+
+```http
+POST /api/watchlist/earnings/by-symbols
+```
+
+The working hypothesis is that real-time FMP work is running:
+
+* synchronously inside a browser-facing route
+* on the shared event loop or shared request worker
+* with overlapping scans
+* with long provider timeouts or retries
+* while holding shared resources
+* through more than one earnings endpoint
+
+Do not assume this hypothesis is correct.
+
+Prove the actual architecture first.
+
+---
+
+# Phase 1 — trace every earnings path
+
+Search the live backend for:
+
+```text
+/api/earnings/live-events
+/api/watchlist/earnings
+/api/watchlist/earnings/by-symbols
+earnings live
+live events
+real-time earnings
+realtime earnings
+earnings scanner
+earnings due
+earnings window
+earnings polling
+FMP earnings
+FMP calendar
+actual EPS
+actual revenue
+earnings cache
+earnings snapshot
+last known good
+LKG
+earnings scheduler
+earnings background job
+```
+
+Document:
+
+1. Exact route handler for `/api/earnings/live-events`.
+2. Exact route handler for `/api/watchlist/earnings/by-symbols`.
+3. Every service called by each route.
+4. What determines an earnings-due ticker.
+5. The exact eligible ticker universe.
+6. The active scan window.
+7. The exact scan cadence.
+8. Whether the cadence changes near the expected report time.
+9. Which FMP endpoint is called.
+10. Whether calls are batch or per ticker.
+11. Provider timeout.
+12. Provider retry behavior.
+13. Parsing and validation behavior.
+14. Partial-result behavior.
+15. Complete-result behavior.
+16. Persistence destination.
+17. Restart behavior.
+18. Existing scheduler ownership.
+19. Whether browser requests initiate scans.
+20. Whether multiple browser tabs can initiate duplicate scans.
+21. Whether Watchlist and live-events trigger separate provider work.
+22. Whether provider calls occur synchronously inside async routes.
+23. Whether the scanner holds a database connection during FMP calls.
+24. Whether retry sleeps block the event loop.
+25. Whether failed scans overwrite valid data.
+26. Whether a legitimate not-yet-published result is distinguishable from provider failure.
+
+Do not edit until this architecture is documented.
+
+---
+
+# Phase 2 — establish a parity baseline
+
+Before refactoring, write or run characterization tests against production functions.
+
+Freeze the existing real-time contract:
+
+1. Ticker outside its earnings window is not scanned.
+2. Ticker inside its earnings window is scanned.
+3. Existing scan cadence is preserved.
+4. Existing FMP endpoint is preserved.
+5. Existing request parameters are preserved.
+6. Existing provider timeout behavior is recorded.
+7. Existing retry behavior is recorded.
+8. Preliminary/incomplete results remain handled identically.
+9. Complete EPS results are detected identically.
+10. Complete revenue results are detected identically.
+11. Existing surprise calculations remain identical.
+12. Existing persistence behavior remains identical.
+13. Existing live-event generation remains identical.
+14. Existing completion or stop-scanning condition remains identical.
+
+If the logic is embedded inline, extract pure helpers without changing their output.
+
+---
+
+# Required architecture
+
+Separate:
+
+```text
+WRITE PATH
+real-time FMP earnings scanner
+
+READ PATH
+live-events and Watchlist earnings responses
+```
+
+The scanner remains real time.
+
+The read endpoints become fast and non-blocking.
+
+This is not permission to replace the scanner with stale data.
+
+---
+
+# Contract 1 — preserve the scanner exactly
+
+The real-time scanner must continue using the current:
+
+```text
+eligibility logic
+active scan windows
+scan cadence
+ticker universe
+FMP endpoints
+provider parameters
+parsing logic
+validation logic
+persistence logic
+completion logic
+publication logic
+```
+
+Do not add a long circuit-breaker cooldown during active earnings windows.
+
+A failed attempt may have:
+
+* a bounded per-attempt timeout
+* existing bounded retry behavior
+* non-overlap protection
+* rate-limit handling
+
+But the next established real-time scan opportunity must still occur on schedule.
+
+Do not let a stuck attempt overlap indefinitely.
+
+Do not reduce the configured scan cadence.
+
+---
+
+# Contract 2 — scanner must be backend-owned
+
+The scanner must operate when:
+
+* no browser is open
+* the frontend live-events circuit is open
+* the user is on Home
+* the user is on Watchlist
+* the user is on another route
+* there are no authenticated browser sessions
+
+If the current scanner is initiated by `/api/earnings/live-events`, do not simply make that route cache-only.
+
+First migrate the exact scanner logic into the project’s existing backend scheduler or application lifecycle.
+
+Required migration order:
+
+1. Extract the existing scanner logic without changing behavior.
+2. Register one backend-owned scheduled invocation.
+3. Preserve exact timing and eligibility.
+4. Ensure it starts through the established lifecycle.
+5. Prevent duplicate scheduler registration.
+6. Prove it runs with no browser traffic.
+7. Prove it detects and persists new FMP results.
+8. Only then remove synchronous provider work from read routes.
+
+There must never be a state where no component owns the real-time scan.
+
+---
+
+# Contract 3 — one active scan cycle
+
+Prevent overlapping duplicate scanner work.
+
+These must not independently launch scans:
+
+```text
+Home
+Watchlist
+live-events polling
+multiple browser tabs
+scheduler
+manual refresh
+```
+
+Use existing locking or single-flight conventions.
+
+The lock must:
+
+* cover provider work only
+* not block read endpoints
+* release on success
+* release on error
+* release on timeout
+* release on cancellation
+* not suppress the next valid scheduled scan
+* not become permanently stuck
+
+Do not use a ten-minute lockout for active earnings-due scans.
+
+---
+
+# Contract 4 — fast live-events read
+
+Preserve:
+
+```http
+GET /api/earnings/live-events
+```
+
+The endpoint should return the latest scanner-produced state immediately.
+
+It must not:
+
+* synchronously call FMP
+* await an active scan
+* retry FMP
+* sleep
+* rebuild the calendar
+* hold open for ten seconds and then return 502
+
+If a scan is running:
+
+* return the most recent valid state immediately
+* preserve timestamps and source metadata
+* expose current scan/failure metadata only through backward-compatible fields when available
+
+When a new result is detected:
+
+```text
+FMP result detected
+→ validate
+→ persist atomically
+→ immediately visible through live-events
+```
+
+Do not add another TTL that delays publication.
+
+---
+
+# Contract 5 — fast Watchlist earnings read
+
+Preserve:
+
+```http
+POST /api/watchlist/earnings/by-symbols
+```
+
+Preserve all request fields:
+
+```text
+symbols
+page
+page_size
+lookback_days
+lookahead_days
+all existing options
+```
+
+Preserve all response fields and behavior:
+
+```text
+Upcoming Earnings
+Recent Earnings
+EPS estimates
+actual EPS
+revenue estimates
+actual revenue
+surprises
+report timing
+pre/post 1D/3D/5D performance
+ratings
+price targets
+SEC materials
+recent filings
+source metadata
+cache metadata
+timestamps
+pagination
+```
+
+The endpoint should read/filter persisted scanner and earnings data.
+
+It must not:
+
+* trigger a full FMP scan
+* call FMP per Watchlist ticker
+* wait on the scanner lock
+* rebuild hundreds of symbols synchronously
+* retry provider calls
+* block unrelated Watchlist rendering
+
+A newly detected real-time result must become visible here immediately after scanner persistence.
+
+---
+
+# Contract 6 — last-known-good preservation
+
+Never replace valid stored earnings data with:
+
+```text
+provider 4xx
+provider 5xx
+timeout
+malformed payload
+incomplete invalid payload
+exception
+cancellation
+empty response caused by failure
+```
+
+Distinguish:
+
+```text
+valid not-yet-published result
+provider failure
+valid empty calendar
+```
+
+When results are not published yet:
+
+* retain the ticker’s awaiting-results state
+* continue scanning at the established cadence
+* do not mark the event complete
+* do not erase estimates or prior metadata
+
+When complete results appear:
+
+* persist them atomically
+* make them visible to both endpoints immediately
+* update completion state according to existing logic
+
+---
+
+# Contract 7 — resource isolation
+
+A slow FMP request must not delay:
+
+```text
+/api/home/dashboard
+/api/watchlist/list
+/api/watchlist/{id}
+/api/watchlist/earnings/by-symbols
+theme endpoints
+portfolio endpoints
+```
+
+Audit and correct:
+
+* blocking HTTP clients used inside async code
+* synchronous provider parsing on the event loop
+* `time.sleep()` in async paths
+* long retry loops
+* provider work while holding DB connections
+* shared connection-pool starvation
+* shared semaphore starvation
+* unbounded threadpool work
+* duplicate background tasks
+
+Use the project’s established async/background execution conventions.
+
+Do not merely increase:
+
+* server workers
+* database pool size
+* provider timeout
+* global retries
+
+Those would hide, not solve, the architecture problem.
+
+---
+
+# Contract 8 — no active-window scan suppression
+
+Do not add a general ten-minute provider cooldown for companies actively awaiting earnings.
+
+Separate:
+
+```text
+ACTIVE EARNINGS-DUE WINDOW
+preserve real-time cadence
+
+NON-ACTIVE GENERAL REFRESH
+existing slower refresh/backoff may remain
+```
+
+The frontend’s ten-minute live-events circuit breaker is defensive browser behavior.
+
+It must not determine backend scanner cadence.
+
+---
+
+# Contract 9 — persistence and restart behavior
+
+Backend restart must not require the first browser request to perform the real-time system’s initialization synchronously.
+
+On restart:
+
+1. Load existing valid persisted earnings state.
+2. Serve it immediately.
+3. Register the scanner exactly once.
+4. Continue due-window scanning according to existing behavior.
+5. Do not block application readiness on FMP.
+
+---
+
+# Contract 10 — response compatibility
+
+Do not change endpoint paths or existing frontend-facing record schemas.
+
+Capture representative before/after fixtures for:
+
+```text
+/api/earnings/live-events
+/api/watchlist/earnings/by-symbols
+```
+
+Compare:
+
+* top-level keys
+* nested keys
+* record fields
+* pagination
+* upcoming/recent separation
+* source metadata
+* timestamps
+* null behavior
+
+Any additive metadata must remain backward-compatible.
+
+---
+
+# Required tests
+
+Use production functions and existing test conventions.
+
+## Scanner parity
+
+1. Due-window eligibility unchanged.
+2. Active scan window unchanged.
+3. Scan interval unchanged.
+4. Eligible ticker universe unchanged.
+5. FMP endpoint unchanged.
+6. FMP request parameters unchanged.
+7. Provider parsing unchanged.
+8. EPS detection unchanged.
+9. Revenue detection unchanged.
+10. Surprise calculations unchanged.
+11. Preliminary result handling unchanged.
+12. Complete result handling unchanged.
+13. Persistence unchanged.
+14. Live-event publication unchanged.
+15. Completion condition unchanged.
+
+## Backend ownership
+
+16. Scanner runs without browser traffic.
+17. Scanner runs when live-events is never called.
+18. Scanner runs while frontend circuit is open.
+19. Startup registers scanner once.
+20. Repeated startup hooks do not duplicate it.
+
+## Fast reads
+
+21. Live-events makes zero synchronous provider calls.
+22. Watchlist by-symbols makes zero synchronous provider calls.
+23. Read endpoints do not await scanner lock.
+24. Reads return while mocked FMP call remains pending.
+25. Reads retain valid last-known-good data after FMP 502.
+26. Reads retain valid last-known-good data after timeout.
+27. Response contracts remain unchanged.
+
+## Real-time publication
+
+28. Newly available mocked EPS result is detected on the next existing scan.
+29. Newly available mocked revenue result is detected on the next existing scan.
+30. Result becomes visible through live-events immediately after persistence.
+31. Result becomes visible through Watchlist immediately after persistence.
+32. No added ten-minute delay.
+33. No additional cache TTL delays publication.
+
+## Single-flight
+
+34. Ten live-events reads launch zero scans.
+35. Ten Watchlist reads launch zero scans.
+36. Concurrent scheduler triggers produce one active scan.
+37. Lock releases on success.
+38. Lock releases on provider failure.
+39. Lock releases on timeout.
+40. Lock releases on cancellation.
+41. Next scheduled opportunity remains available after failure.
+
+## Resource isolation
+
+42. Slow mocked FMP call does not delay Watchlist list.
+43. Slow mocked FMP call does not delay Home dashboard.
+44. Slow mocked FMP call does not delay Watchlist by-symbols.
+45. Provider retry wait does not block the event loop.
+46. Provider call does not hold a database connection.
+47. Repeated failure does not create an unbounded task queue.
+
+## Last-known-good
+
+48. FMP 502 cannot overwrite valid EPS/revenue.
+49. Timeout cannot overwrite valid EPS/revenue.
+50. Malformed result cannot overwrite valid data.
+51. Incomplete result remains awaiting.
+52. Valid not-yet-published result continues scanning.
+53. Complete result updates atomically.
+
+## Regression
+
+54. Upcoming earnings unchanged.
+55. Recent earnings unchanged.
+56. Pagination unchanged.
+57. BMO/AMC/during-market labels unchanged.
+58. Performance fields unchanged.
+59. Ratings unchanged.
+60. Price targets unchanged.
+61. SEC materials unchanged.
+62. Recent filings unchanged.
+63. No frontend files changed.
+64. No taxonomy files changed.
+
+---
+
+# Required live validation
+
+Use controlled mocks or established provider test hooks.
+
+Do not corrupt real production earnings state.
+
+Simulate:
+
+1. Due ticker with no published result.
+2. FMP 502.
+3. FMP timeout.
+4. Incomplete result.
+5. Later complete EPS and revenue.
+6. Multiple live-events browser reads.
+7. Multiple Watchlist earnings reads.
+8. Home and Watchlist requests while FMP is slow.
+
+Prove:
+
+```text
+scanner continues on the established real-time cadence
+complete result is detected on the next scan
+live-events sees it after persistence
+Watchlist sees it after persistence
+read requests do not wait for FMP
+unrelated endpoints do not queue behind FMP
+```
+
+Measure:
+
+```text
+/api/earnings/live-events
+/api/watchlist/earnings/by-symbols
+/api/watchlist/list
+/api/home/dashboard
+```
+
+Record status, TTFB, duration, provider-call count, and scan-task count.
+
+---
+
+# Acceptance criteria
+
+The task is complete only when:
+
+1. Real-time scan eligibility is unchanged.
+2. Real-time scan cadence is unchanged.
+3. FMP endpoint and parameters are unchanged.
+4. Scanner runs without browsers.
+5. Live-events no longer synchronously calls FMP.
+6. Watchlist earnings no longer synchronously calls FMP.
+7. A new FMP result is exposed on the next existing scan.
+8. No extra ten-minute earnings delay exists.
+9. Slow FMP calls do not delay unrelated endpoints.
+10. Existing earnings fields and page behavior remain available.
+11. Last-known-good results survive provider failure.
+12. No frontend or taxonomy code changed.
+
+---
+
+# Validation commands
+
+Run all focused earnings, scheduler, Home, and Watchlist tests required by `AGENTS.md`.
+
+At minimum:
+
+```bash
+cd /home/runner/workspace/backend
+python3.11 -m pytest <focused earnings tests> -q
+git diff --check
+```
+
+Report exact commands and exit codes.
+
+Do not call a failing command passed.
+
+---
+
+# Scope restrictions
+
+Do not:
+
+* modify frontend files
+* modify taxonomy files
+* change scan cadence
+* change due-window logic
+* change eligible universe
+* change FMP endpoints
+* add a ten-minute active-window cooldown
+* reduce earnings fields
+* remove Upcoming or Recent earnings
+* change endpoint paths
+* apply broad server-capacity changes
+* install dependencies without explicit necessity and AGENTS.md permission
+* push
+
+---
+
+# Repository hygiene
+
+Do not use:
+
+```bash
+git add .
+git add -A
+```
+
+Stage exact earnings source, focused tests, and required report files only.
+
+Do not stage:
+
+* runtime earnings snapshots
+* provider payloads
+* caches
+* logs
+* databases
+* screenshots
+* secrets
+* attached prompts
+* unrelated reports
+* unrelated source files
+
+Create exactly one local commit:
+
+```text
+fix: isolate realtime earnings scans from reads
+```
+
+---
+
+# Required report
+
+Write to the exact backend path required by `AGENTS.md`.
+
+Include:
+
+1. Confirmation `AGENTS.md` was read first.
+2. Starting branch, HEAD, and status.
+3. Confirmation this was an earnings task, not taxonomy work.
+4. Exact old scanner architecture.
+5. Exact due-window logic.
+6. Exact scan cadence.
+7. Exact FMP endpoint and parameters.
+8. Exact old browser/request dependency.
+9. Exact blocking mechanism.
+10. Scanner parity before versus after.
+11. Backend-owned scheduler lifecycle.
+12. Single-flight behavior.
+13. Live-events read behavior.
+14. Watchlist read behavior.
+15. Last-known-good behavior.
+16. Failure behavior during an active earnings window.
+17. Result-publication latency proof.
+18. Resource-isolation proof.
+19. Before/after endpoint timings.
+20. Exact files changed and staged.
+21. Tests and exit codes.
+22. `git diff --check`.
+23. Confirmation no frontend or taxonomy files changed.
+24. Final status.
+25. Commit SHA and message.
+26. Complete commit diff only.
