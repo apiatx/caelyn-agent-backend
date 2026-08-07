@@ -1,0 +1,566 @@
+REPLIT AGENT — CORRECT de859cc1: MAKE TRADIER BACKGROUND ADMISSION NON-BLOCKING AND USE THE EXISTING PROVIDER BOUNDARY INSTEAD OF QUEUING RAW HTTP
+
+Work only in the live backend Replit workspace:
+
+/home/runner/workspace
+
+This is a focused correction on top of:
+
+de859cc1 — fix: eliminate Tradier background contention
+
+DO NOT publish yet.
+
+The prior commit correctly identified and began accounting for three raw-httpx
+Tradier bypass paths, but review found that the implementation DOES NOT yet
+satisfy the intended contention contract.
+
+Do not revert de859cc1 wholesale.
+
+Correct it surgically.
+
+The live Replit filesystem/runtime is authoritative.
+GitHub is reference/history only.
+
+────────────────────────────────────────────────────────────────────
+MANDATORY FIRST STEP
+────────────────────────────────────────────────────────────────────
+
+1. Find and read live backend AGENTS.md completely.
+2. Follow its report destination and repository rules.
+3. Record:
+   - repo root
+   - branch
+   - HEAD
+   - git status -sb
+   - ahead/behind
+   - last 15 commits
+4. Confirm de859cc1 is present or identify its exact live equivalent.
+5. Read:
+   - backend/data/tradier_provider.py
+   - backend/data/tradier_budget.py
+   - backend/services/theme_rs_service.py
+   - backend/services/watchlist_quote_cache.py
+   - relevant main.py /api/rate-status code
+   - backend/tests/test_tradier_contention.py
+6. Preserve all unrelated changes.
+7. Do not reset/revert/rebase/amend/push.
+
+────────────────────────────────────────────────────────────────────
+NON-NEGOTIABLE PROVIDER/FRESHNESS CONTRACTS
+────────────────────────────────────────────────────────────────────
+
+DO NOT change:
+
+Tradier global market-data ceiling
+≈110 RPM, verify exact live value
+
+Tradier live-quote freshness
+
+master screener logical cadence
+
+Options Flow logical cadence
+
+saved/watchlist options cadence
+
+sector options cadence
+
+Theme RS logical refresh cadence
+
+canonical-history cadence / provider rules
+
+FMP Watchlist fundamentals schedule
+
+FMP real-time earnings scanner cadence/windows/provider behavior
+
+Do not solve contention by making the required datasets materially less fresh.
+
+Logical jobs may continue waking at exactly their existing cadence.
+
+The correction is to reduce or defer PHYSICAL provider work when capacity is
+not available, not to silently change scheduler timing.
+
+────────────────────────────────────────────────────────────────────
+PROVEN DEFECT 1 — SEMAPHORE IS HELD WHILE RATE LIMITER SLEEPS
+────────────────────────────────────────────────────────────────────
+
+Current de859cc1 behavior in _fetch_intraday_bars is approximately:
+
+async with _INTRADAY_SEM:
+    await TRADIER_LIMITER.acquire()
+    httpx...
+
+This is wrong.
+
+It allows up to 20 intraday tasks to occupy all concurrency permits while
+waiting for the sliding-window limiter.
+
+We previously had this exact class of failure with startup pacing:
+concurrency permits must NOT be held during rate-limit sleeping.
+
+Required invariant:
+
+NO background concurrency semaphore, DB connection, provider client,
+or other scarce resource may be held while waiting for global Tradier capacity.
+
+Add a deterministic regression test proving this.
+
+────────────────────────────────────────────────────────────────────
+PROVEN DEFECT 2 — NEW PATHS BYPASS PER-LANE ADMISSION
+────────────────────────────────────────────────────────────────────
+
+TradierProvider._get() currently owns canonical admission approximately as:
+
+lane = current lane
+check_budget(lane)
+if lane exhausted:
+    record_defer
+    return None
+
+await TRADIER_LIMITER.acquire()
+record_call(lane)
+physical HTTP
+
+de859cc1's new raw-httpx paths instead do:
+
+await TRADIER_LIMITER.acquire()
+record_call("maintenance")
+physical HTTP
+
+They therefore skip check_budget() entirely.
+
+This must be corrected.
+
+Do not manually duplicate partial pieces of TradierProvider admission logic
+in individual services.
+
+────────────────────────────────────────────────────────────────────
+CONTRACT 1 — ONE AUTHORITATIVE PHYSICAL TRADIER BOUNDARY
+────────────────────────────────────────────────────────────────────
+
+For each confirmed Tradier path in:
+
+theme_rs_service._fetch_intraday_bars
+theme_rs_service._fetch_tradier_daily_history
+watchlist_quote_cache._fetch_batch_direct
+
+determine whether an EXISTING public TradierProvider method already supports
+the exact Tradier endpoint and response semantics.
+
+If yes:
+    use it.
+
+If not:
+    add the SMALLEST narrowly-scoped method to the existing TradierProvider
+    required to support the exact endpoint.
+
+Examples only if needed:
+
+get_timesales(...)
+get_history(...)
+
+Follow current naming conventions.
+
+Do NOT create:
+
+another provider class
+another limiter
+another HTTP abstraction
+another cache namespace for identical data
+
+The physical network path must flow through the existing provider's canonical
+budget + global limiter machinery.
+
+Preserve existing caller-level result normalization and caching semantics.
+
+────────────────────────────────────────────────────────────────────
+CONTRACT 2 — BACKGROUND WORK MUST NOT WAIT FOR A 60-SECOND RESET
+────────────────────────────────────────────────────────────────────
+
+This is the central performance requirement.
+
+BACKGROUND jobs should not call a blocking limiter acquire when there is
+insufficient provider headroom.
+
+A background scan should behave as:
+
+logical scheduler wakes
+        ↓
+existing cache fresh?
+    yes → use cache, zero provider calls
+        ↓
+physical refresh actually required?
+        ↓
+lane has capacity AND global background capacity exists while preserving
+interactive reserve?
+    yes → make provider call
+    no  → defer this physical refresh and use existing cache/LKG/null contract
+          exactly as the caller already supports
+        ↓
+next existing scheduler cycle gets another opportunity
+
+Do NOT create a separate retry queue.
+
+Do NOT create hundreds of sleeping tasks.
+
+Do NOT delay the next logical scheduler cadence.
+
+────────────────────────────────────────────────────────────────────
+CONTRACT 3 — ADD NON-BLOCKING BACKGROUND ADMISSION TO EXISTING LIMITER
+────────────────────────────────────────────────────────────────────
+
+Inspect existing:
+
+TRADIER_LIMITER.remaining_capacity()
+TRADIER_LIMITER.can_start_background_batch(...)
+tradier_budget.check_budget(...)
+
+Use existing APIs where sufficient.
+
+If existing APIs cannot atomically support one background physical call without
+sleeping, add the minimum safe NON-BLOCKING method to the EXISTING limiter.
+
+For example, conceptually:
+
+try_acquire_background(reserve=N) -> bool
+
+but use a name/style consistent with the project.
+
+It must:
+
+- acquire the EXISTING limiter lock
+- prune the 60-second window
+- require at least the configured interactive reserve
+- if capacity is available:
+    record the global timestamp/call exactly once and return True
+- otherwise:
+    return False immediately
+- NEVER sleep
+- NEVER create another limiter state
+- NEVER exceed the same global 110 RPM ceiling
+
+Interactive reserve must use the project's existing established value where
+one already exists.
+
+Do not invent a second independent capacity model.
+
+────────────────────────────────────────────────────────────────────
+CONTRACT 4 — LANE ADMISSION MUST ALSO BE REAL
+────────────────────────────────────────────────────────────────────
+
+Before a background physical request:
+
+check the actual lane budget using the existing tradier_budget architecture.
+
+If the lane is full:
+
+record_defer(lane)
+return the existing cache/LKG/failure contract immediately
+
+Do NOT:
+
+await the global limiter first
+record_call for a request that will not execute
+allow maintenance traffic to ignore its lane cap
+
+record_call(lane) must correspond to an actual physical HTTP request.
+
+────────────────────────────────────────────────────────────────────
+CONTRACT 5 — NO FAIL-OPEN UNMETERED TRADIER
+────────────────────────────────────────────────────────────────────
+
+de859cc1 currently contains behavior conceptually like:
+
+except Exception:
+    log
+    proceed unmetered
+
+Remove this architecture.
+
+Once a path is declared globally managed, it must not silently perform a raw
+Tradier HTTP call when the limiter/budget infrastructure is unavailable.
+
+For background callers:
+
+limiter/budget infrastructure unavailable
+→ skip physical provider request
+→ preserve existing cache/LKG result
+→ log diagnostics
+
+For the startup quote fallback:
+use the same safe cache/LKG behavior already present in the architecture.
+
+Do not turn provider-control failure into an unmanaged burst.
+
+────────────────────────────────────────────────────────────────────
+CONTRACT 6 — DO NOT HOLD _INTRADAY_SEM WHILE WAITING/ADMITTING
+────────────────────────────────────────────────────────────────────
+
+Correct _fetch_intraday_bars ordering.
+
+Required concept:
+
+cache check
+→ non-blocking lane/global admission
+→ THEN acquire _INTRADAY_SEM
+→ HTTP
+→ release semaphore
+
+Because admission is non-blocking, there must be no limiter sleep inside
+_INTRA­DAY_SEM.
+
+If provider method itself can still block on TRADIER_LIMITER.acquire(), add the
+appropriate already-admitted/provider-call mechanism INSIDE the existing
+provider architecture so the same physical request is not admitted twice.
+
+Do not double-count.
+
+Do not acquire global capacity twice.
+
+────────────────────────────────────────────────────────────────────
+CONTRACT 7 — REDUCE DUPLICATE PHYSICAL TRAFFIC, NOT JUST COUNT IT
+────────────────────────────────────────────────────────────────────
+
+Audit the actual Theme RS paths.
+
+The forensic report estimated that a cold Theme RS intraday warmup may request
+a very large number of symbols.
+
+Determine:
+
+- exact symbol count now
+- how many physical timesales calls occur on cold cache
+- how many are exact duplicate requests elsewhere
+- whether another service already has equivalent fresh bars
+- whether identical concurrent requests can be coalesced
+
+Do not change Theme RS data semantics.
+
+But if two coroutines request the exact same:
+
+symbol
+Tradier endpoint
+parameters/time window
+
+while one is already in-flight, they should share the same in-flight result
+rather than fire duplicate physical HTTP.
+
+Reuse existing provider coalescing conventions where possible.
+
+Do not invent broad cross-provider data equivalence unless exact field/timeframe
+parity is proven.
+
+────────────────────────────────────────────────────────────────────
+CONTRACT 8 — /api/rate-status MUST REPORT FACT, NOT STATIC CLAIMS
+────────────────────────────────────────────────────────────────────
+
+Current de859cc1 makes:
+
+active_unmanaged_count = 0
+
+from a static list whose entries have status="managed".
+
+That is useful documentation but not proof.
+
+Keep compatibility, but make the diagnostics truthful.
+
+At minimum distinguish:
+
+configured/known unmanaged paths
+vs
+runtime physical calls made outside managed provider accounting, where safely
+observable
+
+Do not claim "all physical Tradier HTTP routes are managed" while code contains
+a fail-open unmetered path.
+
+After this correction there should genuinely be no fail-open raw Tradier path
+among the audited active functions.
+
+────────────────────────────────────────────────────────────────────
+CONTRACT 9 — DO NOT RESCALE ALL LANE BUDGETS IN THIS COMMIT
+────────────────────────────────────────────────────────────────────
+
+The forensic report noted that lane maximums sum to more than 110.
+
+That alone does not prove all lane values should simply be scaled downward,
+because they are upper bounds, not reservations.
+
+Do not arbitrarily change:
+
+quotes 30
+options_flow 40
+saved_options 25
+maintenance 20
+sectors 60
+reserved 5
+canonical history 5
+
+in this correction.
+
+First make:
+
+all calls managed
+background admission non-blocking
+duplicates reused
+interactive reserve real
+
+Then measure actual physical demand.
+
+If actual required steady-state physical demand still mathematically exceeds
+110 RPM after duplicate elimination, report it separately with measured demand
+by lane.
+
+Do not silently degrade required freshness.
+
+────────────────────────────────────────────────────────────────────
+REQUIRED TESTS
+────────────────────────────────────────────────────────────────────
+
+Replace/extend test_tradier_contention.py so it proves behavior, not source shape.
+
+At minimum:
+
+1. Intraday cache hit = zero admission / zero HTTP.
+2. History cache hit = zero admission / zero HTTP.
+3. Background intraday with insufficient global headroom returns immediately.
+4. It does NOT sleep waiting for a 60-second limiter reset.
+5. _INTRADAY_SEM is not acquired when global admission fails.
+6. _INTRADAY_SEM is not held while waiting on limiter.
+7. Maintenance lane full → physical request skipped + defer recorded.
+8. Global headroom insufficient → physical request skipped.
+9. Interactive reserve remains untouched by background calls.
+10. Successful background call records exactly one global call.
+11. Successful background call records exactly one lane call.
+12. No double-admission/double-counting.
+13. Limiter infrastructure exception does NOT produce raw Tradier HTTP.
+14. Startup quote fallback cannot fail-open unmetered.
+15. Exact concurrent duplicate request coalesces if implementation supports it.
+16. Logical Theme RS scheduler cadence remains unchanged.
+17. Master screener cadence remains unchanged.
+18. Sector cadence remains unchanged.
+19. Real-time quote contract unchanged.
+20. Real-time earnings code untouched.
+
+Also preserve relevant existing tests.
+
+────────────────────────────────────────────────────────────────────
+ACTIVE-SESSION SIMULATION
+────────────────────────────────────────────────────────────────────
+
+Create a deterministic market-hours simulation.
+
+Simulate:
+
+master screener consuming options capacity
+sector work due
+Theme RS intraday cold work due
+theme supplement due
+Home request arrives
+
+Prove:
+
+- background paths do not queue waiting for global reset
+- no semaphore is held while capacity unavailable
+- no physical call exceeds global 110 ceiling
+- interactive reserve survives
+- Home can fall back immediately rather than wait on background demand
+- logical background loops still wake on their original schedules
+- deferred physical work gets another opportunity on next ordinary cycle
+
+Report physical calls per subsystem.
+
+────────────────────────────────────────────────────────────────────
+LIVE VALIDATION
+────────────────────────────────────────────────────────────────────
+
+Off-hours live validation may be performed normally.
+
+Do not fake production env variables.
+
+Verify:
+
+/health
+/api/rate-status
+/api/home/dashboard
+/api/watchlist/list
+/api/watchlist/{primary}
+/api/themes/relative-strength
+/api/options-flow/sectors
+
+All must remain 200.
+
+Measure endpoint TTFB and total time.
+
+Explicitly separate:
+
+off-hours live evidence
+from
+deterministic active-session simulation
+
+Do not claim market-hours latency is solved from an off-hours run alone.
+
+────────────────────────────────────────────────────────────────────
+DO NOT TOUCH IN THIS CORRECTION
+────────────────────────────────────────────────────────────────────
+
+Do not modify:
+
+Watchlist LKG
+Watchlist payload schema
+GZip
+frontend
+earnings scanner
+earnings read endpoint
+Neon pool architecture
+RSS pool
+canonical history schedule
+FMP fundamentals schedule
+provider ceilings
+scheduler cadences
+
+────────────────────────────────────────────────────────────────────
+REPOSITORY HYGIENE
+────────────────────────────────────────────────────────────────────
+
+Do not use:
+
+git add .
+git add -A
+
+Stage exact intended source/tests only.
+
+Create one local commit after successful validation:
+
+fix: make Tradier background admission non-blocking
+
+Do not push.
+
+────────────────────────────────────────────────────────────────────
+REQUIRED REPORT
+────────────────────────────────────────────────────────────────────
+
+Write to the exact AGENTS.md-required report path.
+
+Include:
+
+1. Starting HEAD/status.
+2. Confirmation de859cc1 was reviewed.
+3. Exact semaphore-while-limiter-wait defect.
+4. Exact skipped-lane-admission defect.
+5. Exact fail-open paths removed.
+6. Existing provider methods reused / narrowly added methods.
+7. Background non-blocking admission implementation.
+8. Interactive reserve semantics.
+9. Duplicate/coalescing findings.
+10. Theme RS cold physical-call count before/after.
+11. Active-session simulation.
+12. Global call count before/after.
+13. Lane call/defer counts before/after.
+14. Proof no semaphore held while waiting.
+15. Proof no fail-open unmanaged HTTP.
+16. Confirmation all required cadences unchanged.
+17. Endpoint timings.
+18. Tests + exit codes.
+19. git diff --check.
+20. Exact files changed/staged.
+21. Final commit SHA.
