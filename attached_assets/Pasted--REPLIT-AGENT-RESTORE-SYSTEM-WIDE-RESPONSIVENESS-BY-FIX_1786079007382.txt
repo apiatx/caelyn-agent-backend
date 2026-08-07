@@ -1,0 +1,863 @@
+# REPLIT AGENT — RESTORE SYSTEM-WIDE RESPONSIVENESS BY FIXING TRADIER CONTENTION WITHOUT CHANGING ANY DATA FRESHNESS CONTRACT
+
+Work in the live backend Replit workspace:
+
+`/home/runner/workspace`
+
+This is a production performance correction.
+
+The user reports:
+
+```text
+Home: ~1–2 minutes to load
+Watchlist: ~1–2 minutes to load
+Other pages: also extremely slow
+Loaded pages can remain sluggish
+```
+
+A DeepSeek/OpenCode read-only forensic audit has already been completed.
+
+Use that report as evidence, but DO NOT assume every statement in it is correct.
+
+The live Replit filesystem, runtime, logs, provider configuration and current AGENTS.md are authoritative.
+
+GitHub is reference/history only.
+
+---
+
+# MANDATORY FIRST STEP
+
+Before editing:
+
+1. Find and read live backend `AGENTS.md` completely.
+2. Follow its exact report destination and repository rules.
+3. Record:
+
+   * repository root
+   * branch
+   * HEAD
+   * `git status -sb`
+   * ahead/behind
+   * recent 20 commits
+4. Read the DeepSeek forensic report:
+   `.opencode-reports/latest.md`
+   or its actual live path.
+5. Preserve all unrelated working-tree/runtime artifacts.
+6. Do not reset/revert/rebase/amend/push.
+
+---
+
+# IMPORTANT: VERIFY THE AUDIT BEFORE TRUSTING IT
+
+The forensic report contains at least some inaccuracies.
+
+Verify these directly in live source.
+
+## Known discrepancy A — RSS pool
+
+The forensic report says RSS still uses:
+
+```text
+SimpleConnectionPool(1,5)
+```
+
+but recent production architecture should contain the outage fix using:
+
+```text
+ThreadedConnectionPool(1,16)
+```
+
+with PoolError handled without `closeall()`.
+
+Confirm current live behavior.
+
+DO NOT change RSS code in this task.
+
+---
+
+## Known discrepancy B — Tradier throttle statistic
+
+The forensic report states:
+
+```text
+1,588 throttled
+1,758 calls
+47.5% throttle rate
+```
+
+Do not repeat that percentage.
+
+Inspect `_TradierRateLimiter.acquire()`.
+
+`total_throttled` increments when an acquire attempt must sleep; it is not necessarily a count of unique requests.
+
+Report the correct semantics.
+
+The important fact to investigate is the absolute amount and duration of limiter waiting.
+
+---
+
+## Known discrepancy C — Home provider use
+
+The forensic report says Home calls providers on every request.
+
+Verify current `home_service.py`.
+
+Current architecture is expected to have approximately:
+
+```text
+home aggregate hot cache: 60 sec
+home aggregate LKG: longer-lived fallback
+```
+
+Provider work should occur during rebuild/cache-miss paths, not literally every cached GET.
+
+Preserve that distinction.
+
+---
+
+# CRITICAL PROVIDER/FRESHNESS CONTRACTS
+
+These must remain intact.
+
+This task is not permission to make data stale merely to improve latency.
+
+## Tradier global provider ceiling
+
+Current physical market-data ceiling should be approximately:
+
+```text
+110 RPM
+```
+
+Verify live value.
+
+DO NOT increase it.
+
+---
+
+## Tradier live quotes
+
+Preserve:
+
+```text
+current real-time/session behavior
+existing per-symbol cache freshness
+existing batch quote behavior
+existing provider source
+```
+
+Do not reduce live quote freshness.
+
+---
+
+## Tradier options
+
+Preserve the current logical schedules and freshness requirements for:
+
+```text
+master options screener
+Options Flow
+saved/watchlist options
+sector options
+theme options supplement
+```
+
+Do not globally slow these jobs.
+
+The correction should reduce DUPLICATE physical calls and conflicting ownership.
+
+---
+
+## Canonical history / technical data
+
+Preserve:
+
+```text
+canonical-history scheduled maintenance
+5 RPM market-hours history lane or exact live equivalent
+off-hours acceleration rules
+comparison_close_tail index architecture
+```
+
+No request-time gzip history scans.
+
+No new history provider calls on page navigation.
+
+---
+
+## FMP Watchlist fundamentals
+
+Preserve the existing scheduled architecture.
+
+Current intended maintenance window is approximately:
+
+```text
+Sunday 02:00–05:00 America/New_York
+```
+
+Verify live implementation.
+
+Do not move fundamental refresh to page render.
+
+---
+
+## Real-time FMP earnings
+
+Do not modify this functionality in this commit.
+
+Preserve exactly:
+
+```text
+due-target eligibility
+BMO/AMC active windows
+current scanner cadence
+FMP endpoints
+result detection
+publication behavior
+```
+
+The real-time earnings scanner is required.
+
+---
+
+# PRIMARY PROVEN ARCHITECTURAL PROBLEM
+
+Current Tradier lane budgets are expected to resemble:
+
+```text
+quotes                       30
+options_flow                 40
+saved_options                25
+maintenance                  20
+sectors                      60
+reserved                      5
+canonical_history_backfill    5
+```
+
+while the physical global ceiling is:
+
+```text
+110
+```
+
+These lane maxima therefore do not themselves guarantee feasible aggregate demand.
+
+The forensic audit also found possible physical HTTP bypass paths such as:
+
+```text
+theme_rs_service._tradier_quotes_batch
+theme_rs_service._fetch_intraday_bars
+theme_rs_service._fetch_tradier_daily_history
+
+possibly congressional trading
+possibly insider activity
+possibly startup direct quote paths
+```
+
+VERIFY EACH LIVE PATH.
+
+Do not change a path merely because the report names it.
+
+---
+
+# DESIGN PRINCIPLE
+
+There must be exactly one authoritative physical Tradier budget boundary.
+
+Desired flow:
+
+```text
+all logical Tradier consumers
+        ↓
+existing shared provider/cache/coalescing
+        ↓
+lane accounting
+        ↓
+global 110 RPM limiter
+        ↓
+physical Tradier HTTP
+```
+
+Not:
+
+```text
+Subsystem A → managed provider
+
+Subsystem B → raw httpx directly
+
+Subsystem C → its own Semaphore
+
+Subsystem D → separate pseudo-budget
+```
+
+Every real physical market-data request must be visible to the global accounting.
+
+---
+
+# PHASE 1 — MAP EXACT PHYSICAL HTTP CALLERS
+
+Before editing, enumerate every physical Tradier HTTP call.
+
+For each report:
+
+```text
+file
+function
+endpoint
+logical owner
+lane
+cache checked first?
+coalescing?
+global limiter?
+market-hours gate?
+cadence
+estimated calls/cycle
+```
+
+Distinguish:
+
+```text
+logical scan
+from
+physical HTTP request
+```
+
+A logical scan may execute at its normal cadence while consuming zero provider calls when canonical fresh data already exists.
+
+That distinction is essential.
+
+---
+
+# PHASE 2 — PRESERVE EXISTING SHARED CACHE/COALESCING
+
+Current `TradierProvider` already has canonical behavior for:
+
+```text
+per-symbol equity quote caching
+batching only missing quote symbols
+option expiration caching
+option chain caching
+same symbol+expiration in-flight coalescing
+```
+
+Do not create parallel caches for the same data.
+
+Where another subsystem bypasses this provider and asks Tradier for equivalent data, migrate it to the EXISTING canonical provider/cache/coalescing path when contract-compatible.
+
+Preserve:
+
+```text
+same Tradier endpoint
+same query parameters
+same parser/output
+same logical refresh cadence
+```
+
+The purpose is to eliminate duplicate physical traffic.
+
+---
+
+# PHASE 3 — REMOVE GLOBAL-LIMITER BYPASSES
+
+For every confirmed active Tradier bypass:
+
+Route the physical call through the existing globally managed Tradier path.
+
+Do not simply wrap raw HTTP with another unrelated limiter.
+
+Preferred order:
+
+1. Existing public `TradierProvider` method if equivalent.
+2. Add a narrowly scoped method to the EXISTING provider if the exact endpoint is not exposed.
+3. Preserve the caller's current normalized response contract.
+
+Do not create another provider class.
+
+Do not create another limiter singleton.
+
+---
+
+# PHASE 4 — FIX BACKGROUND CAPACITY OWNERSHIP
+
+Audit:
+
+```text
+master screener
+sector backfill
+theme supplement
+Theme RS
+Stage2 warmup
+terminal prewarm
+macro jobs
+canonical history
+other Tradier users
+```
+
+For each determine whether the job can reuse fresh data produced by another canonical owner before making another provider request.
+
+Specific example:
+
+If:
+
+```text
+master screener
+```
+
+has just fetched a symbol+expiration option chain that is still valid under the existing chain freshness contract, then:
+
+```text
+sector backfill
+theme supplement
+```
+
+must reuse that canonical chain rather than firing another equivalent Tradier HTTP request.
+
+Do NOT change their logical scheduler cadence.
+
+A scheduler may still wake on schedule and find:
+
+```text
+cache fresh → zero provider calls
+```
+
+That preserves behavior while reducing physical demand.
+
+---
+
+# PHASE 5 — PROTECT INTERACTIVE REQUEST HEADROOM
+
+User-facing reads must not wait tens of seconds inside the Tradier sliding-window limiter.
+
+Identify interactive Tradier consumers, at minimum:
+
+```text
+Home
+manual popup/detail paths
+Portfolio where applicable
+other page reads
+```
+
+The request-time rule should be:
+
+```text
+fresh cache available
+→ use it
+
+valid LKG available
+→ use it immediately
+
+provider capacity immediately available
+→ live refresh allowed where current contract requires
+
+provider capacity unavailable
+→ return best valid cached/LKG state immediately
+→ never sit for 30–60 seconds waiting behind background jobs
+```
+
+Do not fabricate data.
+
+Preserve source/staleness metadata.
+
+Do not simply increase request timeouts.
+
+---
+
+# HOME-SPECIFIC RULE
+
+Do not redesign Home.
+
+Current Home is expected to have:
+
+```text
+60 sec aggregate cache
+LKG fallback
+single-flight background rebuild
+```
+
+Preserve this.
+
+Audit the CACHE-MISS/REBUILD path.
+
+The browser-facing Home request must not become stuck waiting for:
+
+```text
+Tradier global limiter sleep
+FMP fallback
+market news provider
+movers provider
+macro provider
+```
+
+when valid upstream cache/LKG data exists.
+
+Map each Home section to its existing canonical cache owner.
+
+Do not introduce duplicate Home-only refresh ownership where another service already refreshes that dataset.
+
+If no valid aggregate snapshot exists on true cold start, use existing cached section snapshots where possible and schedule provider work through existing background ownership rather than blocking the request.
+
+Preserve current Home fields.
+
+---
+
+# CRITICAL: DO NOT "FIX" THIS BY LOWERING REQUIRED CADENCES
+
+The user explicitly requires existing data refresh behavior.
+
+Do not blindly change:
+
+```text
+master screener 39/67 sec behavior
+sector refresh cadence
+theme refresh cadence
+quote TTL
+options cadence
+canonical-history schedule
+fundamentals schedule
+earnings scan cadence
+```
+
+If total theoretical demand exceeds 110 RPM, solve it first through:
+
+```text
+shared caching
+batching
+coalescing
+duplicate-owner elimination
+single-flight
+provider bypass removal
+background admission control
+```
+
+Only if it is mathematically impossible after duplicate elimination should you STOP and report the exact conflict rather than silently degrading freshness.
+
+---
+
+# PHASE 6 — MAKE BACKGROUND ADMISSION NON-BLOCKING
+
+Audit `can_start_background_batch()` and every Tradier-heavy background cycle.
+
+A background job that cannot safely start must not:
+
+```text
+consume the final interactive reserve
+enter a 30–60 sec limiter sleep
+hold a semaphore while waiting
+hold DB resources while waiting
+```
+
+It may:
+
+```text
+serve/reuse LKG
+defer physical refresh
+retry at its existing next scheduled opportunity
+```
+
+Do not create unbounded deferred-task queues.
+
+---
+
+# PHASE 7 — CORRECT THE LANE MODEL
+
+Do not merely change the comment saying lane budgets sum to the provider cap.
+
+Define and test the actual semantics.
+
+The current lanes are maximum per-lane caps, NOT guaranteed reservations.
+
+The implementation must enforce:
+
+```text
+global physical ceiling <= 110
++
+interactive reserve preserved
++
+background calls accounted for
+```
+
+No combination of lane configurations may bypass the global physical limiter.
+
+Do not increase the global limit.
+
+If existing lane budget values remain unchanged for compatibility, document clearly that they are upper bounds and global admission is authoritative.
+
+---
+
+# REQUIRED MARKET-HOUR SIMULATION TEST
+
+It is currently possible that the live audit occurs off-hours.
+
+Do not mutate the production environment.
+
+Use isolated tests/mocks to enforce active-session budget behavior.
+
+Simulate at least:
+
+```text
+master screener active
+sector refresh due
+theme supplement due
+Theme RS due
+Home request arrives
+```
+
+Prove:
+
+1. No physical call bypasses the global limiter.
+2. Duplicate exact option-chain requests coalesce/reuse cache.
+3. Background jobs do not exhaust interactive reserve.
+4. Home does not wait on limiter saturation.
+5. Total physical Tradier call count respects global ceiling.
+6. All logical jobs still execute at their existing scheduler cadence.
+
+---
+
+# REQUIRED RUNTIME DIAGNOSTICS
+
+Improve existing `/api/rate-status` diagnostics only if necessary, preserving compatibility.
+
+We need to observe:
+
+```text
+global calls last 60s
+global headroom
+global wait events
+wait duration if available
+
+per lane:
+physical calls
+deferrals
+saturation
+
+coalesced expiry calls
+coalesced chain calls
+
+confirmed unmanaged/bypass call count
+```
+
+Prefer additive diagnostics.
+
+Do not create a new endpoint.
+
+---
+
+# ACCEPTANCE TARGET — TRADIER
+
+After implementation:
+
+```text
+all active physical Tradier market-data traffic
+→ globally accounted
+
+unmanaged active Tradier paths
+→ 0
+```
+
+Under active-session simulation:
+
+```text
+global physical calls <= configured 110 RPM ceiling
+```
+
+and user-facing requests must retain headroom.
+
+Most importantly:
+
+A Home request made while background scans are active must not block for a sliding-window reset.
+
+---
+
+# DO NOT CHANGE WATCHLIST LKG IN THIS TASK
+
+Do not modify:
+
+```text
+_BULK_LKG
+Watchlist endpoint schema
+Watchlist payload structure
+GZip
+Watchlist pagination
+```
+
+We will evaluate Watchlist/browser performance separately after system-wide provider starvation is fixed.
+
+Do not create new Watchlist endpoints.
+
+---
+
+# DO NOT CONSOLIDATE NEON POOLS IN THIS TASK
+
+The DeepSeek audit's pool inventory contains at least one known stale/wrong entry.
+
+Do not create a shared Neon pool.
+
+Do not migrate DB consumers.
+
+Do not change DB pool sizes.
+
+That is a separate investigation if still needed later.
+
+---
+
+# DO NOT MODIFY EARNINGS IN THIS COMMIT
+
+`GET /api/earnings/live-events` measured approximately 12.85 seconds and needs a separate targeted profile.
+
+But preserve the current scanner/read architecture in this task.
+
+No earnings source changes.
+
+---
+
+# VALIDATION
+
+Run focused tests for:
+
+```text
+Tradier provider
+Tradier budget lanes
+global rate limiter
+master screener
+sector backfill
+theme supplement
+Theme RS
+Home dashboard
+provider coalescing
+background admission
+```
+
+Also run all project-required checks from `AGENTS.md`.
+
+Run:
+
+```bash
+git diff --check
+```
+
+Report actual exit codes.
+
+---
+
+# LIVE VALIDATION
+
+After tests and only through normal application startup:
+
+Verify:
+
+```text
+/health
+/api/rate-status
+/api/home/dashboard
+/api/watchlist/list
+/api/watchlist/{primary_id}
+/api/themes/relative-strength
+/api/options-flow/sectors
+```
+
+All must remain 200.
+
+Record endpoint timings.
+
+Because off-hours results cannot prove market-hour contention is gone, clearly distinguish:
+
+```text
+live off-hours evidence
+vs
+active-session deterministic simulation
+```
+
+---
+
+# REQUIRED PERFORMANCE COMPARISON
+
+Report before/after:
+
+```text
+Home cache hit
+Home LKG hit
+Home rebuild/miss
+
+Tradier global physical calls
+Tradier global wait events
+per-lane physical calls
+coalesced requests
+unmanaged/bypass requests
+
+master screener physical calls/cycle
+sector physical calls/cycle
+theme supplement physical calls/cycle
+Theme RS physical calls/cycle
+```
+
+Do not call the problem solved merely because one Home request is fast.
+
+---
+
+# SCOPE RESTRICTIONS
+
+Do not:
+
+* modify frontend
+* change Watchlist payload
+* split endpoints
+* consolidate Neon pools
+* change earnings
+* change FMP fundamentals cadence
+* change canonical-history schedule
+* raise Tradier provider ceiling
+* reduce required realtime quote freshness
+* lower required options freshness
+* install dependencies
+* push
+
+---
+
+# REPOSITORY HYGIENE
+
+Do not use:
+
+```bash
+git add .
+git add -A
+```
+
+Stage exact intended files only.
+
+One local commit after successful validation:
+
+```text
+fix: eliminate Tradier background contention
+```
+
+Do not push.
+
+---
+
+# REQUIRED REPORT
+
+Write to the exact path required by live `AGENTS.md`.
+
+Include:
+
+1. AGENTS.md confirmation.
+2. Starting HEAD/status.
+3. Corrections to inaccurate DeepSeek findings.
+4. Complete pre-edit physical Tradier caller map.
+5. Exact unmanaged/bypass paths proven live.
+6. Exact duplicate provider work discovered.
+7. Exact changes made.
+8. Confirmation scheduler cadences unchanged.
+9. Confirmation FMP fundamentals schedule unchanged.
+10. Confirmation realtime earnings unchanged.
+11. Before/after physical calls by subsystem.
+12. Before/after limiter wait behavior.
+13. Active-session simulation results.
+14. Home behavior while background demand is saturated.
+15. Endpoint timings.
+16. Tests and exit codes.
+17. Exact files changed/staged.
+18. `git diff --check`.
+19. Final commit SHA.
+20. Complete commit diff only.
