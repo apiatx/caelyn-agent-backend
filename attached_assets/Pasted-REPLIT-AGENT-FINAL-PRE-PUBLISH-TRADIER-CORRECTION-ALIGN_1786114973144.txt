@@ -1,0 +1,590 @@
+REPLIT AGENT — FINAL PRE-PUBLISH TRADIER CORRECTION:
+ALIGN LIMITER TIMESTAMPS WITH PHYSICAL HTTP, PROVE THE REAL MULTI-SUBSYSTEM LOAD,
+VERIFY THEME-RS FRESHNESS, AND AUDIT MULTI-PROCESS PROVIDER OWNERSHIP
+
+Work in the live backend Replit workspace:
+
+/home/runner/workspace
+
+DO NOT PUBLISH.
+
+This is a focused correction on top of:
+
+de859cc1 — fix: eliminate Tradier background contention
+78a5793c — fix: make Tradier background admission non-blocking
+
+Do not redesign unrelated systems.
+
+The live Replit filesystem/runtime is authoritative.
+GitHub is reference/history only.
+
+────────────────────────────────────────────────────────────
+MANDATORY FIRST STEP
+────────────────────────────────────────────────────────────
+
+1. Find and read live AGENTS.md completely.
+2. Follow its exact report destination and repository rules.
+3. Record:
+   - repo root
+   - branch
+   - HEAD
+   - git status -sb
+   - ahead/behind
+   - recent 15 commits
+4. Read the current Tradier correction report.
+5. Read the actual current implementation of:
+   - data/tradier_provider.py
+   - data/tradier_budget.py
+   - services/theme_rs_service.py
+   - services/watchlist_quote_cache.py
+   - master screener Tradier consumers
+   - sector Tradier consumers
+   - theme supplement Tradier consumers
+   - Home quote consumer
+   - /api/rate-status
+6. Do not reset/revert/rebase/amend/push.
+
+────────────────────────────────────────────────────────────
+PRESERVE ALL DATA CONTRACTS
+────────────────────────────────────────────────────────────
+
+Do NOT alter:
+
+- 110 RPM Tradier global application ceiling
+- live quote freshness
+- options freshness
+- master screener logical cadence
+- sector logical cadence
+- theme supplement logical cadence
+- Theme RS logical cadence
+- canonical-history schedule
+- FMP fundamentals schedule
+- FMP real-time earnings scanner
+- earnings BMO/AMC active windows
+- frontend
+- Watchlist response architecture
+- RSS system
+- Neon pool architecture
+
+The goal is accurate resource arbitration, not reduced functionality.
+
+────────────────────────────────────────────────────────────
+DEFECT 1 — GLOBAL SLOT IS RESERVED TOO EARLY
+────────────────────────────────────────────────────────────
+
+Current 78a5793c Theme RS intraday ordering is approximately:
+
+cache
+→ lane check
+→ try_acquire_background()
+→ record global timestamp
+→ record lane call
+→ wait for _INTRADAY_SEM
+→ HTTP
+
+This is incorrect.
+
+The global limiter timestamp should correspond closely to the physical HTTP
+request.
+
+If many tasks reserve global slots before they acquire the 20-wide semaphore,
+some requests may execute materially later than the timestamps representing
+them.
+
+This can make the 60-second global window undercount actual future HTTP traffic.
+
+Correct it.
+
+Because background admission is now NON-BLOCKING, there is no problem doing:
+
+cache/coalescing
+→ acquire _INTRADAY_SEM
+→ lane check
+→ non-blocking global admission
+→ record lane call
+→ HTTP IMMEDIATELY
+→ release semaphore
+
+There must be NO sleeping Tradier limiter call inside the semaphore.
+
+A synchronous lane check and the non-blocking try-acquire are acceptable while
+holding the semaphore because neither waits for a reset.
+
+Required invariant:
+
+A successful global admission timestamp must be immediately followed by the
+corresponding physical HTTP call, with no unrelated concurrency queue between them.
+
+────────────────────────────────────────────────────────────
+CONTRACT 1 — PROVIDER OWNS ADMISSION + PHYSICAL HTTP
+────────────────────────────────────────────────────────────
+
+78a5793c added:
+
+_get_preadmitted()
+
+and service code currently calls it directly.
+
+Audit this architecture.
+
+Prefer that external services do NOT manually assemble:
+
+check_budget
+try_acquire_background
+record_call
+_get_preadmitted
+
+because that recreates partial provider logic outside TradierProvider.
+
+The provider should expose a narrow background-safe operation, such as the
+existing:
+
+get_timesales_background(...)
+get_history_background(...)
+
+or equivalent current methods.
+
+For Theme RS:
+
+async with _INTRADAY_SEM:
+    result = await provider.get_timesales_background(...)
+
+The provider method should internally:
+
+1. check the lane budget
+2. record lane deferral if unavailable
+3. try global background admission non-blockingly
+4. if unavailable return immediately
+5. record the lane physical call
+6. execute HTTP immediately
+
+No blocking limiter acquire.
+
+No second admission.
+
+No double-counting.
+
+No fail-open.
+
+Keep _get_preadmitted private to provider internals if it remains necessary.
+
+Do not allow arbitrary service modules to use it as a new limiter-bypass primitive.
+
+────────────────────────────────────────────────────────────
+CONTRACT 2 — REMOVE REDUNDANT COALESCING
+────────────────────────────────────────────────────────────
+
+78a5793c added both:
+
+theme_rs_service._INTRADAY_FUTURES
+
+and provider-level:
+
+_TIMESALES_FUTURES
+_HISTORY_FUTURES
+
+Determine which layer is authoritative.
+
+Do not maintain two independent in-flight registries for the same physical
+Tradier request unless they have provably different keys/semantics.
+
+Prefer provider-level coalescing for exact physical provider requests.
+
+Preserve caller-level caching and normalized output.
+
+Required proof:
+
+Two concurrent identical timesales requests
+→ exactly one physical Tradier call.
+
+────────────────────────────────────────────────────────────
+CONTRACT 3 — AUDIT get_provider() OWNERSHIP
+────────────────────────────────────────────────────────────
+
+78a5793c added a lazy module-level get_provider() singleton.
+
+The app may already own a TradierProvider through DataService or another
+canonical provider container.
+
+Determine:
+
+- how many TradierProvider instances exist in one backend process
+- where the canonical instance is created
+- whether get_provider() creates a second parallel provider instance
+- whether sandbox/production configuration can diverge
+- whether all instances share the same caches/coalescing/limiter correctly
+
+Do NOT retain a second provider owner merely for convenience if an existing
+canonical provider instance can be reused safely.
+
+Do not create a new provider architecture.
+
+────────────────────────────────────────────────────────────
+CONTRACT 4 — STARTUP QUOTE FALLBACK
+────────────────────────────────────────────────────────────
+
+Audit:
+
+watchlist_quote_cache._fetch_batch_direct
+
+The prior report says it still uses blocking TRADIER_LIMITER.acquire() because
+it is "fine at startup."
+
+Prove that this cannot contribute to request starvation.
+
+Determine:
+
+- which task invokes it
+- whether it runs on the event loop
+- whether it holds any semaphore/DB/thread resource
+- whether another scheduled owner will retry if it defers
+- whether it is required for first usable UI data
+
+If a valid cache/LKG exists and another normal refresh opportunity is available,
+prefer the same non-blocking background admission contract.
+
+Do NOT leave a background caller sleeping for 60 seconds merely because it is
+startup code unless there is a proven functional requirement.
+
+Do not make the Watchlist permanently cold.
+
+────────────────────────────────────────────────────────────
+CONTRACT 5 — PROVE THEME RS CAN ACTUALLY STAY FRESH
+────────────────────────────────────────────────────────────
+
+The prior report estimates approximately 222 cold Theme RS intraday symbols.
+
+Do NOT merely state that the remaining calls defer.
+
+Measure the actual current workload.
+
+Report:
+
+- total Theme RS logical symbols
+- UNIQUE Tradier timesales requests
+- duplicate symbols removed by coalescing
+- exact loop/warmup cadence
+- 1D cache TTL
+- active-market refresh requirement
+- maintenance lane capacity
+- global capacity actually available to Theme RS
+
+Then measure/derive coverage after:
+
+1 minute
+5 minutes
+15 minutes
+
+For each:
+
+fresh symbols
+LKG symbols
+missing symbols
+
+Answer explicitly:
+
+Can the current provider architecture finish a complete required Theme RS
+refresh before the data's required freshness window expires?
+
+If YES:
+prove it.
+
+If NO:
+STOP and report the mathematical conflict.
+
+Do NOT silently weaken freshness.
+
+If the current Theme RS consumer does not actually require a separate
+/timesales request for every symbol, document the unnecessary work and propose
+the smallest existing-source reuse strategy.
+
+Do not change the data source without explicit approval.
+
+────────────────────────────────────────────────────────────
+CONTRACT 6 — REAL INTEGRATED ACTIVE-SESSION SIMULATION
+────────────────────────────────────────────────────────────
+
+The prior "active-session simulation" mostly tested the limiter primitive with
+a small max_calls value.
+
+That is insufficient.
+
+Build a deterministic INTEGRATION simulation using the actual subsystem
+cycle functions or their narrow production boundaries.
+
+Simulate concurrently:
+
+- master screener cycle
+- sector options cycle
+- theme supplement cycle
+- Theme RS cold/partially-cold cycle
+- one Home rebuild/request needing quote data
+
+Use a fake physical Tradier transport so no real provider budget is consumed.
+
+Use the real:
+
+- lane budget logic
+- global limiter
+- coalescing
+- background admission
+- cache ownership logic
+
+Record:
+
+physical request count by endpoint
+physical request count by lane
+lane deferrals
+global background deferrals
+interactive request latency
+Home fallback result
+coalesced duplicate count
+
+Prove:
+
+1. global physical requests never exceed the configured ceiling.
+2. background requests never sleep waiting for a 60-second reset.
+3. Home does not wait behind a background sliding-window reset.
+4. at least the interactive reserve remains.
+5. no global timestamps are materially earlier than their physical calls.
+6. no semaphore is held during a sleeping limiter.
+7. identical requests coalesce.
+8. every logical scheduler still wakes at its unchanged cadence.
+
+────────────────────────────────────────────────────────────
+CONTRACT 7 — AUDIT MULTI-PROCESS / MULTI-INSTANCE TRADIER OWNERSHIP
+────────────────────────────────────────────────────────────
+
+This is mandatory.
+
+TRADIER_LIMITER is an in-memory process-local singleton.
+
+Determine whether more than one live backend process/environment is using the
+same Tradier account at the same time.
+
+At minimum distinguish:
+
+- published backend deployment
+- live backend Replit development workflow
+- any additional deployment worker/replica
+
+Do NOT print secrets.
+
+Use safe environment/deployment metadata or one-way key fingerprints if
+necessary.
+
+Also resolve which backend URL the user's frontend currently targets.
+
+Answer:
+
+1. How many active backend instances can make Tradier market-data calls?
+2. Do they use the same Tradier credential/account?
+3. Do their background schedulers all run independently?
+4. Is the provider's real rate limit per token/account rather than per process?
+5. Can two process-local 110-RPM limiters collectively exceed the account quota?
+
+If there is only one active provider-owning process:
+state and prove that.
+
+If multiple active processes share the provider quota:
+DO NOT invent a distributed limiter immediately.
+
+First report the exact topology and identify whether the project already has
+an environment-role / scheduler-owner mechanism.
+
+If an established deployment-role gate exists, propose the smallest correction
+that makes exactly one intended process own production background scans while
+preserving required user-facing behavior.
+
+Do not disable production data refresh.
+
+────────────────────────────────────────────────────────────
+CONTRACT 8 — STEADY-STATE ENDPOINT LATENCY
+────────────────────────────────────────────────────────────
+
+The previous report measured shortly after a restart:
+
+/api/rate-status             ~8.9 sec
+/api/watchlist/list          ~5.8 sec
+/api/home/dashboard          up to ~25 sec
+
+and attributed it to startup warmups.
+
+That is not sufficient.
+
+After the dev backend reaches steady state, wait at least 10 minutes without
+restarting it.
+
+Then measure three samples each:
+
+/health
+/api/rate-status
+/api/watchlist/list
+/api/home/dashboard
+/api/watchlist/{primary}
+/api/themes/relative-strength
+/api/options-flow/sectors
+
+Record:
+
+TTFB
+total
+status
+
+Also correlate with:
+
+CPU
+RSS
+thread count
+Tradier calls last 60s
+lane calls
+lane deferrals
+global headroom
+
+Do not call this issue fixed if metadata/list endpoints still take several seconds
+while the process is otherwise idle.
+
+────────────────────────────────────────────────────────────
+CURRENT MARKET SESSION CAUTION
+────────────────────────────────────────────────────────────
+
+If this task is run during an active US session, DO NOT launch a real synthetic
+provider load before completing the multi-instance ownership audit.
+
+The production deployment and dev workflow may share the same provider account.
+
+Use the fake-transport integration simulation for load testing.
+
+Real-provider validation must be passive/low-impact.
+
+────────────────────────────────────────────────────────────
+REPOSITORY HYGIENE — 272ca1fc
+────────────────────────────────────────────────────────────
+
+Git history contains:
+
+272ca1fc
+"Update backend data caches and add tradier background asset"
+
+It includes generated/runtime artifacts such as:
+
+attached_assets/Pasted-...txt
+backend/data/tradier_bg_admission_report.md
+runtime cache/LKG JSON files
+
+This was NOT part of the intended source correction.
+
+Inspect it against live AGENTS.md.
+
+Do not stage any further runtime/cache/prompt/report artifacts.
+
+Do not use:
+
+git add .
+git add -A
+
+Do not attempt a broad reset/revert.
+
+In the final report, provide the exact cleanup recommendation for 272ca1fc before
+deployment.
+
+If live AGENTS.md explicitly allows a surgical cleanup commit, make only the
+smallest safe cleanup required and preserve legitimate source/data state.
+
+Do not mix generated runtime cache churn into the performance source commit.
+
+────────────────────────────────────────────────────────────
+DO NOT TOUCH
+────────────────────────────────────────────────────────────
+
+No frontend changes.
+
+No Watchlist LKG changes.
+
+No GZip changes.
+
+No earnings changes.
+
+No FMP fundamentals changes.
+
+No canonical-history cadence changes.
+
+No RSS changes.
+
+No Neon-pool changes.
+
+No lane-budget rescaling yet.
+
+No provider-ceiling increase.
+
+────────────────────────────────────────────────────────────
+TESTS
+────────────────────────────────────────────────────────────
+
+Required focused tests include:
+
+- global timestamp immediately precedes physical background HTTP
+- no pre-reservation while waiting on _INTRADAY_SEM
+- semaphore contention cannot age a reserved global slot
+- lane-full background call immediately defers
+- global-headroom background call immediately defers
+- no sleeping background limiter path
+- no fail-open HTTP
+- exact concurrent duplicate timesales coalesces
+- history coalesces
+- provider ownership has no accidental second configuration
+- startup quote fallback contract
+- integrated multi-subsystem active-session simulation
+- required scheduler cadences unchanged
+- earnings files untouched
+
+Run all relevant existing Tradier/Home/Theme tests required by AGENTS.md.
+
+Run:
+
+git diff --check
+
+Report actual exit codes.
+
+────────────────────────────────────────────────────────────
+COMMIT
+────────────────────────────────────────────────────────────
+
+Stage exact source/test files only.
+
+Create one local correction commit:
+
+fix: align Tradier admission with physical requests
+
+Do not push.
+
+Do not publish.
+
+────────────────────────────────────────────────────────────
+REQUIRED REPORT
+────────────────────────────────────────────────────────────
+
+Write to the exact AGENTS.md report destination.
+
+Include:
+
+1. Starting HEAD/status.
+2. Physical-timestamp reservation defect.
+3. Corrected semaphore/admission ordering.
+4. Provider-boundary design.
+5. Coalescing ownership.
+6. TradierProvider instance ownership.
+7. Startup quote fallback behavior.
+8. Theme RS exact call/freshness math.
+9. 1/5/15-minute Theme RS coverage.
+10. Integrated active-session simulation results.
+11. Multi-process/provider-account topology.
+12. Frontend's actual backend target.
+13. 10-minute steady-state endpoint timings.
+14. Tradier physical calls/deferrals/headroom.
+15. Tests and exit codes.
+16. Exact files changed/staged.
+17. 272ca1fc cleanup recommendation/action.
+18. Confirmation all required provider/data cadences remain unchanged.
+19. git diff --check.
+20. Final commit SHA.
