@@ -84,7 +84,11 @@ _SECTION_TO_THEME_ID: dict[str, Optional[str]] = {
     "Wind & Renewable Generation":     "wind_renewable",
 
     # Legacy section name → best new node (backward compat)
-    "AI Networking":               "ai_networking",              # v1 catch-all → deprecated node (do not redirect to child)
+    # "AI Networking" is a deprecated v1 catch-all that split into multiple v2 nodes
+    # (dc_connectivity_silicon / networking_fabric_infra / optical_interconnects).
+    # Cannot route to a single child without per-ticker business classification.
+    # Map to None so tickers are left for the canonical resolver to handle.
+    "AI Networking":               None,
     "AI Accelerators & Compute Silicon": "ai_accelerators",
     "AI Cloud & Data Center Operators":  "ai_cloud_dc_operators",
     "AI Software & Data Platforms":      "ai_software_platforms",
@@ -137,14 +141,16 @@ _SECTION_TO_THEME_ID: dict[str, Optional[str]] = {
     "LNG & Natural Gas":               "lng_gas",
     "Midstream & Pipelines":           "midstream_pipelines",
 
-    # Legacy deprecated section names → nearest new bucket (migration compatibility)
-    # These STILL WORK because deprecated nodes remain in the registry.
-    "Lithium & Battery Tech":      "lithium_battery",    # deprecated → ambiguous split; keep mapping
+    # Legacy deprecated section names — migration compatibility.
+    # Ambiguous catch-alls that split into multiple v2 nodes cannot be reliably
+    # routed to a single child; map to None (skip) so per-ticker resolver handles
+    # them correctly instead of forcing the wrong bucket.
+    "Lithium & Battery Tech":      None,        # deprecated; split into lithium / battery_tech_storage
     "Nuclear / Grid":              "nuclear_energy",      # v1 catch-all → nuclear_energy parent
     "Photonics / Lasers":          "optical_components_lasers",  # v1 → optical child
     "Power / Cooling":             "power_cooling",       # same ID, new parent
-    "Semi Equipment & Materials":  "semicap_equipment",   # deprecated → ambiguous; keep for migration
-    "Semi Equipment":              "semicap_equipment",
+    "Semi Equipment & Materials":  None,         # deprecated; split into semicap_equip / semicap_materials_node / test_measurement
+    "Semi Equipment":              "semicap_equip",       # specific enough — redirect to active node
     "Semi Materials":              "semicap_materials_node",
     "Semicap Equipment":           "semicap_equip",
     "Substrates / Packaging":      "packaging_substrates",  # renamed node
@@ -236,7 +242,10 @@ _CATEGORY_TO_THEME_ID: dict[str, Optional[str]] = {
     # Legacy labels (v1 backward compat)
     "Fintech":                           "fintech",
     "Uranium & Nuclear Energy":          "nuclear_energy",
-    "AI Networking":                     "ai_networking",
+    # "AI Networking" has been removed: it was a deprecated v1 catch-all with
+    # no single unambiguous v2 replacement.  Category overrides carrying this
+    # label must be migrated by the taxonomy migration script; unresolved labels
+    # fall through to the canonical resolver.
 }
 
 # Watchlist section names that collapsed into an existing theme_id under a
@@ -773,20 +782,29 @@ def _build() -> tuple[dict, dict[str, list[str]]]:
     an explicit manual removal cannot be resurrected by the Watchlist sync.
     """
     try:
-        from services.theme_rs_universe import THEME_RS_UNIVERSE
+        from services.theme_rs_universe import THEME_RS_UNIVERSE, get_active_runtime_registry
     except ImportError as exc:
         log.error(f"[THEME_MERGE] Cannot import THEME_RS_UNIVERSE: {exc}")
         return {}, {}
+
+    # ── Phase 3 boundary: ENRICHED_THEME_RS_UNIVERSE must never contain
+    # deprecated nodes.  Filter them out at the source before deep-copy so that
+    # no downstream consumer (Theme RS compute, Options Flow, resolver) ever sees
+    # a deprecated theme row — even if a stale override or LKG snapshot still
+    # references a deprecated theme_id.
+    # The raw THEME_RS_UNIVERSE retains deprecated records for backward-compat
+    # alias resolution only.
+    active_base = get_active_runtime_registry(THEME_RS_UNIVERSE)
 
     watchlist_tickers: dict[str, list[str]] = _load_current_watchlist_theme_membership()
     manual_overrides  = _load_theme_ticker_overrides()
 
     if not manual_overrides and not watchlist_tickers:
         log.info("[THEME_MERGE] No override/watchlist data — stamping representative symbols only")
-        merged, net_new = _build_enriched_universe(THEME_RS_UNIVERSE, {}, {})
+        merged, net_new = _build_enriched_universe(active_base, {}, {})
         return merged, net_new
 
-    merged, net_new = _build_enriched_universe(THEME_RS_UNIVERSE, watchlist_tickers, manual_overrides)
+    merged, net_new = _build_enriched_universe(active_base, watchlist_tickers, manual_overrides)
     log.info(
         f"[THEME_MERGE] Enriched universe built: {len(merged)} themes, "
         f"{len(net_new)} enriched, "

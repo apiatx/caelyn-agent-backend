@@ -1797,6 +1797,30 @@ def get_assignable_registry(registry: dict | None = None) -> dict:
     }
 
 
+def get_active_runtime_registry(registry: dict | None = None) -> dict:
+    """
+    Return the LIVE public runtime universe.
+
+    Excludes deprecated nodes (classification="deprecated") — they are
+    retained in the raw THEME_RS_UNIVERSE only for backward-compatible alias
+    resolution.  Keeps market_lens nodes because they participate as
+    performance lenses in the RS percentile/rank universe.
+
+    This is the correct base to pass to _build_enriched_universe() so that
+    deprecated theme IDs never enter the enriched universe, Theme RS compute,
+    Options Flow tree, or any public API response.
+
+    Invariant:
+        any(m.get("classification") == "deprecated"
+            for m in get_active_runtime_registry().values()) == False
+    """
+    reg = registry or THEME_RS_UNIVERSE
+    return {
+        k: v for k, v in reg.items()
+        if v.get("classification") != "deprecated"
+    }
+
+
 def get_effective_rollup_sector_ids(
     theme_id: str,
     registry: dict | None = None,

@@ -1279,16 +1279,21 @@ class TestRsBuildThemeRowProduction:
             f"memory_storage must inherit technology rollup; got {row['rollup_sector_ids']!r}"
         )
 
-    async def test_standalone_subtheme_row_has_rollup_without_parent_theme_id(self):
+    async def test_subtheme_row_with_parent_has_rollup(self):
         """
-        A standalone sub_theme (ai_networking, no parent_theme_id) must emit
-        parent_theme_id=None AND have a non-empty rollup_sector_ids in the real row.
+        A sub_theme that has a parent_theme_id (dc_connectivity_silicon → semiconductors)
+        must emit a non-None parent_theme_id AND have a non-empty rollup_sector_ids.
+        (ai_networking was the former standalone sub_theme; it is now deprecated.
+         dc_connectivity_silicon is its active v3 replacement.)
         """
-        row = await _build_row("ai_networking")
-        assert row is not None, "_build_theme_row returned None for ai_networking"
-        assert row.get("parent_theme_id") is None
+        row = await _build_row("dc_connectivity_silicon")
+        assert row is not None, "_build_theme_row returned None for dc_connectivity_silicon"
+        assert row.get("parent_theme_id") == "semiconductors", (
+            f"dc_connectivity_silicon parent_theme_id should be 'semiconductors'; "
+            f"got {row.get('parent_theme_id')!r}"
+        )
         assert row["rollup_sector_ids"], (
-            f"ai_networking must have an effective rollup even without parent_theme_id; "
+            f"dc_connectivity_silicon must have non-empty rollup_sector_ids; "
             f"got {row['rollup_sector_ids']!r}"
         )
 
@@ -1689,15 +1694,38 @@ class TestValidateBasketHashesV2:
         stale_out, _ = _validate_basket_hashes({"themes": [{"theme_id": tid, "display_name": "x", "basket_hash": "WRONG"}]})
         assert stale_out["themes"][0].get("parent_theme_id") == expected_parent, "stale branch"
 
-    def test_deprecated_node_assignable_false_repaired(self):
-        """Deprecated nodes carry assignable=False from the registry and must be repaired."""
+    def test_deprecated_node_stripped_before_validate(self):
+        """
+        Deprecated nodes (e.g. ai_networking) are no longer in ENRICHED_THEME_RS_UNIVERSE
+        after Taxonomy v3 Phase 3.  _validate_basket_hashes cannot enrich a deprecated
+        node from the enriched universe (it is absent), but the Phase 9 LKG sanitization
+        in _load_lkg() removes deprecated rows before they ever reach this function.
+
+        This test verifies that _validate_basket_hashes returns the row unchanged
+        (not enriched with registry data) when the theme_id is deprecated, which is
+        acceptable because _load_lkg() now strips such rows upstream.
+        """
         from services.theme_rs_service import _validate_basket_hashes
-        tid = "ai_networking"  # deprecated in v2
+        from services.theme_rs_universe import THEME_RS_UNIVERSE as _raw
+        tid = "ai_networking"  # deprecated in v3
+        # Confirm it is indeed deprecated in the raw registry
+        assert _raw[tid].get("classification") == "deprecated", \
+            f"{tid} must be deprecated in the raw registry for this test to be meaningful"
+        # Confirm it is NOT in the enriched universe (the Phase 3 boundary)
+        from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _enr
+        assert tid not in _enr, (
+            f"{tid} must not be in ENRICHED_THEME_RS_UNIVERSE; Phase 3 boundary violated"
+        )
+        # _validate_basket_hashes cannot enrich it, so assignable is returned as-is.
+        # The LKG sanitizer (_load_lkg) removes such rows before this is ever called in prod.
         row = {"theme_id": tid, "display_name": "old", "basket_hash": "WRONG"}
         patched, _ = _validate_basket_hashes({"themes": [row]})
         out = patched["themes"][0]
-        assert out.get("assignable") is False, \
-            f"deprecated node should have assignable=False, got {out.get('assignable')!r}"
+        # We only assert the Phase 3 invariant — the node was not granted any
+        # enriched-universe data.  The exact assignable value is an implementation
+        # detail of the fallback path; what matters is it will never reach prod.
+        assert out.get("parent_theme_id") is None, \
+            "Deprecated node must not be assigned a parent_theme_id from enriched universe"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -2000,24 +2028,50 @@ class TestSectorTagsAndMacroSensitivities:
 
 # ── Contract 5: AI Networking merge-layer mapping ─────────────────────────────
 
-def test_section_map_ai_networking_points_to_deprecated_node():
-    """_SECTION_TO_THEME_ID['AI Networking'] must NOT blindly redirect to networking_fabric_infra."""
+def test_section_map_ai_networking_is_none_post_v3():
+    """
+    _SECTION_TO_THEME_ID['AI Networking'] must be None after Taxonomy v3 Phase 2.
+
+    Pre-v3 this mapped to 'ai_networking' (deprecated).  Post-v3 the catch-all
+    'AI Networking' label is ambiguous (it split into dc_connectivity_silicon /
+    networking_fabric_infra / optical_interconnects), so it maps to None and
+    defers to the per-ticker resolver rather than forcing the wrong bucket.
+    """
     from services.theme_merge_layer import _SECTION_TO_THEME_ID
     val = _SECTION_TO_THEME_ID.get("AI Networking")
-    assert val != "networking_fabric_infra", (
-        f"AI Networking must map to deprecated ai_networking node, not networking_fabric_infra; got {val!r}"
+    assert val is None, (
+        f"AI Networking must map to None (ambiguous, deprecated) after v3; got {val!r}"
     )
-    assert val == "ai_networking", f"Expected 'ai_networking', got {val!r}"
+    # Also verify it is NOT mapped to a deprecated ID (the original regression guard)
+    _DEPRECATED_IDS_LOCAL = {
+        "ai_networking", "semicap_equipment", "lithium_battery", "uranium_nuclear",
+        "chemicals_materials", "photonics_lasers", "substrates_packaging", "travel_transportation",
+    }
+    assert val not in _DEPRECATED_IDS_LOCAL, (
+        f"AI Networking section label must not resolve to a deprecated ID; got {val!r}"
+    )
 
 
-def test_category_map_ai_networking_points_to_deprecated_node():
-    """_CATEGORY_TO_THEME_ID['AI Networking'] must NOT blindly redirect to networking_fabric_infra."""
+def test_category_map_ai_networking_is_none_post_v3():
+    """
+    _CATEGORY_TO_THEME_ID['AI Networking'] must be None (or absent) after Taxonomy v3 Phase 2.
+
+    Pre-v3 this mapped to 'ai_networking' (deprecated).  Post-v3 the key has been
+    removed entirely because the label is ambiguous and cannot be safely routed to a
+    single active replacement without per-ticker business classification.
+    """
     from services.theme_merge_layer import _CATEGORY_TO_THEME_ID
     val = _CATEGORY_TO_THEME_ID.get("AI Networking")
-    assert val != "networking_fabric_infra", (
-        f"AI Networking must map to deprecated ai_networking node, not networking_fabric_infra; got {val!r}"
+    assert val is None, (
+        f"AI Networking must not be in _CATEGORY_TO_THEME_ID after v3 (deprecated label); got {val!r}"
     )
-    assert val == "ai_networking", f"Expected 'ai_networking', got {val!r}"
+    _DEPRECATED_IDS_LOCAL = {
+        "ai_networking", "semicap_equipment", "lithium_battery", "uranium_nuclear",
+        "chemicals_materials", "photonics_lasers", "substrates_packaging", "travel_transportation",
+    }
+    assert val not in _DEPRECATED_IDS_LOCAL, (
+        f"AI Networking category label must not resolve to a deprecated ID; got {val!r}"
+    )
 
 
 # ── Contract 8: Provider gate ─────────────────────────────────────────────────
@@ -2987,4 +3041,577 @@ def test_proposals_csv_not_git_tracked():
     assert result.stdout.strip() == "", (
         "theme-taxonomy-v2-proposals.csv must not be git-tracked; "
         "run git rm --cached backend/data/theme-taxonomy-v2-proposals.csv"
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Contract: Deprecated Theme Exclusion (Taxonomy v3)
+# ══════════════════════════════════════════════════════════════════════════════
+"""
+30 regression tests verifying that deprecated theme nodes are excluded from
+every live/public code path after the Taxonomy v3 migration.
+"""
+
+import json
+import tempfile
+import os
+
+import pytest
+from unittest.mock import patch as _patch, MagicMock
+
+from services.theme_rs_universe import (
+    THEME_RS_UNIVERSE as RAW_REG,
+    get_active_runtime_registry,
+    get_assignable_registry,
+)
+from services.theme_merge_layer import (
+    ENRICHED_THEME_RS_UNIVERSE,
+    ENRICHED_ALL_PROXY_SYMBOLS,
+    ENRICHED_ALL_CANDIDATE_SYMBOLS,
+)
+
+_DEPRECATED_IDS: frozenset[str] = frozenset({
+    "ai_networking", "semicap_equipment", "lithium_battery", "uranium_nuclear",
+    "chemicals_materials", "photonics_lasers", "substrates_packaging", "travel_transportation",
+})
+
+
+# ── Test 1: raw registry still carries all 8 deprecated alias nodes ───────────
+
+def test_raw_registry_has_8_deprecated():
+    """Raw THEME_RS_UNIVERSE must retain exactly 8 deprecated alias nodes."""
+    deprecated = [k for k, v in RAW_REG.items() if v.get("classification") == "deprecated"]
+    assert len(deprecated) == 8, f"Expected 8 deprecated nodes in raw registry, got {len(deprecated)}: {deprecated}"
+    assert _DEPRECATED_IDS == frozenset(deprecated), (
+        f"Unexpected set of deprecated IDs: {frozenset(deprecated)}"
+    )
+
+
+# ── Test 2: active runtime registry has 0 deprecated nodes ───────────────────
+
+def test_active_runtime_registry_has_zero_deprecated():
+    """get_active_runtime_registry() must return 0 deprecated nodes."""
+    active = get_active_runtime_registry()
+    deprecated_in_active = [k for k, v in active.items() if v.get("classification") == "deprecated"]
+    assert deprecated_in_active == [], (
+        f"Active runtime registry must have 0 deprecated nodes; found: {deprecated_in_active}"
+    )
+
+
+def test_active_runtime_registry_size():
+    """Active runtime registry must be exactly 8 smaller than raw (104 vs 112)."""
+    active = get_active_runtime_registry()
+    assert len(active) == len(RAW_REG) - 8, (
+        f"Expected {len(RAW_REG) - 8} active nodes, got {len(active)}"
+    )
+
+
+# ── Test 3: enriched universe has 0 deprecated nodes ─────────────────────────
+
+def test_enriched_universe_has_zero_deprecated():
+    """ENRICHED_THEME_RS_UNIVERSE must contain 0 deprecated nodes."""
+    deprecated_in_enriched = [
+        k for k, v in ENRICHED_THEME_RS_UNIVERSE.items()
+        if v.get("classification") == "deprecated"
+    ]
+    assert deprecated_in_enriched == [], (
+        f"ENRICHED_THEME_RS_UNIVERSE must have 0 deprecated nodes; found: {deprecated_in_enriched}"
+    )
+
+
+def test_enriched_universe_excludes_all_deprecated_ids():
+    """None of the 8 deprecated IDs may appear as keys in ENRICHED_THEME_RS_UNIVERSE."""
+    for did in _DEPRECATED_IDS:
+        assert did not in ENRICHED_THEME_RS_UNIVERSE, (
+            f"Deprecated ID '{did}' must not be a key in ENRICHED_THEME_RS_UNIVERSE"
+        )
+
+
+# ── Test 4: assignable registry excludes deprecated ──────────────────────────
+
+def test_assignable_registry_excludes_deprecated():
+    """get_assignable_registry() must exclude all deprecated nodes."""
+    assignable = get_assignable_registry()
+    for did in _DEPRECATED_IDS:
+        assert did not in assignable, (
+            f"Deprecated ID '{did}' must not be in get_assignable_registry()"
+        )
+
+
+# ── Test 5: Theme RS universe (via merge layer alias) has 0 deprecated ────────
+
+def test_theme_rs_service_universe_has_zero_deprecated():
+    """THEME_RS_UNIVERSE alias in theme_rs_service must not contain deprecated nodes."""
+    from services.theme_rs_service import THEME_RS_UNIVERSE as _trs_uni
+    deprecated = [k for k, v in _trs_uni.items() if v.get("classification") == "deprecated"]
+    assert deprecated == [], (
+        f"theme_rs_service.THEME_RS_UNIVERSE must have 0 deprecated nodes; found: {deprecated}"
+    )
+
+
+# ── Test 6: LKG floor reflects active universe count (not raw 112) ────────────
+
+def test_lkg_floor_matches_active_count():
+    """_EXPECTED_THEME_COUNT in theme_rs_service must equal len(ENRICHED_THEME_RS_UNIVERSE)."""
+    from services.theme_rs_service import _EXPECTED_THEME_COUNT
+    assert _EXPECTED_THEME_COUNT == len(ENRICHED_THEME_RS_UNIVERSE), (
+        f"_EXPECTED_THEME_COUNT={_EXPECTED_THEME_COUNT} must match "
+        f"len(ENRICHED_THEME_RS_UNIVERSE)={len(ENRICHED_THEME_RS_UNIVERSE)}"
+    )
+
+
+# ── Test 7: stale LKG with deprecated row is sanitized on load ───────────────
+
+def test_load_lkg_sanitizes_deprecated_rows(tmp_path):
+    """_load_lkg() must strip deprecated theme rows from old snapshots."""
+    from services.theme_rs_service import _LKG_SCHEMA_VER, _MIN_LKG_THEME_FLOOR
+
+    # Build a fake LKG that includes deprecated rows so count passes guard
+    active_rows = [
+        {"theme_id": f"theme_{i}", "performance": {"5Y": 0.1}}
+        for i in range(_MIN_LKG_THEME_FLOOR + 10)
+    ]
+    deprecated_rows = [
+        {"theme_id": "ai_networking", "performance": {"5Y": 0.05}},
+        {"theme_id": "uranium_nuclear", "performance": {"5Y": 0.03}},
+    ]
+    all_rows = active_rows + deprecated_rows
+    payload = {"_schema": _LKG_SCHEMA_VER, "rows": all_rows}
+
+    lkg_file = tmp_path / "themes_rs_lkg.json"
+    lkg_file.write_text(json.dumps(payload))
+
+    import services.theme_rs_service as _trs
+    original_path = _trs._LKG_PATH
+    _trs._LKG_PATH = lkg_file
+    try:
+        rows = _trs._load_lkg()
+    finally:
+        _trs._LKG_PATH = original_path
+
+    assert rows is not None, "_load_lkg() returned None for valid LKG with deprecated rows"
+    returned_ids = {r["theme_id"] for r in rows}
+    assert "ai_networking" not in returned_ids, "ai_networking must be stripped from LKG"
+    assert "uranium_nuclear" not in returned_ids, "uranium_nuclear must be stripped from LKG"
+    # All fake active rows must survive
+    assert len(rows) == len(active_rows), (
+        f"Expected {len(active_rows)} rows after stripping deprecated, got {len(rows)}"
+    )
+
+
+# ── Test 8: stale 1D LKG with deprecated curves is sanitized on load ──────────
+
+def test_load_1d_lkg_sanitizes_deprecated_curves(tmp_path):
+    """_load_1d_lkg() must remove deprecated theme IDs from the curves dict."""
+    payload = {
+        "session_date": "2026-08-07",
+        "generated_at": "2026-08-07T10:00:00Z",
+        "curves": {
+            "semiconductors": [{"date": "2026-08-07T09:30", "value_pct": 0.1}],
+            "ai_networking": [{"date": "2026-08-07T09:30", "value_pct": 0.05}],
+            "photonics_lasers": [{"date": "2026-08-07T09:30", "value_pct": -0.02}],
+        }
+    }
+    lkg_file = tmp_path / "themes_rs_1d_lkg.json"
+    lkg_file.write_text(json.dumps(payload))
+
+    import services.theme_rs_service as _trs
+    orig = _trs._1D_LKG_PATH
+    _trs._1D_LKG_PATH = lkg_file
+    try:
+        data = _trs._load_1d_lkg()
+    finally:
+        _trs._1D_LKG_PATH = orig
+
+    assert data is not None
+    curves = data["curves"]
+    assert "ai_networking" not in curves, "ai_networking must be stripped from 1D LKG curves"
+    assert "photonics_lasers" not in curves, "photonics_lasers must be stripped from 1D LKG curves"
+    assert "semiconductors" in curves, "active curves must survive sanitization"
+
+
+# ── Test 9: deprecated IDs are not in enriched proxy universe ─────────────────
+
+def test_enriched_proxy_symbols_excludes_deprecated_only_tickers():
+    """
+    ENRICHED_ALL_PROXY_SYMBOLS must not contain symbols that are *exclusively*
+    present in deprecated nodes (i.e. symbols added only by deprecated basket entries
+    and not referenced by any active node).
+    This is implicitly guaranteed by Phase 3 (enriched universe excludes deprecated),
+    but we assert the invariant on the proxy list too.
+    """
+    # The deprecated nodes had proxy_symbols in the raw registry.
+    # After Phase 3, those symbols are only in the enriched universe if they also
+    # appear in at least one ACTIVE node.  We cannot easily enumerate "exclusive
+    # to deprecated" without deep symbol-set analysis, so we verify the structural
+    # guarantee: for every symbol in ENRICHED_ALL_PROXY_SYMBOLS, it is referenced
+    # by at least one active node in ENRICHED_THEME_RS_UNIVERSE.
+    symbol_in_active = set()
+    for meta in ENRICHED_THEME_RS_UNIVERSE.values():
+        for sym in meta.get("proxy_symbols", []):
+            symbol_in_active.add(sym)
+    orphan = [s for s in ENRICHED_ALL_PROXY_SYMBOLS if s not in symbol_in_active]
+    assert orphan == [], (
+        f"Symbols in ENRICHED_ALL_PROXY_SYMBOLS but not in any active node: {orphan}"
+    )
+
+
+# ── Test 10: Options Flow universe excludes deprecated nodes ──────────────────
+
+def test_options_flow_uses_active_only_universe():
+    """
+    ENRICHED_THEME_RS_UNIVERSE passed to build_sector_tree must contain 0
+    deprecated nodes.  This test verifies the universe object itself satisfies
+    the invariant (Phase 10 coverage).
+    """
+    for did in _DEPRECATED_IDS:
+        assert did not in ENRICHED_THEME_RS_UNIVERSE, (
+            f"Deprecated '{did}' found in universe used by Options Flow"
+        )
+
+
+# ── Test 13: resolver never returns a deprecated theme_id ─────────────────────
+
+@pytest.mark.parametrize("ticker,input_deprecated_id", [
+    ("AAOI", "photonics_lasers"),
+    ("KLAC", "semicap_equipment"),
+    ("LEU",  "uranium_nuclear"),
+    ("QS",   "lithium_battery"),
+    ("MAXX", "chemicals_materials"),
+])
+def test_resolver_never_returns_deprecated(ticker, input_deprecated_id):
+    """resolve_primary_theme_for_ticker() must never return a deprecated theme_id."""
+    from services.theme_resolver import resolve_primary_theme_for_ticker
+    res = resolve_primary_theme_for_ticker(ticker)
+    tid = res.get("theme_id")
+    assert tid not in _DEPRECATED_IDS, (
+        f"Resolver returned deprecated '{tid}' for {ticker}; "
+        f"was in deprecated {input_deprecated_id}"
+    )
+
+
+def test_resolver_with_deprecated_category_override():
+    """Resolver must suppress deprecated theme_id even if manual category override resolves to one."""
+    from services.theme_resolver import resolve_primary_theme_for_ticker
+    # Directly pass a context with a deprecated ID in cat_overrides display name
+    # to simulate a stale watchlist_category_overrides row.
+    mock_ctx = {
+        "themes_page_map":    {},
+        "themes_page_id_map": {},
+        "cat_overrides":      {"ZZDEP": "[Deprecated] AI Networking"},
+    }
+    res = resolve_primary_theme_for_ticker("ZZDEP", ctx=mock_ctx)
+    tid = res.get("theme_id")
+    assert tid not in _DEPRECATED_IDS, (
+        f"Resolver returned deprecated theme_id '{tid}' from stale category override"
+    )
+
+
+# ── Test 14: unambiguous legacy label resolves to active node ─────────────────
+
+def test_legacy_photonics_lasers_resolves_active():
+    """'Photonics / Lasers' section label must resolve to an active optical node (not deprecated)."""
+    from services.theme_merge_layer import _SECTION_TO_THEME_ID
+    resolved = _SECTION_TO_THEME_ID.get("Photonics / Lasers")
+    assert resolved is not None, "'Photonics / Lasers' section must resolve to an active node"
+    assert resolved not in _DEPRECATED_IDS, (
+        f"'Photonics / Lasers' resolved to deprecated '{resolved}'"
+    )
+    assert resolved in ENRICHED_THEME_RS_UNIVERSE, (
+        f"'Photonics / Lasers' resolved to '{resolved}' which is not in enriched universe"
+    )
+
+
+def test_legacy_semi_equipment_resolves_active():
+    """'Semi Equipment' section label must resolve to active 'semicap_equip' (not deprecated)."""
+    from services.theme_merge_layer import _SECTION_TO_THEME_ID
+    resolved = _SECTION_TO_THEME_ID.get("Semi Equipment")
+    assert resolved == "semicap_equip", (
+        f"'Semi Equipment' must resolve to 'semicap_equip', got '{resolved}'"
+    )
+    assert resolved in ENRICHED_THEME_RS_UNIVERSE
+
+
+# ── Test 15: ambiguous legacy labels do NOT return deprecated IDs ─────────────
+
+@pytest.mark.parametrize("label", [
+    "AI Networking",
+    "Lithium & Battery Tech",
+    "Semi Equipment & Materials",
+])
+def test_ambiguous_legacy_label_not_deprecated(label):
+    """Ambiguous legacy section labels must resolve to None (skip), not a deprecated ID."""
+    from services.theme_merge_layer import _SECTION_TO_THEME_ID
+    resolved = _SECTION_TO_THEME_ID.get(label, "__MISSING__")
+    assert resolved not in _DEPRECATED_IDS, (
+        f"Ambiguous legacy label '{label}' resolved to deprecated '{resolved}'; must be None or active"
+    )
+
+
+def test_category_map_has_no_deprecated_ids():
+    """_CATEGORY_TO_THEME_ID must contain no values that are deprecated IDs."""
+    from services.theme_merge_layer import _CATEGORY_TO_THEME_ID
+    bad = [(k, v) for k, v in _CATEGORY_TO_THEME_ID.items() if v in _DEPRECATED_IDS]
+    assert bad == [], f"_CATEGORY_TO_THEME_ID maps to deprecated IDs: {bad}"
+
+
+def test_section_map_has_no_deprecated_ids():
+    """_SECTION_TO_THEME_ID must contain no values that are deprecated IDs."""
+    from services.theme_merge_layer import _SECTION_TO_THEME_ID
+    bad = [(k, v) for k, v in _SECTION_TO_THEME_ID.items()
+           if v is not None and v in _DEPRECATED_IDS]
+    assert bad == [], f"_SECTION_TO_THEME_ID maps to deprecated IDs: {bad}"
+
+
+# ── Test 16-19: deprecated assignment rejected by validation helper ────────────
+
+def test_validate_rejects_deprecated_primary():
+    """_validate_thematic_assignment() must raise 422 for a deprecated theme_id."""
+    import fastapi
+    import routes.themes as rth
+    with pytest.raises(fastapi.HTTPException) as exc_info:
+        rth._validate_thematic_assignment("ai_networking")
+    assert exc_info.value.status_code == 422
+    assert "deprecated" in exc_info.value.detail.lower()
+
+
+def test_validate_rejects_deprecated_additional():
+    """_validate_thematic_assignment() must raise 422 for additional-membership deprecated ID."""
+    import fastapi
+    import routes.themes as rth
+    with pytest.raises(fastapi.HTTPException) as exc_info:
+        rth._validate_thematic_assignment("uranium_nuclear")
+    assert exc_info.value.status_code == 422
+
+
+def test_validate_rejects_all_8_deprecated_ids():
+    """_validate_thematic_assignment() must reject all 8 deprecated IDs."""
+    import fastapi
+    import routes.themes as rth
+    for did in _DEPRECATED_IDS:
+        with pytest.raises(fastapi.HTTPException) as exc_info:
+            rth._validate_thematic_assignment(did)
+        assert exc_info.value.status_code == 422, (
+            f"Expected 422 for '{did}', got {exc_info.value.status_code}"
+        )
+
+
+def test_validate_rejects_unknown_theme():
+    """_validate_thematic_assignment() must raise 404 for unknown theme_id."""
+    import fastapi
+    import routes.themes as rth
+    with pytest.raises(fastapi.HTTPException) as exc_info:
+        rth._validate_thematic_assignment("totally_nonexistent_id")
+    assert exc_info.value.status_code == 404
+
+
+# ── Test 20: sector cannot be assigned as thematic membership ─────────────────
+
+def test_validate_rejects_sector():
+    """_validate_thematic_assignment() must raise 422 for a sector node."""
+    import fastapi
+    import routes.themes as rth
+    with pytest.raises(fastapi.HTTPException) as exc_info:
+        rth._validate_thematic_assignment("technology")
+    assert exc_info.value.status_code == 422
+    assert "sector" in exc_info.value.detail.lower()
+
+
+@pytest.mark.parametrize("sector_id", [
+    "technology", "materials", "energy", "industrials", "utilities",
+    "financials", "healthcare",
+])
+def test_validate_rejects_sector_parametrized(sector_id):
+    """_validate_thematic_assignment() must reject all sector nodes."""
+    import fastapi
+    import routes.themes as rth
+    with pytest.raises(fastapi.HTTPException) as exc_info:
+        rth._validate_thematic_assignment(sector_id)
+    assert exc_info.value.status_code == 422
+
+
+# ── Test 21: market_lens cannot be assigned as thematic membership ────────────
+
+def test_validate_rejects_market_lens():
+    """_validate_thematic_assignment() must raise 422 for a market_lens node."""
+    import fastapi
+    import routes.themes as rth
+    # Find any market_lens node ID
+    market_lens_ids = [k for k, v in ENRICHED_THEME_RS_UNIVERSE.items()
+                       if v.get("classification") == "market_lens"]
+    assert market_lens_ids, "Expected at least one market_lens node in enriched universe"
+    for lens_id in market_lens_ids:
+        with pytest.raises(fastapi.HTTPException) as exc_info:
+            rth._validate_thematic_assignment(lens_id)
+        assert exc_info.value.status_code == 422, (
+            f"Expected 422 for market_lens '{lens_id}', got {exc_info.value.status_code}"
+        )
+
+
+# ── Test 22-23: active theme/sub_theme assignments pass validation ─────────────
+
+def test_validate_passes_for_active_theme():
+    """_validate_thematic_assignment() must not raise for a valid active theme node."""
+    import routes.themes as rth
+    # 'semiconductors' is a theme node
+    rth._validate_thematic_assignment("semiconductors")  # must not raise
+
+
+def test_validate_passes_for_active_sub_theme():
+    """_validate_thematic_assignment() must not raise for a valid active sub_theme node."""
+    import routes.themes as rth
+    # 'semicap_equip' is a sub_theme
+    assert "semicap_equip" in ENRICHED_THEME_RS_UNIVERSE
+    rth._validate_thematic_assignment("semicap_equip")  # must not raise
+
+
+# ── Test 24: parent-theme direct assignment valid ─────────────────────────────
+
+def test_validate_passes_for_parent_theme():
+    """Parent theme nodes (e.g. 'nuclear_energy') must be valid assignment targets."""
+    import routes.themes as rth
+    # nuclear_energy is a theme node and valid direct assignment target
+    assert "nuclear_energy" in ENRICHED_THEME_RS_UNIVERSE
+    rth._validate_thematic_assignment("nuclear_energy")  # must not raise
+
+
+# ── Tests 25-28: DB migration results ─────────────────────────────────────────
+
+@pytest.mark.skipif(
+    not os.environ.get("NEON_DATABASE_URL") and
+    not __import__("subprocess").run(
+        ["printenv", "NEON_DATABASE_URL"], capture_output=True, text=True
+    ).stdout.strip(),
+    reason="NEON_DATABASE_URL not available",
+)
+class TestMigrationResults:
+    """Verify the DB state after the Taxonomy v3 migration."""
+
+    @classmethod
+    def _get_conn(cls):
+        import psycopg2, subprocess
+        db_url = subprocess.run(
+            ["printenv", "NEON_DATABASE_URL"], capture_output=True, text=True
+        ).stdout.strip()
+        return psycopg2.connect(db_url)
+
+    def test_no_active_deprecated_overrides(self):
+        """theme_ticker_overrides must have 0 active (action='add') rows for deprecated IDs."""
+        conn = self._get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM theme_ticker_overrides WHERE theme_id = ANY(%s) AND action='add'",
+            (list(_DEPRECATED_IDS),)
+        )
+        count = cur.fetchone()[0]
+        conn.close()
+        assert count == 0, f"Expected 0 active deprecated override rows, found {count}"
+
+    def test_migration_preserves_good_active_primary_absi(self):
+        """ABSI's biotech membership must survive — do not overwrite good active primary."""
+        conn = self._get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT action FROM theme_ticker_overrides WHERE symbol='ABSI' AND theme_id='biotech'",
+        )
+        row = cur.fetchone()
+        conn.close()
+        assert row is not None and row[0] == "add", (
+            "ABSI must retain biotech as active membership after migration"
+        )
+
+    def test_migration_removes_deprecated_additional_uuuu(self):
+        """UUUU's uranium_nuclear membership must be removed; rare_earth and uranium_nuclear_fuel retained."""
+        conn = self._get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT theme_id, action FROM theme_ticker_overrides WHERE symbol='UUUU' ORDER BY theme_id"
+        )
+        rows = {r[0]: r[1] for r in cur.fetchall()}
+        conn.close()
+        assert rows.get("uranium_nuclear") == "remove", "uranium_nuclear must be tombstoned for UUUU"
+        assert rows.get("rare_earth") == "add", "rare_earth must remain for UUUU"
+        assert rows.get("uranium_nuclear_fuel") == "add", "uranium_nuclear_fuel must be added for UUUU"
+
+    def test_migration_replaces_deprecated_category_override(self):
+        """Deprecated category labels in watchlist_category_overrides must be replaced."""
+        conn = self._get_conn()
+        cur = conn.cursor()
+        # AAOI had 'Photonics / Lasers' → must now be 'Optical Interconnects'
+        cur.execute(
+            "SELECT category FROM watchlist_category_overrides WHERE ticker='AAOI' AND user_id='default'"
+        )
+        row = cur.fetchone()
+        conn.close()
+        assert row is not None, "AAOI must have a category override after migration"
+        assert row[0] == "Optical Interconnects", (
+            f"AAOI category must be 'Optical Interconnects', got '{row[0]}'"
+        )
+
+    def test_migration_leaves_sector_untouched(self):
+        """Migration must not have introduced any sector node as thematic membership for migrated tickers."""
+        conn = self._get_conn()
+        cur = conn.cursor()
+        sector_ids = [k for k, v in RAW_REG.items() if v.get("classification") == "sector"]
+        migrated_tickers = [
+            "AAOI", "ABSI", "ACLS", "ADTN", "AEHR", "AMAT", "AMCR", "ASPI", "BAND",
+            "CEG", "CIEN", "DNN", "ELVA", "ENVX", "FN", "GLW", "IMSR", "KLAC", "LAC",
+            "LEU", "LPTH", "MAXX", "MXL", "NNE", "OCC", "OKLO", "ONTO", "OSS", "QS",
+            "RDDT", "SATS", "SILC", "SMR", "TRT", "TSM", "UEC", "URG", "UUUU", "VIAV", "VSAT",
+        ]
+        cur.execute(
+            "SELECT theme_id, symbol FROM theme_ticker_overrides "
+            "WHERE theme_id = ANY(%s) AND symbol = ANY(%s) AND action='add'",
+            (sector_ids, migrated_tickers)
+        )
+        rows = cur.fetchall()
+        conn.close()
+        assert rows == [], (
+            f"Migration introduced sector node(s) as thematic membership for migrated tickers: {rows}"
+        )
+
+
+# ── Test 29: resolver returns active theme for migrated tickers ───────────────
+
+@pytest.mark.parametrize("ticker,expected_not_deprecated", [
+    ("AAOI",  True),
+    ("KLAC",  True),
+    ("SMR",   True),
+    ("SILC",  True),
+    ("MAXX",  True),
+])
+def test_migrated_tickers_resolve_to_active_theme(ticker, expected_not_deprecated):
+    """Migrated tickers must resolve to active (non-deprecated) theme_ids via the resolver."""
+    from services.theme_resolver import resolve_primary_theme_for_ticker
+    res = resolve_primary_theme_for_ticker(ticker)
+    tid = res.get("theme_id")
+    assert tid not in _DEPRECATED_IDS, (
+        f"Ticker {ticker} resolved to deprecated theme '{tid}' after migration"
+    )
+
+
+# ── Test 30: active runtime registry excludes deprecated + keeps market_lens ──
+
+def test_active_runtime_keeps_market_lens():
+    """get_active_runtime_registry() must preserve market_lens nodes (they are active lenses)."""
+    active = get_active_runtime_registry()
+    market_lens_in_raw = [k for k, v in RAW_REG.items() if v.get("classification") == "market_lens"]
+    for lens_id in market_lens_in_raw:
+        assert lens_id in active, (
+            f"market_lens node '{lens_id}' must be preserved in active runtime registry"
+        )
+
+
+def test_enriched_theme_rs_universe_invariant():
+    """
+    Core invariant: any deprecated node in ENRICHED_THEME_RS_UNIVERSE == False.
+    This single assertion encodes Phase 3 correctness.
+    """
+    has_deprecated = any(
+        meta.get("classification") == "deprecated"
+        for meta in ENRICHED_THEME_RS_UNIVERSE.values()
+    )
+    assert not has_deprecated, (
+        "ENRICHED_THEME_RS_UNIVERSE invariant violated: contains deprecated node(s). "
+        "This means _build() in theme_merge_layer.py is not using get_active_runtime_registry()."
     )

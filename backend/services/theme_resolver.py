@@ -153,6 +153,19 @@ def resolve_primary_theme_for_ticker(
             except Exception:
                 pass
 
+    # Phase 5 guard: never return a deprecated theme_id.
+    # The enriched universe no longer contains deprecated nodes (Phase 3), but
+    # category_overrides or the mapper may still carry stale references.
+    if canon_theme_id:
+        try:
+            from services.theme_rs_universe import THEME_RS_UNIVERSE as _raw_reg
+            if _raw_reg.get(canon_theme_id, {}).get("classification") == "deprecated":
+                canon_theme    = None
+                canon_theme_id = None
+                theme_src      = "deprecated_suppressed"
+        except Exception:
+            pass
+
     return {
         "theme_name": canon_theme,
         "theme_id": canon_theme_id,

@@ -57,6 +57,88 @@ def _check_admin(request: Request, api_key: Optional[str]) -> Optional[JSONRespo
     return require_admin_user_or_api_key(request, api_key)
 
 
+def _validate_thematic_assignment(theme_id: str) -> None:
+    """
+    Raise HTTPException when theme_id may not be used as a NEW thematic membership.
+
+    Rules (Phase 6 — future-write rejection gate):
+      • Must exist in the active runtime universe (ENRICHED_THEME_RS_UNIVERSE).
+        After Phase 3 the enriched universe never contains deprecated nodes, so a
+        deprecated ID naturally fails this check — but a richer error is returned
+        by also consulting the raw registry.
+      • classification must be "theme" or "sub_theme".
+        sector nodes set company sector identity separately (not via membership).
+        market_lens nodes are performance lenses, not membership targets.
+      • assignable must be True (registry default).
+
+    Only call this for action='add' / new writes, not for action='remove' cleanup.
+    """
+    # Lazy import to avoid circular dependency at module load.
+    from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _uni
+
+    if theme_id not in _uni:
+        # Check the raw registry for a more descriptive error message.
+        try:
+            from services.theme_rs_universe import THEME_RS_UNIVERSE as _raw
+            raw_meta = _raw.get(theme_id, {})
+            cls = raw_meta.get("classification", "")
+            if cls == "deprecated":
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"theme_id '{theme_id}' is a retired deprecated node and cannot be "
+                        f"assigned. Taxonomy v2 migration_targets: "
+                        f"{raw_meta.get('migration_targets', [])}. "
+                        f"Use an active replacement ID instead."
+                    ),
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=404,
+            detail=f"theme_id '{theme_id}' not found in the active runtime universe.",
+        )
+
+    meta = _uni[theme_id]
+    cls  = meta.get("classification", "")
+
+    if cls == "sector":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"theme_id '{theme_id}' is a sector node (classification='sector'). "
+                f"Sector identity is set via company sector data, not thematic membership. "
+                f"Use a 'theme' or 'sub_theme' node instead."
+            ),
+        )
+
+    if cls == "market_lens":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"theme_id '{theme_id}' is a market_lens node and cannot be assigned as "
+                f"a thematic membership. Use a 'theme' or 'sub_theme' node instead."
+            ),
+        )
+
+    if not meta.get("assignable", True):
+        raise HTTPException(
+            status_code=422,
+            detail=f"theme_id '{theme_id}' has assignable=False in the registry and cannot be assigned.",
+        )
+
+    if cls not in ("theme", "sub_theme"):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"theme_id '{theme_id}' has classification='{cls}'. "
+                f"Only 'theme' and 'sub_theme' nodes may be assigned as thematic memberships."
+            ),
+        )
+
+
 def _invalidate_caches() -> None:
     """Rebuild in-memory enriched universe + clear RS caches after an override write."""
     try:
@@ -305,6 +387,10 @@ def _perform_membership_write(
     Raises HTTPException on validation/storage failure. Returns the same
     response shape previously returned inline by admin_upsert_membership.
     """
+    # Phase 6: validate that new assignments target an assignable thematic node.
+    if action == "add":
+        _validate_thematic_assignment(theme_id)
+
     from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _uni
     if theme_id not in _uni:
         raise HTTPException(
@@ -446,6 +532,10 @@ def _perform_theme_membership_only_write(
     Watchlist Theme column, Watchlist performance grouping, or Trade Alignment
     theme selection (all of which read primary identity stores only).
     """
+    # Phase 6: validate that new assignments target an assignable thematic node.
+    if action == "add":
+        _validate_thematic_assignment(theme_id)
+
     from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _uni
     if theme_id not in _uni:
         raise HTTPException(
@@ -849,6 +939,11 @@ async def admin_bulk_memberships(
     unknown_themes = [e.theme_id for e in body.edits if e.theme_id not in _uni]
     if unknown_themes:
         raise HTTPException(status_code=404, detail=f"Unknown theme_id(s): {unknown_themes}")
+
+    # Phase 6: validate that every ADD edit targets an assignable thematic node.
+    for _edit in body.edits:
+        if _edit.action == "add":
+            _validate_thematic_assignment(_edit.theme_id)
 
     try:
         from data.pg_storage import bulk_upsert_theme_ticker_overrides

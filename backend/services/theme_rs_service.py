@@ -192,6 +192,23 @@ def _lkg_has_5y(rows: list[dict]) -> bool:
     return any(r.get("performance", {}).get("5Y") is not None for r in rows)
 
 
+# ── Deprecated theme IDs — used to sanitize old LKG/1D-LKG snapshots ──────────
+# These 8 nodes were retired in Taxonomy v3 (deprecated=True, assignable=False).
+# The enriched universe no longer contains them (Phase 3 boundary), but a LKG
+# file written before this fix may carry stale deprecated rows that would
+# distort the percentile/rank universe or resurface deprecated display names.
+_DEPRECATED_THEME_IDS: frozenset[str] = frozenset({
+    "ai_networking",
+    "semicap_equipment",
+    "lithium_battery",
+    "uranium_nuclear",
+    "chemicals_materials",
+    "photonics_lasers",
+    "substrates_packaging",
+    "travel_transportation",
+})
+
+
 def _load_lkg() -> Optional[list[dict]]:
     try:
         if not _LKG_PATH.exists():
@@ -219,6 +236,18 @@ def _load_lkg() -> Optional[list[dict]]:
             except Exception as qe:
                 print(f"[THEME_RS] LKG quarantine error: {qe}")
             return None
+        # Phase 9: strip any deprecated theme rows from old LKG snapshots.
+        # The enriched universe no longer contains deprecated nodes (Phase 3),
+        # so deprecated rows in the LKG would distort the RS percentile/rank
+        # universe and expose deprecated display_names while waiting for a fresh
+        # compute to complete.
+        n_before = len(rows)
+        rows = [r for r in rows if r.get("theme_id") not in _DEPRECATED_THEME_IDS]
+        if len(rows) < n_before:
+            print(
+                f"[THEME_RS] LKG sanitized: removed {n_before - len(rows)} deprecated "
+                f"theme row(s) from old snapshot ({n_before} → {len(rows)} themes)"
+            )
         return rows
     except Exception as e:
         print(f"[THEME_RS] LKG load error: {e}")
@@ -364,6 +393,16 @@ def _load_1d_lkg() -> Optional[dict]:
             data = json.load(f)
         if not isinstance(data.get("curves"), dict):
             return None
+        # Phase 9: strip deprecated theme IDs from old 1D LKG curve snapshots.
+        curves = data["curves"]
+        stale_keys = [k for k in curves if k in _DEPRECATED_THEME_IDS]
+        if stale_keys:
+            for k in stale_keys:
+                del curves[k]
+            print(
+                f"[THEME_RS] 1D LKG sanitized: removed {len(stale_keys)} deprecated "
+                f"curve(s): {stale_keys}"
+            )
         return data
     except Exception as exc:
         print(f"[THEME_RS] 1D intraday LKG load error: {exc}")
