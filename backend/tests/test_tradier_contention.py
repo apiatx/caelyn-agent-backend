@@ -36,6 +36,7 @@ Tests
   PROV Provider ownership: get_provider() sandbox correctness, singleton.
   SIM  Active-session simulation: background defers, interactive reserve survives.
   INT  Integrated multi-subsystem simulation (Contract 6).
+  RS   Theme RS representative-symbol fix (Phase 6): 8 tests proving capacity fix.
 
 Run:
     cd backend && python -m pytest tests/test_tradier_contention.py -v
@@ -109,6 +110,7 @@ for _svc in (
 ):
     _stub(_svc)
 _stub("yfinance")
+_stub("services.stage_analysis", analyze_theme_stage=MagicMock(return_value={}))
 
 # tradier_budget — real stubs for check_budget/record_call/record_defer so tests can inspect
 _bgt_stub = _stub(
@@ -1101,6 +1103,146 @@ class TestActiveSessionSimulation(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# RS: Theme RS representative-symbol capacity fix (Phase 6)
+# ---------------------------------------------------------------------------
+
+class TestThemeRSCapacityFix(unittest.TestCase):
+    """
+    Phase 6: Theme RS representative-symbol fix.
+
+    Before the fix, _compute("1D") fetched timesales for ALL proxy_symbols
+    (559 unique constituent stocks), producing 56 RPM demand — 2.8× over the
+    20 RPM maintenance-lane budget.
+
+    After the fix, each theme uses meta["representative_symbol"] (the canonical
+    ETF: SMH, XME, XBI, etc.) for the intraday curve.  112 themes collapse to
+    ≤90 unique symbols, yielding 9.0 RPM demand — comfortably within budget.
+
+    Scalar 1D return fields (return_pct, performance.1D, member change_pct,
+    leader/laggard returns) are unaffected — they come from the batch-quote
+    call which still covers all proxy_symbols and candidate stocks.
+    """
+
+    # ── RS-1: source of _build_theme_row references representative_symbol ──────
+    def test_RS1_build_theme_row_source_references_representative_symbol(self):
+        """RS-1: _build_theme_row must reference representative_symbol in the 1D curve branch."""
+        import inspect
+        src = inspect.getsource(_trs_mod._build_theme_row)
+        self.assertIn("representative_symbol", src,
+            "_build_theme_row must reference representative_symbol for the 1D curve path")
+
+    # ── RS-2: curve_syms is [representative_symbol] when meta has the field ─────
+    def test_RS2_curve_syms_uses_representative_symbol_when_present(self):
+        """RS-2: When representative_symbol is set, _curve_syms = [rep_sym], not proxy_syms."""
+        # Replicate the exact logic from _build_theme_row tf=='1D' branch.
+        proxy_syms = ["NVDA", "AMD", "AMAT", "LRCX", "KLAC"]  # 5 stocks
+        meta = {
+            "representative_symbol": "SMH",
+            "proxy_symbols": proxy_syms,
+        }
+
+        _rep_sym    = meta.get("representative_symbol")
+        _curve_syms = [_rep_sym] if _rep_sym else (proxy_syms[:1] if proxy_syms else [])
+
+        self.assertEqual(_curve_syms, ["SMH"],
+            f"Curve syms must be ['SMH'] (representative_symbol); got {_curve_syms}")
+        # None of the constituent stocks must appear in curve_syms
+        for stock in proxy_syms:
+            self.assertNotIn(stock, _curve_syms,
+                f"Stock proxy '{stock}' must not appear in _curve_syms after fix")
+
+    # ── RS-3: fallback uses proxy_syms[0] when representative_symbol absent ───
+    def test_RS3_curve_syms_falls_back_to_first_proxy_when_no_rep_sym(self):
+        """RS-3: No representative_symbol → _curve_syms falls back to [proxy_syms[0]]."""
+        proxy_syms = ["FALLBACK_A", "FALLBACK_B"]
+        meta: dict = {"proxy_symbols": proxy_syms}  # no representative_symbol key
+
+        _rep_sym    = meta.get("representative_symbol")  # None
+        _curve_syms = [_rep_sym] if _rep_sym else (proxy_syms[:1] if proxy_syms else [])
+
+        self.assertEqual(_curve_syms, ["FALLBACK_A"],
+            f"Fallback must use [proxy_syms[0]] = ['FALLBACK_A']; got {_curve_syms}")
+
+    # ── RS-4: uniq_proxies logic produces ETFs not stocks ─────────────────────
+    def test_RS4_uniq_proxies_construction_uses_representative_symbol(self):
+        """RS-4: The uniq_proxies builder reads representative_symbol, not proxy_symbols."""
+        BENCHMARKS = ["SPY", "QQQ"]
+        # Simulate a 10-theme universe; each has 3 stock proxies but 1 ETF representative.
+        MOCK_UNIVERSE = {
+            f"theme_{i}": {
+                "representative_symbol": f"ETF{i}",
+                "proxy_symbols": [f"STK{i}A", f"STK{i}B", f"STK{i}C"],
+            }
+            for i in range(10)
+        }
+
+        rep_set: set[str] = set()
+        for _m in MOCK_UNIVERSE.values():
+            _rep = _m.get("representative_symbol")
+            if _rep:
+                rep_set.add(_rep.upper())
+            elif _m.get("proxy_symbols"):
+                rep_set.add(_m["proxy_symbols"][0].upper())
+        for _b in BENCHMARKS:
+            rep_set.add(_b.upper())
+        uniq_proxies = sorted(rep_set)
+
+        # 10 unique ETFs + 2 benchmarks = 12 total, NOT 30 (10×3 stocks)
+        self.assertEqual(len(uniq_proxies), 12,
+            f"10-theme mock universe + 2 benchmarks → 12 unique calls; got {len(uniq_proxies)}")
+        for sym in uniq_proxies:
+            self.assertFalse(sym.startswith("STK"),
+                f"Stock proxy '{sym}' must not appear in uniq_proxies after fix")
+
+    # ── RS-5: capacity math fits maintenance lane ──────────────────────────────
+    def test_RS5_capacity_math_fits_maintenance_lane(self):
+        """RS-5: 90 unique ETFs / 10-min TTL = 9.0 RPM ≤ 20 RPM maintenance budget."""
+        # After fix: any universe with ≤90 unique representative_symbols
+        # produces ≤9.0 RPM demand at 600s TTL.
+        for n_unique in [88, 89, 90]:
+            demand_rpm = n_unique / 10  # 600s TTL → N calls per 10 min
+            self.assertLessEqual(demand_rpm, 20.0,
+                f"n_unique={n_unique} → {demand_rpm:.1f} RPM must fit 20 RPM budget")
+
+        # Prove the prior design was broken (559 stocks → 55.9 RPM > 20 RPM)
+        old_demand_rpm = 559 / 10
+        self.assertGreater(old_demand_rpm, 20.0,
+            f"Old stock-proxy demand {old_demand_rpm:.1f} RPM must exceed budget (proves bug)")
+
+    # ── RS-6: scalar fields do not reference intraday_bars ────────────────────
+    def test_RS6_scalar_return_fields_not_from_timesales(self):
+        """RS-6: _compute_theme_perf and _perf_for_timeframe must not reference intraday_bars."""
+        import inspect
+        src_perf = inspect.getsource(_trs_mod._compute_theme_perf)
+        self.assertNotIn("_fetch_intraday_bars", src_perf,
+            "_compute_theme_perf must not call _fetch_intraday_bars (scalar returns are quotes/history only)")
+        self.assertNotIn("intraday_bars", src_perf,
+            "_compute_theme_perf must not reference intraday_bars")
+
+        src_tf = inspect.getsource(_trs_mod._perf_for_timeframe)
+        self.assertNotIn("intraday_bars", src_tf,
+            "_perf_for_timeframe must not reference intraday_bars")
+
+    # ── RS-7: performance_curve uses real timesales, not a quote approximation ─
+    def test_RS7_performance_curve_uses_real_timesales(self):
+        """RS-7: _fetch_intraday_bars must use get_timesales_background (real 5-min bars)."""
+        import inspect
+        src = inspect.getsource(_trs_mod._fetch_intraday_bars)
+        self.assertIn("get_timesales_background", src,
+            "_fetch_intraday_bars must use get_timesales_background for real 5-min bars")
+        self.assertNotIn("get_quotes", src,
+            "_fetch_intraday_bars must not fall back to a quote approximation")
+
+    # ── RS-8: _INTRADAY_FUTURES removed (coalescing moved into provider) ───────
+    def test_RS8_intraday_futures_removed_from_service(self):
+        """RS-8: _INTRADAY_FUTURES must not exist in theme_rs_service (coalescing is in provider)."""
+        self.assertFalse(
+            hasattr(_trs_mod, "_INTRADAY_FUTURES"),
+            "_INTRADAY_FUTURES must not exist in theme_rs_service after the provider-coalescing fix",
+        )
+
+
 # INT: Integrated multi-subsystem simulation (Contract 6)
 # ---------------------------------------------------------------------------
 

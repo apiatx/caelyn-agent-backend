@@ -1551,11 +1551,20 @@ async def _build_theme_row(
     if tf == "1D":
         # Use intraday 5-min bars for the 1D curve; daily bars are not available
         # for 1D compute and would produce a multi-month daily series instead.
-        perf_curve = _build_intraday_perf_curve(proxy_syms, intraday_bars or {})
+        #
+        # Curve source: representative_symbol ETF (not all constituent proxy_syms).
+        # _compute("1D") fetches timesales for representative_symbols only, so
+        # intraday_bars keys are ETF tickers — looking up proxy_syms (individual stocks)
+        # would always miss and produce an empty curve.
+        # Using the representative ETF is semantically equivalent: it IS the market
+        # proxy for the theme (e.g. SMH = semiconductor benchmark, XBI = biotech ETF).
+        _rep_sym    = meta.get("representative_symbol")
+        _curve_syms = [_rep_sym] if _rep_sym else (proxy_syms[:1] if proxy_syms else [])
+        perf_curve  = _build_intraday_perf_curve(_curve_syms, intraday_bars or {})
         # Coverage: a symbol "has data" when it has ≥2 intraday bars.
         _bars_map   = intraday_bars or {}
-        _covered    = [s for s in proxy_syms if len(_bars_map.get(s, [])) >= 2]
-        _missing    = [s for s in proxy_syms if len(_bars_map.get(s, [])) < 2]
+        _covered    = [s for s in _curve_syms if len(_bars_map.get(s, [])) >= 2]
+        _missing    = [s for s in _curve_syms if len(_bars_map.get(s, [])) < 2]
     else:
         perf_curve = _build_perf_curve(proxy_syms, tf, histories)
         # Coverage: a symbol "has data" when its history list is non-empty.
@@ -1790,14 +1799,49 @@ async def _compute(tf: str) -> list[dict]:
         for sym in proxy_syms_with_dram:
             histories[sym] = ([], "unavailable")
         print(f"[THEME_RS] 1D: skipping proxy daily history (intraday curve uses timesales)")
-        # Batch-fetch 5-min intraday bars for all unique proxy ETFs across all themes.
-        # Cached 10 min — safe on the 60-s warmup cadence (only ~40-60 unique symbols).
-        uniq_proxies = list(dict.fromkeys(
-            sym
-            for meta in THEME_RS_UNIVERSE.values()
-            for sym in meta["proxy_symbols"]
-        ))
-        print(f"[THEME_RS] 1D: fetching intraday bars for {len(uniq_proxies)} proxy ETFs …")
+        # Batch-fetch 5-min intraday bars — one representative ETF per theme.
+        #
+        # Why representative_symbol, not all proxy_symbols?
+        # The theme_basket architecture uses individual constituent stocks as
+        # proxy_symbols (e.g. 60 stocks for semiconductors).  Fetching timesales
+        # for ALL of them produced 559 unique calls — far exceeding the 20-RPM
+        # maintenance lane capacity (would need 28 min to complete a full pass
+        # against a 10-min TTL).
+        #
+        # representative_symbol is the canonical ETF for the theme (e.g. SMH for
+        # semiconductors, XME for metals_mining, XBI for biotech).  Every theme has
+        # exactly one, and the 112 themes collapse to 88 unique ETFs + benchmarks.
+        #
+        # Capacity math after this fix (per Phase 5 of pre-publish audit):
+        #   unique timesales calls  : 90  (was 561)
+        #   maintenance-lane demand : 9.0 RPM  (was 56 RPM — 2.8× over budget)
+        #   full-pass time          : 4.5 min  (was 28 min, vs 10-min TTL)
+        #   5-min coverage          : 100 %    (was 18 %)
+        #
+        # Semantic equivalence:
+        #   The representative ETF IS the market proxy for the theme — it is the
+        #   canonical benchmark used for TradingView charts and rs_score comparisons.
+        #   All 1D scalar fields (return_pct, performance.1D, member change_pct,
+        #   leader/laggard returns) still come from the batch-quote call above,
+        #   which covers all proxy_symbols AND candidate stocks.  Only the
+        #   performance_curve (the visual intraday chart) is sourced from these bars.
+        _rep_set: set[str] = set()
+        for _m in THEME_RS_UNIVERSE.values():
+            _rep = _m.get("representative_symbol")
+            if _rep:
+                _rep_set.add(_rep.upper())
+            elif _m.get("proxy_symbols"):
+                _rep_set.add(_m["proxy_symbols"][0].upper())
+        # Benchmarks are already representative_symbols for their sectors (SPY/QQQ),
+        # but add explicitly for robustness.
+        for _b in _BENCHMARKS:
+            _rep_set.add(_b.upper())
+        uniq_proxies = sorted(_rep_set)
+        print(
+            f"[THEME_RS] 1D: fetching intraday bars for {len(uniq_proxies)} representative ETFs "
+            f"(was {len(ALL_PROXY_SYMBOLS)} stock proxies; demand now {len(uniq_proxies)/10:.1f} RPM "
+            f"vs 20 RPM maintenance budget) …"
+        )
         intra_tasks   = [_fetch_intraday_bars(s) for s in uniq_proxies]
         intra_results = await asyncio.gather(*intra_tasks, return_exceptions=True)
         non_empty = 0
