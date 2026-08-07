@@ -1,0 +1,668 @@
+REPLIT AGENT — URGENT PRODUCTION OUTAGE TRIAGE: MULTIPLE UI PAGES NOW SHOW “UNABLE TO LOAD”
+
+Work in the live backend Replit workspace:
+
+`/home/runner/workspace`
+
+This is an availability incident.
+
+The user reports that the app has degraded from “very slow” to multiple pages now displaying:
+
+```text
+Unable to load
+```
+
+Do not continue normal feature work.
+
+Do not work on taxonomy.
+
+Do not redesign earnings.
+
+Do not optimize speculatively.
+
+The immediate objective is:
+
+```text
+identify exactly why browser-facing API requests are failing
+restore reliable service with the smallest proven correction
+```
+
+The live Replit filesystem, current processes, deployment logs, environment, runtime DB connections, and actual API responses are authoritative.
+
+GitHub is reference only.
+
+---
+
+# Mandatory first step
+
+1. Find and read backend `AGENTS.md` completely.
+2. Follow all instructions and the required report destination.
+3. Record:
+
+   * repository root
+   * branch
+   * exact HEAD
+   * `git status -sb`
+   * recent 12 commits
+   * ahead/behind state
+4. Confirm whether current live source contains:
+
+   ```text
+   2b0bddd4 fix: make ticker taxonomy updates truly atomic
+   0e3c9e29 fix: isolate realtime earnings scans from reads
+   ```
+5. Record the currently deployed build/revision if Replit exposes it.
+6. Do not edit source yet.
+
+Do not reset, revert, rebase, amend, or push.
+
+---
+
+# Critical rule
+
+This is now an outage diagnosis, not a latency audit.
+
+Before editing any source, determine which failure class applies:
+
+```text
+BACKEND_NOT_RUNNING
+BACKEND_STARTUP_CRASH
+DEPLOYMENT_STALE_OR_FAILED
+DATABASE_UNAVAILABLE
+DATABASE_POOL_EXHAUSTED
+EVENT_LOOP_BLOCKED
+THREADPOOL_EXHAUSTED
+PROXY_CANNOT_REACH_BACKEND
+AUTH_FAILURE
+SYSTEMATIC_5XX
+SYSTEMATIC_TIMEOUT
+FRONTEND_ONLY_FAILURE
+MULTIPLE_INDEPENDENT_FAILURES
+```
+
+Do not assume earnings is still the primary problem simply because it was the previous problem.
+
+---
+
+# Phase 1 — capture process and deployment health BEFORE restarting anything
+
+Run and retain the output:
+
+```bash
+cd /home/runner/workspace
+
+date
+pwd
+git status -sb
+git log --oneline --decorate -12
+
+uptime
+free -m
+df -h
+
+ps -eo pid,ppid,%cpu,%mem,rss,etime,state,cmd --sort=-%cpu | head -80
+ps -eo pid,ppid,%cpu,%mem,rss,etime,state,cmd --sort=-%mem | head -80
+
+pgrep -af 'python|uvicorn|gunicorn|node|npm|tsx|vite|opencode'
+lsof -nP -iTCP -sTCP:LISTEN
+```
+
+Determine:
+
+* Is the backend process alive?
+* Which port is listening?
+* How many backend workers/processes exist?
+* Are they restarting repeatedly?
+* Is CPU pegged?
+* Is memory exhausted?
+* Is the machine swapping?
+* Are unrelated agent/build/test processes consuming resources?
+* Is disk full?
+* Is a stale process serving an older checkout?
+
+Do not kill anything before collecting evidence.
+
+---
+
+# Phase 2 — inspect startup/runtime logs
+
+Capture the latest backend and deployment logs.
+
+Search specifically for:
+
+```text
+Traceback
+ERROR
+CRITICAL
+Exception
+Killed
+OOM
+Out of memory
+connection refused
+connection reset
+too many connections
+pool exhausted
+timeout
+asyncio
+event loop
+psycopg2
+Neon
+SSL
+FMP
+502
+503
+504
+500
+429
+worker
+startup
+lifespan
+bootstrap
+```
+
+Determine whether:
+
+* application startup completed
+* post-yield bootstrap completed
+* `earnings_monitor_tick_loop` registered successfully
+* a background loop crashes repeatedly
+* any import error prevents startup
+* any DB initialization blocks startup
+* any scheduler task is throwing continuously
+* deployment health checks are failing
+
+Do not dismiss repeated background exceptions just because the process remains alive.
+
+---
+
+# Phase 3 — direct local backend smoke test
+
+Use the backend's localhost/listening port directly.
+
+Do not go through the frontend proxy first.
+
+Test the project's real health endpoint when one exists.
+
+Also test representative endpoints with appropriate local auth conventions:
+
+```text
+health/readiness endpoint
+/api/watchlist/list
+/api/home/dashboard
+/api/earnings/live-events
+/api/themes/relative-strength?timeframe=1D&classification=all
+```
+
+For each capture:
+
+```text
+HTTP status
+TTFB
+total time
+response bytes
+first 500 characters of safe response
+```
+
+Use curl timing such as:
+
+```bash
+curl -sS -o /tmp/resp.txt \
+  -w 'status=%{http_code} connect=%{time_connect} start=%{time_starttransfer} total=%{time_total} bytes=%{size_download}\n' \
+  '<LOCAL_URL>'
+```
+
+Do not print tokens or secrets.
+
+Classify each endpoint:
+
+```text
+FAST_200
+SLOW_200
+FAST_4XX
+FAST_5XX
+TIMEOUT
+CONNECTION_REFUSED
+CONNECTION_RESET
+```
+
+This phase is mandatory.
+
+---
+
+# Phase 4 — deployed backend comparison
+
+Test the deployed backend directly, bypassing the frontend proxy.
+
+Use the actual configured backend deployment URL from the live Replit/frontend environment.
+
+Do not guess the URL.
+
+Test the same representative endpoints.
+
+Compare:
+
+```text
+localhost backend
+vs
+deployed backend
+```
+
+Interpretation:
+
+## Local works, deployed fails
+
+Investigate:
+
+```text
+deployment revision
+deployment health
+deployment environment variables
+deployment DB connectivity
+deployment startup logs
+deployment routing
+```
+
+## Both fail
+
+The problem is backend application/storage/runtime.
+
+## Both work
+
+The problem is likely frontend proxy/auth/browser routing.
+
+Do not modify backend source if direct deployed endpoints are healthy.
+
+---
+
+# Phase 5 — confirm which commit is actually deployed
+
+The source working tree may contain `0e3c9e29` while the deployment serves older code.
+
+Prove the deployed revision using:
+
+* Replit deployment/build metadata
+* startup log SHA if available
+* a safe version endpoint if present
+* deployment timestamp/build ID
+
+Record:
+
+```text
+working-tree HEAD
+deployed revision
+last successful deployment
+```
+
+Do not assume `git push` equals Replit deployment.
+
+If the deployment is stale or failed:
+
+* identify why
+* do not alter production code just to force a deployment
+* use the normal Replit deployment workflow once the cause is understood
+
+---
+
+# Phase 6 — database and connection-pool health
+
+Because multiple unrelated endpoints now fail, inspect Neon and pool health.
+
+Without exposing credentials, determine:
+
+```text
+pool min/max
+connections currently checked out
+connections available
+waiters
+connection acquisition time
+failed acquisitions
+database ping latency
+active transactions
+idle-in-transaction sessions if observable
+```
+
+Run a minimal safe DB ping through the application's actual connection helper.
+
+Record latency.
+
+Investigate whether recent earnings tasks:
+
+```text
+hold DB connections during FMP calls
+fail to return connections
+spawn unbounded background work
+create overlapping syncs
+```
+
+Also inspect every background task currently active when possible.
+
+Important:
+
+The recent fix moved:
+
+```python
+get_user_event_feed(...)
+```
+
+into `asyncio.to_thread()`.
+
+That is fine in principle, but prove that:
+
+* the thread returns its DB connection
+* many polling calls cannot exhaust the threadpool or DB pool
+* `_get_user_symbols()` and enrichment reads do not create another pool bottleneck
+
+Do not revert `asyncio.to_thread()` merely because it is recent.
+
+---
+
+# Phase 7 — inspect background-task accumulation
+
+The recent earnings change causes a cache miss to schedule background work.
+
+Audit live task creation around:
+
+```text
+_sync_for_explicit_symbols
+_SYNC_TASKS
+_SYNC_TASK_SYMBOLS
+_SYNC_PENDING
+earnings_monitor_tick_loop
+live_earnings_monitor_loop
+```
+
+Prove:
+
+1. How many active earnings tasks currently exist.
+2. Whether task count is bounded.
+3. Whether repeated browser polling creates duplicate background tasks.
+4. Whether `_SYNC_PENDING` can continuously expand/requeue.
+5. Whether a task failure clears all registries.
+6. Whether cache misses across slightly different symbol sets continually schedule work.
+7. Whether any task performs blocking psycopg2 work on the event loop.
+8. Whether background FMP work can consume all HTTP/threadpool capacity.
+
+Do not change scanner cadence.
+
+Do not disable the realtime scanner.
+
+If task accumulation is occurring, fix the task ownership—not the realtime functionality.
+
+---
+
+# Phase 8 — frontend proxy comparison only after backend health is known
+
+If direct deployed backend requests return healthy 200s, inspect the frontend Replit/server logs next.
+
+Compare one failing UI request:
+
+```text
+browser
+→ frontend Express proxy
+→ deployed backend
+```
+
+Record:
+
+```text
+browser status
+proxy status
+backend status
+proxy timeout
+request duration
+```
+
+Look for:
+
+```text
+AbortError
+fetch failed
+ECONNREFUSED
+ECONNRESET
+ETIMEDOUT
+502
+503
+504
+401
+403
+```
+
+If the backend returns 200 but proxy returns 502/504, this is a frontend proxy issue.
+
+Do not modify backend in that case.
+
+Stop and report that a frontend correction is required.
+
+---
+
+# Phase 9 — inspect “Unable to load” source
+
+Identify the exact frontend endpoints associated with the visible “Unable to load” messages.
+
+From frontend logs/network evidence, list:
+
+```text
+page
+failed request URL
+status
+duration
+error body
+```
+
+At minimum inspect:
+
+```text
+Home
+Watchlist
+Portfolio
+Themes
+Options
+```
+
+The important question:
+
+Are they all failing because of one shared backend dependency, or do different endpoints fail independently?
+
+Do not infer from UI text.
+
+---
+
+# Phase 10 — only then make the smallest proven correction
+
+Allowed examples:
+
+## Backend process/startup failure
+
+Fix the exact import/startup/runtime regression.
+
+## DB pool exhaustion
+
+Fix the exact leaked or over-concurrent connection path.
+
+Do not merely enlarge the pool.
+
+## Background task explosion
+
+Make the task registry genuinely bounded/single-flight.
+
+Preserve real-time earnings scan cadence.
+
+## Blocking event loop
+
+Move only the proven blocking operation to established thread/async infrastructure.
+
+## Deployment stale/failed
+
+Restore correct deployment using normal Replit deployment procedure.
+
+No speculative source rewrite.
+
+## Frontend proxy failure
+
+Do not modify backend.
+
+Report the precise frontend correction needed.
+
+---
+
+# Important earnings invariants
+
+If the outage involves the earnings code, preserve:
+
+```text
+real-time FMP due-window scanner
+same ticker eligibility
+same active scan cadence
+same FMP endpoint
+same result parsing
+same time-to-result availability
+```
+
+Do not solve availability by:
+
+```text
+turning off scanner
+adding 10-minute backend cooldown
+reducing symbols
+reducing fields
+making realtime results stale
+```
+
+The realtime earnings scanner is a required product feature.
+
+---
+
+# Required before/after validation
+
+After any correction, prove all of the following through the running application:
+
+```text
+backend health → 200
+/api/watchlist/list → 200
+/api/home/dashboard → 200
+/api/earnings/live-events → 200
+theme RS → 200
+```
+
+Then test through the frontend proxy.
+
+Then test actual UI pages.
+
+Record for each endpoint:
+
+```text
+status
+TTFB
+total duration
+```
+
+Required UI outcome:
+
+```text
+Home loads
+Watchlist loads
+Portfolio loads
+Themes loads
+Options loads
+```
+
+No page may show “Unable to load” due to the incident.
+
+Do not declare the incident resolved because unit tests pass.
+
+---
+
+# Regression validation
+
+Run relevant focused tests plus all checks required by `AGENTS.md`.
+
+If source changes involve earnings, include:
+
+```text
+test_earnings_isolation.py
+existing earnings monitor tests
+Watchlist earnings tests
+```
+
+If no earnings source is changed, do not alter those tests merely to make CI green.
+
+Also run:
+
+```bash
+git diff --check
+```
+
+Report actual exit codes.
+
+---
+
+# Scope restrictions
+
+Do not:
+
+* change taxonomy
+* perform bulk taxonomy migration
+* change frontend UX
+* remove earnings features
+* reduce FMP realtime scan cadence
+* broaden timeouts as a generic solution
+* broadly increase database pool size
+* broadly increase worker counts
+* restart before collecting evidence
+* redeploy before identifying current deployed revision
+* install dependencies
+* push
+
+---
+
+# Repository hygiene
+
+If and only if source changes are required:
+
+Do not use:
+
+```bash
+git add .
+git add -A
+```
+
+Stage exact intended files only.
+
+Create exactly one local commit:
+
+```text
+fix: restore backend service availability
+```
+
+Do not push.
+
+---
+
+# Required incident report
+
+Write to the exact path required by `AGENTS.md`.
+
+Include:
+
+1. Confirmation `AGENTS.md` was read first.
+2. Working-tree HEAD.
+3. Deployed revision/build.
+4. Starting status.
+5. Process/port health.
+6. Startup/runtime errors.
+7. Local endpoint matrix.
+8. Deployed endpoint matrix.
+9. Proxy comparison.
+10. Database/pool health.
+11. Background task counts.
+12. Exact “Unable to load” requests/statuses.
+13. Proven root cause.
+14. Whether `0e3c9e29` contributed.
+15. Exact correction if required.
+16. Before/after endpoint timings.
+17. UI validation on Home/Watchlist/Portfolio/Themes/Options.
+18. Tests and exit codes.
+19. Exact files changed/staged.
+20. Final status.
+21. Commit SHA if code changed.
+22. Confirmation realtime FMP earnings behavior remains unchanged.
