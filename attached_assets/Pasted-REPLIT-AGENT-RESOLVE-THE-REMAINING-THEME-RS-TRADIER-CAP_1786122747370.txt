@@ -1,0 +1,466 @@
+REPLIT AGENT — RESOLVE THE REMAINING THEME-RS / TRADIER CAPACITY CONFLICT
+BEFORE PUBLISHING THE LATENCY FIX
+
+Work in the live backend Replit workspace:
+
+/home/runner/workspace
+
+DO NOT PUBLISH YET.
+
+Current relevant source commit:
+
+4f1de511 — fix: align Tradier admission with physical requests
+
+The limiter/admission mechanics are now substantially corrected.
+
+Do NOT redesign the limiter again unless this task finds a concrete correctness
+bug.
+
+The remaining blocker is architectural:
+
+Theme RS currently reports approximately:
+
+561 unique Tradier /markets/timesales requests
+maintenance lane = 20 RPM
+per-symbol intraday cache = 600 sec
+full theoretical pass ≈ 28 minutes
+
+That is mathematically incompatible with keeping all 561 symbols inside a
+10-minute freshness window unless most of those calls are unnecessary or can
+reuse an already-canonical fresh dataset.
+
+We need to resolve THAT before deployment.
+
+The live Replit filesystem/runtime is authoritative.
+GitHub is reference only.
+
+────────────────────────────────────────────────────────
+MANDATORY FIRST STEP
+────────────────────────────────────────────────────────
+
+1. Read AGENTS.md completely.
+2. Follow its report-path rules.
+3. Record:
+   - root
+   - branch
+   - HEAD
+   - git status -sb
+   - ahead/behind
+   - recent commits
+4. Confirm 4f1de511 or exact live equivalent.
+5. Do not reset/revert/rebase/push.
+6. Preserve:
+   - realtime earnings
+   - FMP fundamentals schedule
+   - canonical history schedule
+   - Tradier 110 RPM ceiling
+   - live quote freshness
+   - options freshness
+   - Theme RS product semantics
+   - frontend API contracts
+
+────────────────────────────────────────────────────────
+PHASE 1 — PROVE WHAT THE 561 TIMESALES CALLS ARE ACTUALLY FOR
+────────────────────────────────────────────────────────
+
+Trace the complete 1D Theme RS production path:
+
+GET /api/themes/relative-strength?timeframe=1D...
+→ route
+→ service
+→ warmup/cache
+→ theme basket construction
+→ symbol-level inputs
+→ _fetch_intraday_bars()
+→ aggregation/ranking/curve output
+→ frontend consumer
+
+Answer exactly:
+
+1. Which response fields require intraday 5-minute bars?
+2. Which response fields only require:
+   - current price
+   - previous close
+   - 1D % change
+   - open price
+   - benchmark 1D return
+3. Does the frontend actually render full intraday curves for every constituent,
+   or only aggregate theme-level curves/rankings?
+4. Are all 561 symbols actually constituents needed for every response?
+5. How many are:
+   - ETF proxies
+   - stock constituents
+   - benchmarks
+   - duplicated across themes
+6. How many UNIQUE physical series are truly required after dedupe?
+
+Do not infer. Trace the actual consumer.
+
+────────────────────────────────────────────────────────
+PHASE 2 — INVENTORY EXISTING SAME-DAY PRICE SOURCES
+────────────────────────────────────────────────────────
+
+Before proposing new provider traffic, inventory what already exists.
+
+At minimum inspect:
+
+- realtime quote cache
+- watchlist quote cache
+- Tradier quote cache
+- canonical history current-day/latest-bar state
+- Stage2/technical caches
+- master screener quote data
+- Home quote data
+- Theme RS existing LKG
+- any persisted/live market-data snapshot
+
+For each candidate source report:
+
+field availability:
+- current price
+- previous close
+- open
+- timestamp
+- source
+- freshness
+
+coverage:
+- all 561 symbols?
+- Watchlist only?
+- proxy universe only?
+
+refresh cadence
+
+provider cost
+
+exact semantic equivalence to what Theme RS needs
+
+Do NOT substitute a source unless the fields are semantically sufficient.
+
+────────────────────────────────────────────────────────
+PHASE 3 — DETERMINE WHETHER TIMESALES IS NECESSARY PER SYMBOL
+────────────────────────────────────────────────────────
+
+Classify every use of _fetch_intraday_bars() into one of:
+
+A. FULL INTRADAY CURVE REQUIRED
+B. ONLY 1D RETURN REQUIRED
+C. ONLY CURRENT PRICE + PREVIOUS CLOSE REQUIRED
+D. FALLBACK ONLY
+E. UNUSED / REDUNDANT
+
+If B or C can reuse an existing canonical quote/history snapshot, do that
+rather than firing one /timesales call per symbol.
+
+Do not change the mathematical meaning of Theme RS.
+
+Example:
+
+If Theme RS 1D ranking only needs:
+
+(current_price / previous_close) - 1
+
+and those exact inputs already exist from the canonical live quote + prior-close
+architecture, use those canonical inputs.
+
+Do NOT approximate a 5-minute curve from one quote.
+
+If a genuine curve is displayed, preserve it.
+
+────────────────────────────────────────────────────────
+PHASE 4 — SEPARATE THEME-LEVEL CURVES FROM CONSTITUENT RETURNS IF APPROPRIATE
+────────────────────────────────────────────────────────
+
+If the frontend only needs full 5-minute curves for theme/proxy aggregates,
+but constituent ranking only needs current 1D returns:
+
+preserve the existing response shape while using:
+
+canonical live quote / prior-close data
+→ constituent current return
+
+Tradier timesales
+→ only symbols/proxies that genuinely need an intraday curve
+
+This is ONLY permitted if consumer tracing proves semantic equivalence.
+
+Do not invent a new endpoint.
+
+Do not change frontend in this task.
+
+────────────────────────────────────────────────────────
+PHASE 5 — PRODUCE REAL CAPACITY MATH
+────────────────────────────────────────────────────────
+
+After identifying the minimum required physical /timesales set, report:
+
+unique physical timesales calls required per refresh
+
+maintenance lane demand per minute
+
+global Tradier demand per minute
+
+expected cache hit ratio
+
+complete-refresh time
+
+coverage inside:
+1 minute
+5 minutes
+10 minutes
+
+Required acceptance:
+
+The architecture must be capable of satisfying the existing intended
+Theme RS freshness contract inside its provider budgets.
+
+Do NOT write "acceptable" if the math does not fit.
+
+If the requirements cannot fit:
+STOP and report the conflict explicitly before changing cadence.
+
+────────────────────────────────────────────────────────
+PHASE 6 — REAL MULTI-SUBSYSTEM SIMULATION
+────────────────────────────────────────────────────────
+
+The current test suite's "integrated simulation" is mostly limiter-level.
+
+Replace/add one REAL production-boundary simulation using fake provider transport.
+
+Invoke the narrow actual cycle/service boundaries for:
+
+- master screener
+- sector work
+- theme supplement
+- Theme RS
+- Home quote/rebuild path
+
+Do not merely create generic coroutines named after those systems.
+
+Patch physical Tradier transport only.
+
+Use real:
+
+- TradierProvider
+- TRADIER_LIMITER
+- tradier_budget lane accounting
+- current caches/coalescing
+- actual subsystem request functions
+
+Record:
+
+physical calls by endpoint
+physical calls by lane
+cache hits
+coalesced calls
+deferred calls
+Home response latency
+Theme RS coverage
+
+Prove:
+
+1. Home request does not wait for a 60-second reset.
+2. Background physical calls stay within global ceiling.
+3. Real lane accounting is enforced.
+4. No sleeping background limiter.
+5. Required Theme RS coverage is achievable.
+6. Existing logical scheduler cadences remain unchanged.
+
+────────────────────────────────────────────────────────
+PHASE 7 — CROSS-PROCESS TRADIER TOPOLOGY
+────────────────────────────────────────────────────────
+
+The prior report only checked the dev process.
+
+That is insufficient.
+
+Determine the frontend's ACTUAL configured backend URL.
+
+Determine whether:
+
+- production backend deployment is active
+- dev Replit backend is active
+- both use the same Tradier credential/account
+- both start production background schedulers
+
+Do not print the API key.
+
+Use safe fingerprints/metadata.
+
+Important correction:
+
+Multiple TradierProvider instances INSIDE ONE PYTHON PROCESS still reference
+the module-level TRADIER_LIMITER in TradierProvider._get().
+
+Do not incorrectly label those as separate global limiters.
+
+The real concern is MULTIPLE PYTHON PROCESSES / DEPLOYMENTS.
+
+Report:
+
+process/environment
+backend URL
+scheduler owner?
+same account?
+independent process-local limiter?
+
+If dev + prod simultaneously run the full background scheduler against the
+same Tradier account, identify the EXISTING project mechanism for environment
+or scheduler ownership.
+
+Do not invent a distributed limiter in this task.
+
+Propose the smallest environment-role correction if needed.
+
+────────────────────────────────────────────────────────
+PHASE 8 — 272ca1fc HYGIENE
+────────────────────────────────────────────────────────
+
+Inspect accidental commit:
+
+272ca1fc — Update backend data caches and add tradier background asset
+
+Clearly accidental files include at least:
+
+attached_assets/Pasted-...txt
+backend/data/tradier_bg_admission_report.md
+
+Do not stage prompt/report artifacts again.
+
+For runtime JSON files in that commit:
+do not blindly delete or restore them.
+
+Classify each as:
+- canonical source
+- intentional seed
+- runtime cache/LKG
+
+Follow AGENTS.md.
+
+Make the smallest safe cleanup so the final deploy tree does not contain
+accidental prompt/report artifacts.
+
+Do not mix arbitrary runtime cache churn into the source correction.
+
+────────────────────────────────────────────────────────
+IMPLEMENTATION RULE
+────────────────────────────────────────────────────────
+
+Only after Phases 1–5 prove a safe reuse path may you edit Theme RS.
+
+Allowed correction:
+
+reuse an EXISTING canonical fresh market-data source for fields that are
+provably semantically equivalent
+
+and preserve /timesales only where a true intraday curve is required.
+
+Forbidden:
+
+- lower Theme RS freshness silently
+- increase Tradier limit
+- steal options lanes
+- change earnings
+- change FMP fundamentals
+- change frontend
+- add another provider/cache
+- create another endpoint
+- approximate curve data from insufficient inputs
+
+────────────────────────────────────────────────────────
+STEADY-STATE VALIDATION
+────────────────────────────────────────────────────────
+
+After changes, run the backend at least 10 minutes.
+
+Measure 3 samples each:
+
+/health
+/api/rate-status
+/api/watchlist/list
+/api/home/dashboard
+/api/watchlist/{primary}
+/api/themes/relative-strength
+/api/options-flow/sectors
+/api/earnings/live-events
+
+Record:
+TTFB
+total
+Tradier calls_last_60s
+headroom
+lane usage
+deferrals
+
+Also report Theme RS:
+
+fresh symbols
+cached symbols
+missing symbols
+
+after:
+1 minute
+5 minutes
+10 minutes
+
+────────────────────────────────────────────────────────
+TESTS
+────────────────────────────────────────────────────────
+
+Add production-path tests proving:
+
+1. Fields that no longer use timesales are semantically identical to prior output.
+2. Genuine intraday-curve fields still use the same Tradier timesales source.
+3. No extra provider call on page GET.
+4. Theme RS call count reduced to measured minimum.
+5. 10-minute coverage meets intended contract.
+6. Home remains non-blocking.
+7. options schedules unchanged.
+8. earnings unchanged.
+9. canonical-history behavior unchanged.
+
+Run all AGENTS.md-required suites.
+
+git diff --check
+
+────────────────────────────────────────────────────────
+COMMIT
+────────────────────────────────────────────────────────
+
+If and only if a source correction is proven:
+
+stage exact source/tests only
+
+one local commit:
+
+perf: reuse canonical market data for theme RS
+
+Do not push.
+Do not publish.
+
+────────────────────────────────────────────────────────
+REPORT
+────────────────────────────────────────────────────────
+
+Include:
+
+1. Starting HEAD/status.
+2. Exact 1D Theme RS consumer trace.
+3. Why 561 timesales calls existed.
+4. Fields requiring real intraday curves.
+5. Fields not requiring curves.
+6. Existing canonical sources audited.
+7. Chosen reuse path and semantic proof.
+8. Timesales physical calls before/after.
+9. 1/5/10-minute coverage before/after.
+10. Real integrated subsystem simulation.
+11. Cross-process Tradier topology.
+12. Actual frontend backend target.
+13. 272ca1fc cleanup.
+14. Steady-state endpoint timings.
+15. Provider headroom/lane usage.
+16. Tests/exit codes.
+17. Files changed.
+18. Confirmation earnings/FMP/history/options contracts unchanged.
+19. git diff --check.
+20. Final commit SHA.
