@@ -54,15 +54,21 @@ _SINGLETON_PROVIDER: "TradierProvider | None" = None
 def get_provider() -> "TradierProvider | None":
     """Return the process-wide singleton TradierProvider, or None if no API key.
 
-    Uses TRADIER_API_KEY env var.  The singleton is constructed lazily so modules
-    that import this file during test bootstrapping don't require a real key.
+    Uses TRADIER_API_KEY and TRADIER_SANDBOX env vars.  The singleton is
+    constructed lazily so modules that import this file during test
+    bootstrapping don't require a real key.
+
+    TRADIER_SANDBOX is read at first call — consistent with how
+    market_data_service.py reads it via config.TRADIER_SANDBOX so both
+    singletons target the same environment.
     """
     global _SINGLETON_PROVIDER
     if _SINGLETON_PROVIDER is None:
         key = os.environ.get("TRADIER_API_KEY", "")
         if not key:
             return None
-        _SINGLETON_PROVIDER = TradierProvider(api_key=key)
+        sandbox = os.environ.get("TRADIER_SANDBOX", "false").lower() in ("true", "1", "yes")
+        _SINGLETON_PROVIDER = TradierProvider(api_key=key, sandbox=sandbox)
     return _SINGLETON_PROVIDER
 
 
@@ -240,13 +246,24 @@ class TradierProvider:
     async def _get_preadmitted(self, path: str, params: dict | None = None) -> dict | list | None:
         """Execute the HTTP portion of a Tradier request WITHOUT acquiring the rate limiter.
 
-        Pre-condition: the caller has ALREADY called
+        *** PROVIDER-INTERNAL METHOD — DO NOT CALL FROM SERVICE CODE ***
+
+        This method is an implementation detail of get_timesales_background() and
+        get_history_background().  Service modules must call those methods, which
+        own the full admission sequence (budget → try_acquire_background → record_call
+        → _get_preadmitted) in one atomic scope.
+
+        Calling _get_preadmitted() from outside the provider defeats the purpose of
+        the boundary: it splits admission accounting from HTTP execution, creates the
+        same pre-reservation timing defect the 78a5793c correction fixed, and prevents
+        the provider from maintaining correct coalescing state.
+
+        Pre-condition (for internal callers only): the caller has ALREADY called
             TRADIER_LIMITER.try_acquire_background(reserve=N) → True
             data.tradier_budget.record_call(lane)
-        before invoking this method.
+        immediately before invoking this method (no concurrency queue in between).
 
-        Use ONLY for background paths where non-blocking admission was already
-        performed.  Interactive paths must continue using _get(), which calls
+        Interactive paths must continue using _get(), which calls
         TRADIER_LIMITER.acquire() (blocking).
 
         Returns the parsed JSON body on HTTP 200, or None on error.

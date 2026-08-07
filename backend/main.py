@@ -6326,10 +6326,12 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
             "function": "_fetch_intraday_bars",
             "endpoint": "/markets/timesales",
             "mechanism": (
-                "Non-blocking: check_budget('maintenance') → try_acquire_background(reserve=5) "
-                "→ record_call → _INTRADAY_SEM → TradierProvider._get_preadmitted(). "
-                "Semaphore acquired AFTER admission (never held during rate-limit wait). "
-                "In-flight coalescing via _INTRADAY_FUTURES. No fail-open."
+                "_INTRADAY_SEM acquired first (HTTP concurrency gate ≤20). "
+                "Inside semaphore: provider.get_timesales_background(lane='maintenance', reserve=5) "
+                "performs non-blocking budget + try_acquire_background + HTTP atomically. "
+                "Admission timestamp aligns with HTTP — no concurrency queue between them. "
+                "Provider-level _TIMESALES_FUTURES coalesces duplicates. No _INTRADAY_FUTURES. "
+                "No _get_preadmitted() from service code. No fail-open."
             ),
             "status": "managed",
         },
@@ -6339,7 +6341,7 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
             "endpoint": "/markets/history",
             "mechanism": (
                 "Non-blocking: TradierProvider.get_history_background(lane='maintenance', reserve=5). "
-                "Budget check + try_acquire_background inside provider. No fail-open."
+                "Budget check + try_acquire_background + HTTP inside provider. No fail-open."
             ),
             "status": "managed",
         },
@@ -6348,9 +6350,9 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
             "function": "_fetch_batch_direct",
             "endpoint": "/markets/quotes",
             "mechanism": (
-                "Startup-only: check_budget('reserved') → blocking TRADIER_LIMITER.acquire() "
+                "Non-blocking: check_budget('reserved') → try_acquire_background(reserve=5) "
                 "→ record_call → TradierProvider._get_preadmitted(). "
-                "Blocking acquire is safe at startup (no contention). No raw httpx. No fail-open."
+                "No blocking limiter sleep. No fail-open. Defers to next refresh cycle if saturated."
             ),
             "status": "managed",
         },

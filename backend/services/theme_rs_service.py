@@ -108,10 +108,10 @@ _FMP_HIST_SEM = asyncio.Semaphore(25)
 # Semaphore for Tradier intraday timesales HTTP concurrency gate (≤20 simultaneous).
 # Must NOT be held while waiting for rate-limit admission — acquire only after admitted.
 _INTRADAY_SEM = asyncio.Semaphore(20)
-# In-flight coalescing for intraday requests: sym → Future[list[dict]].
-# Prevents duplicate physical calls when N concurrent callers request the same symbol
-# during the same cold-start burst.
-_INTRADAY_FUTURES: dict[str, "asyncio.Future[list[dict]]"] = {}
+# In-flight coalescing for intraday requests is now handled at the provider level via
+# _TIMESALES_FUTURES in tradier_provider.py.  The service no longer maintains a
+# separate future registry — doing so created two independent registries for the
+# same physical request, which CONTRACT 2 of the 78a5793c correction prohibits.
 
 # ── Per-timeframe TTL constants ────────────────────────────────────────────────
 _TTL_1D_MARKET   = 60      # 1 minute  — 1D during market hours (Tradier, real-time)
@@ -825,117 +825,101 @@ async def _fetch_intraday_bars(sym: str) -> list[dict]:
     Returns [{date: ISO-timestamp (Eastern), close: float}] oldest→newest.
     Cached 10 min per symbol per trading day.
 
-    Admission contract (fixes de859cc1 Defect 1 + Defect 2):
-      1. Cache hit → return immediately. No semaphore, no limiter.
-      2. In-flight coalescing → share existing Future. No semaphore, no new HTTP.
-      3. Lane budget check (maintenance) → defer immediately if full. No semaphore.
-      4. Non-blocking global admission via try_acquire_background(reserve=5).
-         → If headroom insufficient: defer immediately. No semaphore. No sleeping.
-      5. record_call("maintenance") — lane slot recorded.
-      6. _INTRADAY_SEM acquired (HTTP concurrency gate, ≤20 simultaneous).
-         → Semaphore is NEVER held while waiting for rate-limit admission.
-      7. _get_preadmitted() — HTTP only (already admitted; no re-acquire).
+    Admission contract (fixes de859cc1 Defect 1 + Contract 1 provider boundary):
 
-    There is NO fail-open path. Infrastructure failure → deferral, not unmetered HTTP.
+      1. Service cache hit → return immediately. No semaphore, no limiter.
+      2. Acquire _INTRADAY_SEM (HTTP concurrency gate, ≤20 simultaneous).
+      3. Inside semaphore: call provider.get_timesales_background().
+         The provider handles the full admission sequence internally:
+           a. provider cache hit → return immediately (semaphore released early)
+           b. provider coalescing → await existing Future (no new HTTP)
+           c. check_budget("maintenance") → non-blocking; defer if full
+           d. try_acquire_background(reserve=5) → non-blocking global admission
+           e. record_call("maintenance")
+           f. _get_preadmitted() → HTTP fires IMMEDIATELY after step d
+         Steps c–f execute atomically within the provider under the semaphore.
+         No concurrency queue exists between the admission timestamp and HTTP.
+      4. Transform raw provider ticks → {date, close} and cache under service key.
+
+    Physical-timestamp alignment (Defect 1 corrected):
+      The global slot is reserved inside the semaphore, immediately before the
+      physical HTTP call.  Previously (de859cc1) the slot was reserved before
+      the semaphore, so up to 20 pre-reserved slots could age inside the queue
+      before their HTTP fired — making the 60-second window undercount future load.
+
+    Provider boundary (Contract 1):
+      Service code calls get_timesales_background(), not _get_preadmitted().
+      _get_preadmitted() is a provider-internal primitive; calling it from
+      service code splits admission accounting from HTTP and recreates the
+      pre-reservation defect.
+
+    Coalescing (Contract 2):
+      Provider-level _TIMESALES_FUTURES handles concurrent duplicate dedup.
+      No redundant service-level future registry (_INTRADAY_FUTURES removed).
+
+    There is NO fail-open path. Deferral or error → [], not unmetered HTTP.
     """
     from datetime import date as _d, datetime, timezone, timedelta as _td
-    import data.tradier_budget as _bgt
-    from data.tradier_provider import TRADIER_LIMITER as _intra_lim, get_provider as _get_prov
+    from data.tradier_provider import get_provider as _get_prov
 
     sym   = sym.upper()
     today = _d.today().isoformat()
     cache_key = f"theme_rs:intraday_5min:{sym}:{today}"
 
-    # ── Step 1: Cache check ────────────────────────────────────────────────────
+    # ── Step 1: Service cache check ────────────────────────────────────────────
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
 
-    # ── Step 2: In-flight coalescing ───────────────────────────────────────────
-    if sym in _INTRADAY_FUTURES:
-        try:
-            return await asyncio.shield(_INTRADAY_FUTURES[sym])
-        except Exception:
-            return []
-
-    # ── Step 3: Non-blocking lane budget check — no semaphore held ────────────
-    if not _bgt.check_budget("maintenance"):
-        _bgt.record_defer("maintenance")
-        print(f"[THEME_RS][intraday] maintenance lane full — deferring {sym}")
-        return []
-
-    # ── Step 4: Non-blocking global admission — no semaphore held ─────────────
-    admitted = await _intra_lim.try_acquire_background(reserve=5)
-    if not admitted:
-        print(f"[THEME_RS][intraday] global headroom insufficient — deferring {sym}")
-        return []
-
-    # ── Step 5: Record lane call (after successful global admission) ───────────
-    _bgt.record_call("maintenance")
-
-    # ── Step 6+7: Register future, then concurrency-gated HTTP ────────────────
-    loop = asyncio.get_event_loop()
-    fut: asyncio.Future = loop.create_future()
-    _INTRADAY_FUTURES[sym] = fut
+    # ── Step 2: Get provider (before semaphore — avoids holding sem on error) ─
     try:
         provider = _get_prov()
-        if provider is None:
-            # No API key — no HTTP. Return [] without wasting the admitted slot.
-            if not fut.done():
-                fut.set_result([])
-            return []
+    except Exception as _prov_exc:
+        print(f"[THEME_RS][intraday] provider init error ({_prov_exc}) — deferring {sym}")
+        return []
+    if provider is None:
+        return []
 
-        # Semaphore wraps ONLY the HTTP call — admission already complete above.
+    # ── Step 3: Semaphore → provider admission → HTTP (inside provider) ────────
+    # _INTRADAY_SEM limits concurrent HTTP to ≤20.  Inside, get_timesales_background()
+    # performs non-blocking budget + global admission and fires HTTP immediately on
+    # success.  Admission timestamp and HTTP call share no intermediate queue.
+    try:
         async with _INTRADAY_SEM:
-            resp_data = await provider._get_preadmitted(
-                "/markets/timesales",
-                {
-                    "symbol":         sym,
-                    "interval":       "5min",
-                    "start":          f"{today} 09:30",
-                    "end":            f"{today} 16:05",
-                    "session_filter": "open",
-                },
+            ticks = await provider.get_timesales_background(
+                symbol=sym,
+                interval="5min",
+                start=f"{today} 09:30",
+                end=f"{today} 16:05",
+                lane="maintenance",
+                reserve=5,
+                extra_params={"session_filter": "open"},
             )
-
-        if not resp_data:
-            if not fut.done():
-                fut.set_result([])
-            return []
-
-        series = resp_data.get("series") or {}
-        raw    = series.get("data") or []
-        if isinstance(raw, dict):
-            raw = [raw]
-
-        _EDT = timezone(_td(hours=-4))   # EDT; close enough for intraday display
-        bars_out: list[dict] = []
-        for t in raw:
-            ts  = t.get("timestamp")
-            cls = t.get("close")
-            if ts is None or cls is None:
-                continue
-            try:
-                dt_str = datetime.fromtimestamp(int(ts), tz=_EDT).isoformat()
-                bars_out.append({"date": dt_str, "close": float(cls)})
-            except Exception:
-                continue
-
-        bars_out.sort(key=lambda b: b["date"])
-        if bars_out:
-            cache.set(cache_key, bars_out, 600)   # 10-min TTL
-
-        if not fut.done():
-            fut.set_result(bars_out)
-        return bars_out
-
     except Exception as exc:
         print(f"[THEME_RS][intraday] {sym}: {exc}")
-        if not fut.done():
-            fut.set_exception(exc)
         return []
-    finally:
-        _INTRADAY_FUTURES.pop(sym, None)
+
+    # ── Step 4: Transform and cache ────────────────────────────────────────────
+    if not ticks:
+        return []
+
+    _EDT = timezone(_td(hours=-4))   # EDT; close enough for intraday display
+    bars_out: list[dict] = []
+    for t in ticks:
+        ts  = t.get("timestamp")
+        cls = t.get("close")
+        if ts is None or cls is None:
+            continue
+        try:
+            dt_str = datetime.fromtimestamp(int(ts), tz=_EDT).isoformat()
+            bars_out.append({"date": dt_str, "close": float(cls)})
+        except Exception:
+            continue
+
+    bars_out.sort(key=lambda b: b["date"])
+    if bars_out:
+        cache.set(cache_key, bars_out, 600)   # 10-min TTL
+    return bars_out
 
 
 async def _fetch_proxy_history(symbol: str, days: int = 400) -> tuple[list[dict], str]:

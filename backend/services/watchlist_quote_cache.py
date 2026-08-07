@@ -356,11 +356,15 @@ async def _fetch_via_home_service(symbols: list[str]) -> dict[str, dict]:
 async def _fetch_batch_direct(symbols: list[str], api_key: str) -> dict[str, dict]:
     """Startup-only cold-cache fallback.
 
-    Admission contract:
+    Admission contract (non-blocking — Contract 4 of 78a5793c correction):
       1. Lane budget check (reserved).  If full → return {} immediately.
-      2. Blocking TRADIER_LIMITER.acquire() — fine at startup (no contention).
+      2. Non-blocking try_acquire_background(reserve=5).  If denied → return {}.
       3. record_call("reserved").
-      4. TradierProvider.get_quotes() routed through _get_preadmitted() for HTTP.
+      4. TradierProvider._get_preadmitted() for HTTP (already admitted above).
+
+    Using non-blocking admission ensures this startup path does not sleep waiting
+    for a 60-second limiter reset when called during the post-restart warmup burst.
+    If the quota is saturated, the caller retries at the next natural refresh cycle.
 
     There is NO fail-open path.  If the provider or budget module is unavailable
     the call is skipped entirely — the caller falls back to disk LKG.
@@ -387,8 +391,12 @@ async def _fetch_batch_direct(symbols: list[str], api_key: str) -> dict[str, dic
         print("[WQ_CACHE] No TRADIER_API_KEY — skipping startup batch")
         return {}
 
-    # Blocking acquire: fine at startup, no background contention yet.
-    await _wqc_lim.acquire()
+    # Non-blocking global admission: preserves 5 interactive slots even at startup.
+    admitted = await _wqc_lim.try_acquire_background(reserve=5)
+    if not admitted:
+        print(f"[WQ_CACHE] global headroom insufficient — skipping startup batch "
+              f"for {len(symbols)} symbols; will retry at next refresh cycle")
+        return {}
     _bgt.record_call("reserved")
 
     # Route HTTP through the provider's preadmitted path (already admitted above)
