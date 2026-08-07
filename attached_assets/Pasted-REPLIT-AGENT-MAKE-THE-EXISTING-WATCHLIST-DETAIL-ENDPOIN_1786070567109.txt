@@ -1,0 +1,563 @@
+REPLIT AGENT — MAKE THE EXISTING WATCHLIST DETAIL ENDPOINT FAST AND LKG-FIRST WITHOUT REMOVING ANY DATA OR CHANGING ITS PATH
+
+Work only in the live backend Replit workspace:
+
+`/home/runner/workspace`
+
+This is a focused Watchlist latency task.
+
+The application is available again after the RSS/psycopg2 crash fix, but the Watchlist page still takes roughly 30–60 seconds to become usable.
+
+The current endpoint is:
+
+```http
+GET /api/watchlist/{watchlist_id}
+```
+
+Preserve this endpoint.
+
+Do not create a replacement Watchlist endpoint unless the live architecture proves an existing internal endpoint already provides the required fast path.
+
+The live Replit filesystem/runtime is authoritative.
+
+GitHub is reference only.
+
+---
+
+# Mandatory first step
+
+1. Find and read backend `AGENTS.md` completely.
+2. Follow its report-path requirements.
+3. Record:
+
+   * branch
+   * HEAD
+   * `git status -sb`
+   * recent commits
+4. Confirm current live code includes:
+
+   * realtime earnings isolation
+   * RSS archive crash fix `cab90aa1` or live equivalent
+   * canonical history hot-tail optimization
+   * Taxonomy v2 work
+5. Preserve all of those changes.
+6. Do not modify frontend files.
+7. Do not push.
+
+---
+
+# Non-negotiable product requirement
+
+Do not reduce Watchlist functionality.
+
+Preserve all currently visible:
+
+```text
+saved tickers
+company names
+themes/taxonomy identity
+live price
+1D / 7D / 30D performance
+volume
+VolX
+Vol Rank
+Vol/MC
+beta
+technical/stage fields
+fundamentals
+options integrations
+earnings integrations
+confluence/alignment
+favorites
+ticker popup/deep-dive data
+```
+
+Do not solve latency by deleting columns, reducing ticker count, returning only the first N stocks, or making data permanently stale.
+
+Realtime quotes must remain realtime.
+
+Existing background jobs must remain background jobs.
+
+---
+
+# Known architectural problem
+
+`GET /api/watchlist/{id}` currently runs `_enrich_store_with_quotes()`.
+
+That path performs, among other work:
+
+```text
+get_watchlist_quotes(tickers)
+name override load
+bulk fundamentals snapshot load
+canonical-history market-data load
+theme-ticker override load
+per-row market-cap resolution
+per-row live valuation overlay
+per-row Stage2/cache projection
+identity construction
+7D/30D calculations
+RV ranking
+Vol/MC ranking
+category override application
+full response reconstruction
+JSON serialization
+```
+
+Do not assume all of these are slow.
+
+Measure each one.
+
+---
+
+# Phase 1 — instrument the existing endpoint
+
+Add temporary or safely retained structured timing around the complete production path.
+
+Measure at minimum:
+
+```text
+load_watchlist
+quote cache read
+name overrides
+fundamentals bulk read
+history/comparison data
+theme overrides
+row-build loop
+stage projection
+market-cap/valuation overlays
+RV rank pass
+Vol/MC rank pass
+category overrides
+FMP overlays if applicable
+bulk-strip logic
+response construction
+JSON serialization
+total endpoint duration
+```
+
+Measure:
+
+```text
+ticker count
+section count
+csv_data row count
+raw response bytes
+gzip/compressed bytes if enabled
+```
+
+Do this on the actual Primary Watchlist.
+
+Record at least:
+
+```text
+cold request
+warm request #1
+warm request #2
+warm request #3
+```
+
+Do not optimize before identifying the dominant phases.
+
+---
+
+# Phase 2 — payload-weight audit
+
+Measure serialized byte contribution by:
+
+```text
+top-level field
+analysis field
+one representative ticker row
+all ticker rows combined
+csv_data
+technical/stage data
+fundamentals data
+duplicated fields
+nested objects
+```
+
+Identify the largest 20 fields/subtrees.
+
+Audit frontend consumers before removing anything.
+
+Specifically determine whether data appears redundantly in:
+
+```text
+csv_data
+analysis.sections[].tickers[]
+separate options endpoint
+separate alignment endpoint
+ticker-detail endpoint
+earnings endpoint
+```
+
+There is already an established architecture that strips:
+
+```text
+earnings_intelligence
+```
+
+from the bulk Watchlist response and serves it through single-ticker detail.
+
+Follow that architectural principle only where a field is proven unused by the bulk Watchlist page.
+
+Do not blindly strip fields.
+
+---
+
+# Contract 1 — existing endpoint becomes LKG-first
+
+The browser should not require a full reconstruction before receiving a usable Watchlist.
+
+Implement an LKG/read-model cache for the **final bulk Watchlist response** using existing project cache conventions.
+
+Key it by at least:
+
+```text
+watchlist_id
+watchlist structural version / updated_at / saved_at or deterministic membership revision
+```
+
+Required behavior:
+
+## Valid cached response exists
+
+```text
+GET /api/watchlist/{id}
+→ return cached complete bulk response immediately
+→ if refresh is due, schedule one background rebuild
+```
+
+Do not await the rebuild.
+
+## Cache is stale
+
+Return it immediately and rebuild in background.
+
+## Rebuild fails
+
+Keep serving the last valid response.
+
+Do not replace it with an empty/broken snapshot.
+
+## Watchlist membership structurally changes
+
+Invalidate or version-miss the LKG immediately so removed/added tickers cannot remain indefinitely.
+
+Manual add/remove/save flows must explicitly signal the cache.
+
+---
+
+# Important realtime rule
+
+The frontend already overlays realtime quotes using its realtime quote channel.
+
+Therefore the bulk Watchlist LKG does not need to synchronously hit a provider merely to display the latest intraday price.
+
+However:
+
+* preserve quote provenance
+* preserve last-known-good server fields
+* preserve 7D/30D calculation semantics
+* preserve rank semantics
+
+Choose an appropriately short background rebuild cadence based on current architecture.
+
+Do not invent a long TTL merely for speed.
+
+The goal is:
+
+```text
+fast structural/screener snapshot
++
+existing realtime quote overlay
+```
+
+---
+
+# Contract 2 — single-flight background rebuild
+
+Only one rebuild for a given Watchlist may run at once.
+
+If ten browser calls arrive while stale:
+
+```text
+10 fast LKG responses
+1 background rebuild
+```
+
+not:
+
+```text
+10 full enrichment pipelines
+```
+
+Use existing single-flight conventions.
+
+No caller should await an already-running rebuild when usable LKG exists.
+
+---
+
+# Contract 3 — safe cold start
+
+If no final-response LKG exists yet:
+
+1. Measure the current fastest existing stored representation.
+2. Return the fastest complete saved Watchlist representation possible.
+3. Trigger full enrichment in the background where architecture permits.
+
+Do not return zero rows just because enrichment is warming.
+
+Reuse the existing skeleton/pending-row behavior if appropriate.
+
+Do not create another source of truth.
+
+If a truly complete cold response cannot be returned without current enrichment, report that constraint and optimize the proven critical phases rather than fabricating data.
+
+---
+
+# Contract 4 — remove sync DB operations from async hot path where proven
+
+Audit every synchronous database call inside `_enrich_store_with_quotes()` and the GET route.
+
+Examples to inspect include:
+
+```text
+get_theme_ticker_overrides()
+category override application
+any direct pg_storage read
+```
+
+If they perform network I/O synchronously from an async route, move them through the existing thread/executor pattern or pre-load them into the LKG rebuild worker.
+
+Do not create a thread per ticker.
+
+Bulk operations only.
+
+---
+
+# Contract 5 — do not recompute immutable/slow structures per GET
+
+Audit per-row functions.
+
+Anything that depends only on:
+
+```text
+stored fundamentals snapshot
+stored Stage2 LKG
+taxonomy registry
+saved Watchlist analysis
+static company metadata
+```
+
+should not require expensive reconstruction on every browser request.
+
+Prefer:
+
+```text
+background snapshot rebuild
+or
+precomputed bulk map
+```
+
+Do not move genuinely realtime quote updates out of the realtime system.
+
+---
+
+# Contract 6 — response compression
+
+Audit whether the deployed FastAPI stack already applies gzip/Brotli to large JSON responses.
+
+Measure with:
+
+```text
+Accept-Encoding: gzip
+```
+
+If `/api/watchlist/{id}` is not compressed and the standard FastAPI deployment can safely use existing `GZipMiddleware`, implement it through the established app middleware layer only after checking:
+
+```text
+streaming/SSE endpoints
+existing compression
+frontend proxy behavior
+double-compression risk
+```
+
+Do not add endpoint-specific hand-written gzip blobs.
+
+Report raw versus wire bytes.
+
+---
+
+# Contract 7 — preserve deep data paths
+
+The bulk Watchlist response should contain data required to render and sort the bulk Screener.
+
+Single-stock deep-dive data should continue to use the existing:
+
+```text
+/ticker-detail/{symbol}
+```
+
+or current canonical detail path where already established.
+
+Do not duplicate deep intelligence back into the bulk response.
+
+Do not create a second ticker detail endpoint.
+
+---
+
+# Required backend acceptance targets
+
+On the live Primary Watchlist:
+
+```text
+GET /api/watchlist/{id}
+```
+
+Target:
+
+```text
+warm/LKG TTFB: <500 ms
+warm/LKG total server time: <1 s
+```
+
+If network transfer remains dominant, report it separately.
+
+A stale LKG request while rebuild runs must remain fast.
+
+Ten concurrent stale requests must not launch ten rebuilds.
+
+No endpoint failure may trigger repeated full reconstruction.
+
+---
+
+# Required tests
+
+At minimum:
+
+1. Valid LKG returns without calling full enrichment.
+2. Stale LKG returns immediately and schedules rebuild.
+3. Ten stale callers schedule one rebuild.
+4. Rebuild success atomically replaces LKG.
+5. Rebuild failure preserves prior LKG.
+6. Add ticker invalidates/versions Watchlist LKG.
+7. Remove ticker invalidates/versions Watchlist LKG.
+8. Save/replace invalidates/versions Watchlist LKG.
+9. Different Watchlists do not cross-contaminate.
+10. No provider call occurs merely to serve valid LKG.
+11. Realtime quote infrastructure remains unchanged.
+12. Bulk response required fields remain present.
+13. Deep ticker-detail fields remain available through existing detail route.
+14. RV/VolMC semantics remain intact.
+15. Theme identity fields remain intact.
+16. `change_7d` / `change_30d` semantics remain intact.
+17. Response does not reintroduce `earnings_intelligence` bulk bloat.
+18. No taxonomy behavior changes.
+19. No realtime earnings behavior changes.
+20. No RSS sweeper changes.
+
+---
+
+# Live benchmark
+
+Before and after, record:
+
+```text
+request status
+TTFB
+server total
+response raw bytes
+compressed bytes
+ticker count
+```
+
+For:
+
+```text
+cold process / first request
+warm request
+stale-LKG request while rebuild runs
+10 concurrent requests
+```
+
+Also capture the timing breakdown of a rebuild itself.
+
+---
+
+# Validation
+
+Run focused Watchlist tests plus all relevant checks required by `AGENTS.md`.
+
+At minimum:
+
+```bash
+git diff --check
+```
+
+Report command exit codes honestly.
+
+Do not call a failing test passed.
+
+---
+
+# Scope restrictions
+
+Do not:
+
+* change frontend
+* change Watchlist endpoint path
+* remove Watchlist data
+* reduce ticker universe
+* change realtime earnings
+* change RSS sweeper
+* change taxonomy
+* perform provider calls per ticker on GET
+* increase database pools as a latency workaround
+* increase request timeouts as a latency workaround
+* install dependencies
+* push
+
+---
+
+# Repository hygiene
+
+Do not use:
+
+```bash
+git add .
+git add -A
+```
+
+Stage exact source and focused tests only.
+
+Create one local commit:
+
+```text
+perf: make watchlist detail LKG-first
+```
+
+---
+
+# Required report
+
+Include:
+
+1. Starting HEAD/status.
+2. Exact production endpoint timing breakdown before.
+3. Payload byte breakdown.
+4. Largest payload fields.
+5. Sync DB calls found in async path.
+6. Exact LKG architecture.
+7. Cache version/invalidation strategy.
+8. Single-flight implementation.
+9. Compression findings.
+10. Cold-start behavior.
+11. Before/after endpoint timings.
+12. Raw/compressed response sizes.
+13. Concurrent-request results.
+14. Exact files changed.
+15. Tests/exit codes.
+16. Confirmation no frontend/earnings/RSS/taxonomy behavior changed.
+17. Commit SHA.

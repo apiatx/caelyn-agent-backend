@@ -65,6 +65,60 @@ _volmc_mem: dict[str, dict] = {}
 _rv_registry:    dict[str, list[str]] = {}
 _volmc_registry: dict[str, dict]      = {}
 
+# ── Bulk GET response LKG (last-known-good) cache ────────────────────────────
+# Keyed by watchlist_id → {"payload": dict, "ts": float, "version": str}.
+#
+# "version" = f"{updated_at|saved_at}|{ticker_count}" — structural fingerprint.
+# A version mismatch (ticker added/removed, /save) immediately invalidates the
+# entry so stale membership cannot linger after mutations.
+#
+# TTL semantics:
+#   _BULK_LKG_TTL       — serve from cache; no rebuild scheduled (fresh window)
+#   _BULK_LKG_STALE_TTL — serve stale + schedule one background rebuild (stale window)
+#   beyond STALE_TTL    — cache miss; rebuild inline on next GET
+#
+# Single-flight: _BULK_LKG_BUILDING prevents concurrent rebuilds per watchlist.
+_BULK_LKG:          dict[str, dict] = {}
+_BULK_LKG_BUILDING: set[str]        = set()
+_BULK_LKG_TTL       = 5 * 60    # 5 min — serve from cache without rebuild
+_BULK_LKG_STALE_TTL = 20 * 60   # 20 min — serve stale while rebuild runs in bg
+
+
+def _bulk_lkg_invalidate(watchlist_id: str) -> None:
+    """Drop the cached bulk GET response for a watchlist.
+
+    Call on every mutation: /save, add-ticker, remove-ticker, bulk-add.
+    Idempotent: safe to call even when no entry is present.
+    """
+    _BULK_LKG.pop(watchlist_id, None)
+
+
+async def _rebuild_bulk_lkg_bg(watchlist_id: str) -> None:
+    """
+    Single-flight background task — rebuild the bulk GET LKG for watchlist_id.
+
+    Called when a stale (age ≥ _BULK_LKG_TTL) but still-serving (age <
+    _BULK_LKG_STALE_TTL) entry exists.  Strategy:
+      1. Pop the current LKG so the inner get_by_id_endpoint call runs the
+         full enrichment pipeline (no cached shortcut).
+      2. get_by_id_endpoint stores the fresh result in _BULK_LKG before
+         returning, replacing the prior entry atomically.
+      3. On any exception the prior LKG remains absent; the next browser GET
+         will rebuild inline (safe cold-start path).
+
+    _BULK_LKG_BUILDING guards against duplicate concurrent rebuilds.
+    """
+    try:
+        _BULK_LKG.pop(watchlist_id, None)
+        await get_by_id_endpoint(watchlist_id)
+    except Exception as _lkg_bg_err:
+        print(
+            f"[WATCHLIST_LKG] background rebuild failed wl={watchlist_id}: "
+            f"{_lkg_bg_err}"
+        )
+    finally:
+        _BULK_LKG_BUILDING.discard(watchlist_id)
+
 
 # ── News endpoint LKG (last-known-good) cache ────────────────────────────────
 # Keyed by watchlist_id (use "default" for the no-id endpoint).
@@ -1964,6 +2018,11 @@ async def save_endpoint(body: WatchlistSaveRequest):
     import asyncio as _aio
     global _UPLOAD_WARMUP_STATE
     result = save_watchlist(body.csv_data, body.analysis, body.watchlist_id, body.name)
+
+    # Invalidate bulk GET LKG — full watchlist was replaced via /save.
+    _saved_wl_id = (result or {}).get("watchlist_id") or body.watchlist_id or ""
+    if _saved_wl_id:
+        _bulk_lkg_invalidate(_saved_wl_id)
 
     # ── Background Stage2 warmup for symbols missing from LKG ─────────────────
     # Fires a non-blocking task so the upload response returns immediately.
@@ -5781,6 +5840,7 @@ async def add_ticker_endpoint(watchlist_id: str, body: _AddTickerBody):
         _rv_registry.pop(watchlist_id, None)
         _volmc_registry.pop(watchlist_id, None)
         _news_lkg.pop(watchlist_id, None)
+        _bulk_lkg_invalidate(watchlist_id)
 
         # Mark the new symbol as immediately due for the weekly FMP queue
         # (non-blocking row insert — actual FMP work follows below).
@@ -5868,6 +5928,7 @@ async def remove_ticker_endpoint(watchlist_id: str, ticker: str):
         _rv_registry.pop(watchlist_id, None)
         _volmc_registry.pop(watchlist_id, None)
         _news_lkg.pop(watchlist_id, None)
+        _bulk_lkg_invalidate(watchlist_id)
 
     return {
         "success":      True,
@@ -5984,6 +6045,7 @@ async def bulk_add_tickers_endpoint(watchlist_id: str, body: _BulkAddBody):
         _rv_registry.pop(watchlist_id, None)
         _volmc_registry.pop(watchlist_id, None)
         _news_lkg.pop(watchlist_id, None)
+        _bulk_lkg_invalidate(watchlist_id)
 
         # Optional theme assignment for all newly added tickers
         if body.theme:
@@ -6239,6 +6301,34 @@ async def get_by_id_endpoint(watchlist_id: str):
         return {"empty": True}
     _wl_load_ms = round((_t_get.monotonic() - _t0_get) * 1000)
 
+    # ── LKG-first: return cached response when version matches and not expired ─
+    # Version key = structural fingerprint of watchlist membership.  A change in
+    # updated_at or ticker_count means the watchlist was mutated; we fall through
+    # to a full rebuild rather than returning stale membership data.
+    _wl_version = (
+        f"{store.get('updated_at') or store.get('saved_at')}|"
+        f"{len(store.get('tickers', []))}"
+    )
+    _lkg_entry = _BULK_LKG.get(watchlist_id)
+    if _lkg_entry and _lkg_entry.get("version") == _wl_version:
+        _lkg_age_s = _t_get.monotonic() - _lkg_entry["ts"]
+        if _lkg_age_s < _BULK_LKG_STALE_TTL:
+            # Schedule exactly one background rebuild when the fresh window expires.
+            if _lkg_age_s >= _BULK_LKG_TTL and watchlist_id not in _BULK_LKG_BUILDING:
+                _BULK_LKG_BUILDING.add(watchlist_id)
+                _aio.create_task(_rebuild_bulk_lkg_bg(watchlist_id))
+                print(
+                    f"[WATCHLIST_LKG] stale_hit wl={watchlist_id} "
+                    f"age={round(_lkg_age_s)}s — background rebuild queued"
+                )
+            else:
+                print(
+                    f"[WATCHLIST_LKG] fresh_hit wl={watchlist_id} "
+                    f"age={round(_lkg_age_s)}s"
+                )
+            return _lkg_entry["payload"]
+    # LKG absent, version mismatch, or beyond STALE_TTL — run full pipeline.
+
     _t1_get = _t_get.monotonic()
     try:
         store = await _enrich_store_with_quotes(store)
@@ -6421,6 +6511,16 @@ async def get_by_id_endpoint(watchlist_id: str):
             {k: v for k, v in row.items() if k not in _BULK_CSV_STRIP}
             for row in _bulk_csv_out
         ]
+
+    # ── Persist result in LKG for sub-5-second subsequent GETs ──────────────
+    # Any concurrent background rebuild (_rebuild_bulk_lkg_bg) also lands here
+    # via the same code path; last write wins (both produce an equivalent result).
+    _BULK_LKG[watchlist_id] = {
+        "payload": store,
+        "ts":      _t_get.monotonic(),
+        "version": _wl_version,
+    }
+    _BULK_LKG_BUILDING.discard(watchlist_id)
 
     return store
 

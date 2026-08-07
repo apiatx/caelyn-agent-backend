@@ -4,6 +4,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from subscription import require_subscription
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -1565,6 +1566,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# GZipMiddleware is added last so it becomes the outermost wrapper.
+# It inspects Accept-Encoding: gzip on the request and compresses responses
+# ≥ 1 KB transparently.  It is a pure ASGI middleware (not BaseHTTPMiddleware)
+# so it is safe for StreamingResponse — it simply passes streaming chunks
+# through the gzip compressor chunk by chunk.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # ── Auth Endpoints ───────────────────────────────────────────────
 
