@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-08-07T17:24:42.419691+00:00",
+  "updated_at": "2026-08-07T17:38:21.896011+00:00",
   "symbols": {
     "TEST_MARA": {
       "symbol": "TEST_MARA",
@@ -36223,48 +36223,40 @@
     },
     "HIMX": {
       "symbol": "HIMX",
-      "provider": "tradier",
-      "canonical_history_provider": "tradier",
-      "canonical_history_provider_rank": 1,
+      "provider": "tradier_reaction",
+      "canonical_history_provider": "tradier_reaction",
+      "canonical_history_provider_rank": 3,
       "canonical_history_quality": "full_10y_tradier_unverified",
       "canonical_history_adjusted_status": "unknown",
       "canonical_history_refresh_mode": "incremental_daily_append",
-      "bar_count": 2518,
-      "oldest_bar_date": "2016-07-28",
-      "newest_bar_date": "2026-08-04",
+      "bar_count": 2519,
+      "oldest_bar_date": "2016-08-01",
+      "newest_bar_date": "2026-08-07",
       "years_available": 10.0,
-      "fetched_at": "2026-08-05T05:55:29.665754+00:00",
-      "stale_after": "2026-08-07T05:55:29.665761+00:00",
+      "fetched_at": "2026-08-07T17:38:21.757930+00:00",
+      "stale_after": "2026-08-09T17:38:21.757939+00:00",
       "history_status": "available_10y_fresh",
       "base_history_status": "available_10y",
       "error_reason": null,
-      "source_priority": 1,
+      "source_priority": 3,
       "is_actual_limit": false,
       "is_lifetime_under_10y": false,
       "is_provider_cap": false,
       "depth_confidence": 1.0,
       "fib_scope": "full_10y",
-      "last_attempt_at": "2026-08-05T05:55:29.665754+00:00",
-      "next_retry_at": "2026-08-07T05:55:29.665761+00:00",
+      "last_attempt_at": "2026-08-07T17:38:21.757930+00:00",
+      "next_retry_at": "2026-08-09T17:38:21.757939+00:00",
       "cache_usable": true,
       "is_10y_complete": true,
-      "volume_change_1d_pct": 89.994437,
-      "volume_change_7d_pct": 28.459837,
-      "volume_change_30d_pct": -63.524205,
-      "volume_acceleration_pp": 91.984042,
-      "volume_metrics_as_of": "2026-08-04",
+      "volume_change_1d_pct": 13.481522,
+      "volume_change_7d_pct": 61.899189,
+      "volume_change_30d_pct": -57.924629,
+      "volume_acceleration_pp": 119.823818,
+      "volume_metrics_as_of": "2026-08-06",
       "volume_metrics_status": "ok",
-      "change_7d": 18.36394,
-      "change_30d": 7.8327,
+      "change_7d": 9.728868,
+      "change_30d": -2.064057,
       "comparison_close_tail": [
-        [
-          "2026-05-04",
-          11.56
-        ],
-        [
-          "2026-05-05",
-          12.18
-        ],
         [
           "2026-05-06",
           12.33
@@ -36512,6 +36504,14 @@
         [
           "2026-08-04",
           14.18
+        ],
+        [
+          "2026-08-05",
+          13.35
+        ],
+        [
+          "2026-08-06",
+          13.76
         ]
       ]
     },
@@ -63565,48 +63565,40 @@
     },
     "ORA": {
       "symbol": "ORA",
-      "provider": "tradier",
-      "canonical_history_provider": "tradier",
-      "canonical_history_provider_rank": 1,
+      "provider": "tradier_reaction",
+      "canonical_history_provider": "tradier_reaction",
+      "canonical_history_provider_rank": 3,
       "canonical_history_quality": "full_10y_tradier_unverified",
       "canonical_history_adjusted_status": "unknown",
       "canonical_history_refresh_mode": "incremental_daily_append",
-      "bar_count": 2518,
-      "oldest_bar_date": "2016-07-28",
-      "newest_bar_date": "2026-08-04",
+      "bar_count": 2519,
+      "oldest_bar_date": "2016-08-01",
+      "newest_bar_date": "2026-08-07",
       "years_available": 10.0,
-      "fetched_at": "2026-08-05T06:05:21.822764+00:00",
-      "stale_after": "2026-08-07T06:05:21.822773+00:00",
+      "fetched_at": "2026-08-07T17:38:07.244532+00:00",
+      "stale_after": "2026-08-09T17:38:07.244543+00:00",
       "history_status": "available_10y_fresh",
       "base_history_status": "available_10y",
       "error_reason": null,
-      "source_priority": 1,
+      "source_priority": 3,
       "is_actual_limit": false,
       "is_lifetime_under_10y": false,
       "is_provider_cap": false,
       "depth_confidence": 1.0,
       "fib_scope": "full_10y",
-      "last_attempt_at": "2026-08-05T06:05:21.822764+00:00",
-      "next_retry_at": "2026-08-07T06:05:21.822773+00:00",
+      "last_attempt_at": "2026-08-07T17:38:07.244532+00:00",
+      "next_retry_at": "2026-08-09T17:38:07.244543+00:00",
       "cache_usable": true,
       "is_10y_complete": true,
-      "volume_change_1d_pct": -8.369685,
-      "volume_change_7d_pct": 29.532819,
-      "volume_change_30d_pct": -9.512665,
-      "volume_acceleration_pp": 39.045484,
-      "volume_metrics_as_of": "2026-08-04",
+      "volume_change_1d_pct": 51.559583,
+      "volume_change_7d_pct": 35.405296,
+      "volume_change_30d_pct": -3.851582,
+      "volume_acceleration_pp": 39.256878,
+      "volume_metrics_as_of": "2026-08-06",
       "volume_metrics_status": "ok",
-      "change_7d": 1.635016,
-      "change_30d": -11.08742,
+      "change_7d": 11.032985,
+      "change_30d": -2.443899,
       "comparison_close_tail": [
-        [
-          "2026-05-04",
-          114.7
-        ],
-        [
-          "2026-05-05",
-          115.34
-        ],
         [
           "2026-05-06",
           114.86
@@ -63854,6 +63846,14 @@
         [
           "2026-08-04",
           100.08
+        ],
+        [
+          "2026-08-05",
+          98.02
+        ],
+        [
+          "2026-08-06",
+          107.38
         ]
       ]
     },
@@ -77489,48 +77489,40 @@
     },
     "SEI": {
       "symbol": "SEI",
-      "provider": "tradier",
-      "canonical_history_provider": "tradier",
-      "canonical_history_provider_rank": 1,
+      "provider": "tradier_reaction",
+      "canonical_history_provider": "tradier_reaction",
+      "canonical_history_provider_rank": 3,
       "canonical_history_quality": "full_10y_tradier_unverified",
       "canonical_history_adjusted_status": "unknown",
       "canonical_history_refresh_mode": "incremental_daily_append",
-      "bar_count": 2319,
+      "bar_count": 2322,
       "oldest_bar_date": "2017-05-12",
-      "newest_bar_date": "2026-08-04",
+      "newest_bar_date": "2026-08-07",
       "years_available": 9.2,
-      "fetched_at": "2026-08-05T06:11:45.194023+00:00",
-      "stale_after": "2026-08-07T06:11:45.194031+00:00",
+      "fetched_at": "2026-08-07T17:37:50.088036+00:00",
+      "stale_after": "2026-08-09T17:37:50.088044+00:00",
       "history_status": "available_10y_fresh",
       "base_history_status": "available_10y",
       "error_reason": null,
-      "source_priority": 1,
+      "source_priority": 3,
       "is_actual_limit": false,
       "is_lifetime_under_10y": false,
       "is_provider_cap": false,
       "depth_confidence": 1.0,
       "fib_scope": "full_10y",
-      "last_attempt_at": "2026-08-05T06:11:45.194023+00:00",
-      "next_retry_at": "2026-08-07T06:11:45.194031+00:00",
+      "last_attempt_at": "2026-08-07T17:37:50.088036+00:00",
+      "next_retry_at": "2026-08-09T17:37:50.088044+00:00",
       "cache_usable": true,
       "is_10y_complete": true,
-      "volume_change_1d_pct": 9.275033,
-      "volume_change_7d_pct": 67.613022,
-      "volume_change_30d_pct": 46.966815,
-      "volume_acceleration_pp": 20.646207,
-      "volume_metrics_as_of": "2026-08-04",
+      "volume_change_1d_pct": 12.093396,
+      "volume_change_7d_pct": 25.375067,
+      "volume_change_30d_pct": 51.673922,
+      "volume_acceleration_pp": -26.298855,
+      "volume_metrics_as_of": "2026-08-06",
       "volume_metrics_status": "ok",
-      "change_7d": 22.426548,
-      "change_30d": -13.796696,
+      "change_7d": 11.173947,
+      "change_30d": -12.76205,
       "comparison_close_tail": [
-        [
-          "2026-05-04",
-          74.48
-        ],
-        [
-          "2026-05-05",
-          75.68
-        ],
         [
           "2026-05-06",
           77.45
@@ -77778,6 +77770,14 @@
         [
           "2026-08-04",
           57.92
+        ],
+        [
+          "2026-08-05",
+          55.57
+        ],
+        [
+          "2026-08-06",
+          57.01
         ]
       ]
     },
@@ -105899,48 +105899,40 @@
     },
     "VST": {
       "symbol": "VST",
-      "provider": "tradier",
-      "canonical_history_provider": "tradier",
-      "canonical_history_provider_rank": 1,
+      "provider": "tradier_reaction",
+      "canonical_history_provider": "tradier_reaction",
+      "canonical_history_provider_rank": 3,
       "canonical_history_quality": "full_10y_tradier_unverified",
       "canonical_history_adjusted_status": "unknown",
       "canonical_history_refresh_mode": "incremental_daily_append",
-      "bar_count": 2301,
+      "bar_count": 2303,
       "oldest_bar_date": "2017-06-09",
-      "newest_bar_date": "2026-08-05",
+      "newest_bar_date": "2026-08-07",
       "years_available": 9.1,
-      "fetched_at": "2026-08-06T02:23:06.840048+00:00",
-      "stale_after": "2026-08-08T02:23:06.840058+00:00",
+      "fetched_at": "2026-08-07T17:37:57.001784+00:00",
+      "stale_after": "2026-08-09T17:37:57.001793+00:00",
       "history_status": "available_10y_fresh",
       "base_history_status": "available_10y",
       "error_reason": null,
-      "source_priority": 1,
+      "source_priority": 3,
       "is_actual_limit": false,
       "is_lifetime_under_10y": false,
       "is_provider_cap": false,
       "depth_confidence": 1.0,
       "fib_scope": "full_10y",
-      "last_attempt_at": "2026-08-06T02:23:06.840048+00:00",
-      "next_retry_at": "2026-08-08T02:23:06.840058+00:00",
+      "last_attempt_at": "2026-08-07T17:37:57.001784+00:00",
+      "next_retry_at": "2026-08-09T17:37:57.001793+00:00",
       "cache_usable": true,
       "is_10y_complete": true,
-      "volume_change_1d_pct": 185.982034,
-      "volume_change_7d_pct": 49.870586,
-      "volume_change_30d_pct": -18.38881,
-      "volume_acceleration_pp": 68.259396,
-      "volume_metrics_as_of": "2026-08-04",
+      "volume_change_1d_pct": -10.977133,
+      "volume_change_7d_pct": 61.346273,
+      "volume_change_30d_pct": -12.390092,
+      "volume_acceleration_pp": 73.736365,
+      "volume_metrics_as_of": "2026-08-06",
       "volume_metrics_status": "ok",
-      "change_7d": -3.639666,
-      "change_30d": -5.177094,
+      "change_7d": -4.871484,
+      "change_30d": -9.214666,
       "comparison_close_tail": [
-        [
-          "2026-05-04",
-          160.85
-        ],
-        [
-          "2026-05-05",
-          160.38
-        ],
         [
           "2026-05-06",
           158.29
@@ -106188,6 +106180,14 @@
         [
           "2026-08-04",
           143.23
+        ],
+        [
+          "2026-08-05",
+          140.58
+        ],
+        [
+          "2026-08-06",
+          141.38
         ]
       ]
     },
