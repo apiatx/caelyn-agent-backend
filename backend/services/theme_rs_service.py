@@ -762,11 +762,11 @@ async def _fetch_tradier_daily_history(symbol: str, days: int = 400) -> list[dic
     Returns sorted {date, close} bars.
     Cached 1h.
 
-    [TRADIER_UNMANAGED] This function uses a raw httpx call and does NOT go
-    through TRADIER_LIMITER.  Calls are visible in /api/rate-status under
-    unmanaged_tradier_paths.  Routing through the limiter is future work.
+    All physical HTTP calls are now routed through TRADIER_LIMITER (maintenance lane).
+    Previously this was an unmanaged bypass — as of the Tradier contention fix it counts
+    against the global 110-RPM ceiling like every other provider call.
 
-    Current call sites (V4.2.5.6):
+    Current call sites:
       - _fetch_proxy_history() Step 2 — only reached when canonical AND FMP both fail
       - watchlist_stage2_service._fetch_bars() Step 4 — only if canonical+FMP both fail
     This function is kept as a valid last-resort fallback for symbols not yet in the
@@ -785,6 +785,17 @@ async def _fetch_tradier_daily_history(symbol: str, days: int = 400) -> list[dic
     start = (date.today() - timedelta(days=days)).isoformat()
     end   = date.today().isoformat()
     base  = _tradier_base()
+
+    # Route through the global rate-limiter (maintenance lane) before any network I/O.
+    # Non-fatal guard: if the limiter module is unavailable we proceed rather than
+    # silently drop a last-resort fallback that the caller already needs.
+    try:
+        from data.tradier_provider import TRADIER_LIMITER as _hist_lim
+        from data.tradier_budget import record_call as _hist_rb
+        await _hist_lim.acquire()
+        _hist_rb("maintenance")
+    except Exception as _lim_exc:
+        print(f"[THEME_RS][Tradier hist] limiter unavailable ({_lim_exc}); proceeding unmetered")
 
     try:
         async with httpx.AsyncClient(timeout=12.0) as client:
@@ -838,9 +849,9 @@ async def _fetch_intraday_bars(sym: str) -> list[dict]:
     Cached 10 min per symbol per trading day — safe to call from the 60-s 1D
     warmup loop without hammering the Tradier rate-limit bucket.
 
-    [TRADIER_UNMANAGED] Uses raw httpx gated by _INTRADAY_SEM (≤20 concurrent).
-    Intentionally isolated from TRADIER_LIMITER for the 1D RS warmup pipeline.
-    Visible in /api/rate-status under unmanaged_tradier_paths.
+    Concurrency is gated by _INTRADAY_SEM (≤20 concurrent).  Every physical HTTP
+    call also passes through TRADIER_LIMITER (maintenance lane) so it counts against
+    the shared 110-RPM global ceiling.  Previously this was an unmanaged bypass.
     """
     from datetime import date as _d, datetime, timezone, timedelta as _td
 
@@ -857,7 +868,17 @@ async def _fetch_intraday_bars(sym: str) -> list[dict]:
 
     base = _tradier_base()
     try:
-        async with _INTRADAY_SEM:   # ≤20 concurrent Tradier timesales calls
+        async with _INTRADAY_SEM:   # ≤20 concurrent; holds slot while waiting for limiter
+            # Route through the global rate-limiter (maintenance lane) before any network
+            # I/O.  The semaphore ensures ≤20 tasks compete for limiter slots at once,
+            # smoothing the burst on cold starts (up to ~222 proxy symbols).
+            try:
+                from data.tradier_provider import TRADIER_LIMITER as _intra_lim
+                from data.tradier_budget import record_call as _intra_rb
+                await _intra_lim.acquire()
+                _intra_rb("maintenance")
+            except Exception as _lim_exc:
+                print(f"[THEME_RS][intraday] limiter unavailable ({_lim_exc}); proceeding unmetered")
             async with httpx.AsyncClient(timeout=12.0) as client:
                 resp = await client.get(
                     f"{base}/markets/timesales",

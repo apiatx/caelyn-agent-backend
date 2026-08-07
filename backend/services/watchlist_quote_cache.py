@@ -350,12 +350,25 @@ async def _fetch_via_home_service(symbols: list[str]) -> dict[str, dict]:
 
 
 # ── Legacy direct-Tradier path (used only if home_service isn't ready) ─────
+# Fires at most once per cold restart.  Physical HTTP is now routed through
+# TRADIER_LIMITER (reserved lane) so it counts against the 110-RPM global ceiling.
 
 async def _fetch_batch_direct(symbols: list[str], api_key: str) -> dict[str, dict]:
     symbols_str = ",".join(s.upper() for s in symbols)
     url = "https://api.tradier.com/v1/markets/quotes"
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
     now_str = datetime.now(timezone.utc).isoformat() + "Z"
+
+    # Route through the global rate-limiter before any network I/O.
+    # Non-fatal: startup-only path — if the limiter is unavailable we still fire
+    # the quote batch rather than leave the cache cold.
+    try:
+        from data.tradier_provider import TRADIER_LIMITER as _wqc_lim
+        from data.tradier_budget import record_call as _wqc_rb
+        await _wqc_lim.acquire()
+        _wqc_rb("reserved")
+    except Exception as _lim_exc:
+        print(f"[WQ_CACHE] limiter unavailable ({_lim_exc}); proceeding unmetered")
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:

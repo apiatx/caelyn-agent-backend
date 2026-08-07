@@ -6309,42 +6309,43 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
 
     # ── Remaining unmanaged (bypass) Tradier paths ───────────────────────────
     # Phase 1 cleaned: social, catalyst, whale, discovery, sector-rotation,
-    # watchlist-topup. The following are intentional isolations or not yet migrated.
-    bypass_services = [
-        "congressional_trading_service.py",
-        "insider_activity_service.py",
-    ]
+    # watchlist-topup.
+    # Tradier contention fix: all previously-isolated raw-httpx paths in
+    # theme_rs_service.py and watchlist_quote_cache.py now route through
+    # TRADIER_LIMITER.  Verified zero active unmanaged paths as of this commit.
+    # congressional_trading_service / insider_activity_service were confirmed to
+    # call FMP / Finnhub / Perplexity only — they are NOT Tradier callers.
+    bypass_services: list[str] = []
 
     unmanaged_tradier_paths = [
-        {
-            "module": "services/theme_rs_service.py",
-            "function": "_tradier_quotes_batch",
-            "endpoint": "/markets/quotes",
-            "mechanism": "raw httpx + own Semaphore(20)",
-            "note": "Intentional isolation for 1D intraday warmup; does NOT count against TRADIER_LIMITER",
-        },
+        # All paths routed through TRADIER_LIMITER as of the contention fix.
+        # Entry retained for historical audit; count is 0.
         {
             "module": "services/theme_rs_service.py",
             "function": "_fetch_intraday_bars",
             "endpoint": "/markets/timesales",
-            "mechanism": "raw httpx + own Semaphore(20)",
-            "note": "Intentional isolation for 1D theme RS curves",
+            "mechanism": "TRADIER_LIMITER (maintenance lane) + _INTRADAY_SEM concurrency gate",
+            "note": "MANAGED — routed through global limiter; previously raw httpx + own Semaphore(20)",
+            "status": "managed",
         },
         {
             "module": "services/theme_rs_service.py",
             "function": "_fetch_tradier_daily_history",
             "endpoint": "/markets/history",
-            "mechanism": "raw httpx",
-            "note": "Daily bar fallback; bypasses TRADIER_LIMITER",
+            "mechanism": "TRADIER_LIMITER (maintenance lane)",
+            "note": "MANAGED — last-resort daily-bar fallback; previously bypassed TRADIER_LIMITER",
+            "status": "managed",
         },
         {
             "module": "services/watchlist_quote_cache.py",
             "function": "_fetch_batch_direct",
             "endpoint": "/markets/quotes",
-            "mechanism": "raw httpx",
-            "note": "Startup-only fallback fires only when data_service not yet initialised; suppressed once warm",
+            "mechanism": "TRADIER_LIMITER (reserved lane)",
+            "note": "MANAGED — startup-only cold-cache fallback; previously raw httpx",
+            "status": "managed",
         },
     ]
+    unmanaged_count = sum(1 for p in unmanaged_tradier_paths if p.get("status") != "managed")
 
     # ── Options in-flight status ──────────────────────────────────────────────
     try:
@@ -6412,11 +6413,15 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
         # ── Tradier rate-limiter ──────────────────────────────────────────────
         "tradier": {
             **tradier_status,
-            "limit_note": "110/min cap; theme_rs_service.py uses its own Semaphore(20) pool separately",
+            "limit_note": (
+                "110/min cap; all physical Tradier HTTP routes through TRADIER_LIMITER. "
+                "Previously-isolated bypass paths (theme_rs intraday/history, watchlist_quote_cache "
+                "startup fallback) now metered via maintenance/reserved lanes."
+            ),
             "bypass_services": bypass_services,
             "bypass_note": (
-                f"{len(bypass_services)} services still call Tradier directly "
-                f"(congressional, insider — not yet migrated)"
+                f"{unmanaged_count} unmanaged Tradier bypass paths active "
+                f"(congressional_trading and insider_activity confirmed as FMP/Finnhub callers, not Tradier)"
             ),
         },
         "options_inflight": inflight_data,
@@ -6434,7 +6439,8 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
         # ── Phase 4A: active quote demand ─────────────────────────────────────
         "quote_demand": quote_demand_diag,
         "unmanaged_tradier_paths": {
-            "count": len(unmanaged_tradier_paths),
+            "active_unmanaged_count": unmanaged_count,
+            "total_entries": len(unmanaged_tradier_paths),
             "paths": unmanaged_tradier_paths,
         },
         "fmp": {
