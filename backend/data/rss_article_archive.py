@@ -51,20 +51,26 @@ def _sanitize_url(url: str | None) -> str | None:
 
 
 _DB_URL = _sanitize_url(os.getenv("NEON_DATABASE_URL") or os.getenv("DATABASE_URL"))
-# ThreadedConnectionPool is thread-safe (uses internal locking on getconn/putconn).
-# SimpleConnectionPool is NOT — concurrent asyncio.to_thread workers calling
-# getconn/putconn simultaneously corrupt its C-level internals → malloc crash →
-# SIGABRT.  The RSS sweeper dispatches many upsert_with_cache calls concurrently
-# via asyncio.to_thread, so thread-safety is required here.
+
+# Pool design notes:
+#  - ThreadedConnectionPool: thread-safe internally (getconn/putconn use a lock).
+#  - maxconn=16: slightly above the sweeper's _SWEEP_SEM_SIZE=15 so pool exhaustion
+#    does not occur in steady state.
+#  - CRITICAL — never call closeall() when PoolError (pool exhausted) is raised.
+#    closeall() destroys connections held by OTHER threads → "connection already
+#    closed" in C extension code → malloc heap corruption → SIGABRT.
+#    Only close the ONE bad connection via putconn(conn, close=True).
 _pool: Any = None
-_pool_lock: Any = None  # threading.Lock, created on first use to avoid import-time cost
+_pool_lock: Any = None  # threading.Lock, lazily created
+
+
+import threading as _threading
 
 
 def _get_pool_lock():
     global _pool_lock
     if _pool_lock is None:
-        import threading
-        _pool_lock = threading.Lock()
+        _pool_lock = _threading.Lock()
     return _pool_lock
 
 
@@ -73,38 +79,53 @@ def _get_conn():
     if not _DB_URL or not _PSYCOPG2_OK:
         return None
     lock = _get_pool_lock()
-    for _ in range(2):
-        with lock:
-            if _pool is None:
-                try:
-                    _pool = _pg_pool.ThreadedConnectionPool(1, 5, _DB_URL)
-                except Exception as e:
-                    print(f"[RSS_ARCHIVE] pool creation failed: {e}")
-                    return None
-            local_pool = _pool
+
+    # Create pool on first use (or after it was closed).
+    with lock:
+        if _pool is None:
+            try:
+                _pool = _pg_pool.ThreadedConnectionPool(1, 16, _DB_URL)
+            except Exception as e:
+                print(f"[RSS_ARCHIVE] pool creation failed: {e}")
+                return None
+        local_pool = _pool
+
+    # Acquire a connection.  PoolError means all slots are in use — return None
+    # so the caller skips the DB write.  NEVER call closeall() on PoolError because
+    # that would destroy connections currently held by other threads.
+    conn = None
+    try:
+        conn = local_pool.getconn()
+    except _pg_pool.PoolError:
+        return None
+    except Exception as e:
+        print(f"[RSS_ARCHIVE] getconn error: {e}")
+        return None
+
+    # Validate the individual connection with a lightweight ping.
+    # If it is stale, close only this connection (putconn close=True) and return
+    # None.  Do NOT call closeall() — that would destroy other threads' connections.
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.close()
+        conn.commit()
+        return conn
+    except Exception:
         try:
-            conn = local_pool.getconn()
-            cur = conn.cursor()
-            cur.execute("SELECT 1")
-            cur.close()
-            conn.commit()
-            return conn
+            local_pool.putconn(conn, close=True)
         except Exception:
-            with lock:
-                if _pool is local_pool:
-                    try:
-                        _pool.closeall()
-                    except Exception:
-                        pass
-                    _pool = None
-    return None
+            pass
+        return None
 
 
 def _put_conn(conn):
+    if conn is None:
+        return
     lock = _get_pool_lock()
     with lock:
         local_pool = _pool
-    if local_pool and conn:
+    if local_pool:
         try:
             local_pool.putconn(conn)
         except Exception:
