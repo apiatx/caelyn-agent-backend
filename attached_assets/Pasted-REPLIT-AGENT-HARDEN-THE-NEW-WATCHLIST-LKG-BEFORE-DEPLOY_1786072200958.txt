@@ -1,0 +1,637 @@
+REPLIT AGENT — HARDEN THE NEW WATCHLIST LKG BEFORE DEPLOYMENT: PRESERVE LKG DURING REBUILDS, CLOSE CACHE-INVALIDATION GAPS, AND VERIFY STREAMING
+
+Work only in the live backend Replit workspace:
+
+`/home/runner/workspace`
+
+This is a focused correction on top of:
+
+```text
+09f416b4 perf: make watchlist detail LKG-first
+```
+
+Do not redesign the Watchlist architecture.
+
+Do not remove the LKG.
+
+Do not remove gzip unless runtime evidence proves it breaks an existing streaming contract.
+
+Do not modify frontend files.
+
+Do not modify taxonomy structure.
+
+Do not push.
+
+---
+
+# Mandatory first step
+
+1. Find and read backend `AGENTS.md` completely.
+2. Follow its report and repository instructions.
+3. Record:
+
+   * branch
+   * HEAD
+   * `git status -sb`
+   * recent commits
+4. Confirm live HEAD contains:
+
+   ```text
+   cab90aa1 fix: restore backend service availability
+   09f416b4 perf: make watchlist detail LKG-first
+   ```
+5. Preserve unrelated live changes.
+
+---
+
+# Current accepted behavior to preserve
+
+The new Watchlist performance architecture is correct in principle:
+
+```text
+GET /api/watchlist/{id}
+
+valid LKG
+→ fast response
+
+stale LKG
+→ fast response
+→ one background rebuild
+
+cold structural miss
+→ full enrichment
+→ store LKG
+```
+
+Measured dev behavior from the previous task:
+
+```text
+462 tickers
+full enrichment ≈ 3.9 s
+raw response ≈ 6.3 MB
+gzip response ≈ 1.0 MB
+fresh LKG hit = effectively immediate at route level
+```
+
+Preserve this.
+
+Do not revert to rebuilding the entire Watchlist on every GET.
+
+---
+
+# Proven defect 1 — background rebuild destroys the LKG before success
+
+Current `_rebuild_bulk_lkg_bg()` does approximately:
+
+```python
+_BULK_LKG.pop(watchlist_id, None)
+await get_by_id_endpoint(watchlist_id)
+```
+
+This is wrong.
+
+It creates two failure modes:
+
+```text
+background rebuild fails
+→ valid prior LKG is lost
+
+background rebuild is in progress
++ another browser GET arrives
+→ no LKG exists
+→ browser can enter full inline enrichment
+```
+
+The current test suite explicitly asserts:
+
+```text
+rebuild failure leaves LKG absent
+```
+
+That assertion must be reversed.
+
+---
+
+# Contract 1 — copy-on-success LKG rebuild
+
+A background rebuild must never remove the currently serving LKG before the replacement is complete.
+
+Required model:
+
+```text
+old LKG remains readable
+        ↓
+one independent rebuild runs
+        ↓
+new response fully succeeds
+        ↓
+atomically replace old LKG entry
+```
+
+On failure:
+
+```text
+old LKG remains untouched
+```
+
+Do not mutate the serving entry in place.
+
+Do not temporarily remove it.
+
+---
+
+# Contract 2 — separate "build response" from "serve response"
+
+Do not recursively call the public GET route by deleting its cache entry.
+
+Refactor minimally so there is one internal production function that performs the expensive build, for example:
+
+```python
+async def _build_bulk_watchlist_response(watchlist_id: str, store: dict | None = None) -> dict:
+    ...
+```
+
+Naming should follow current conventions.
+
+Then:
+
+```text
+GET route
+→ evaluate LKG/version
+→ if miss: call internal builder
+→ store
+→ return
+
+background refresh
+→ call same internal builder directly
+→ atomically replace LKG on success
+```
+
+There must remain one canonical enrichment implementation.
+
+Do not duplicate the enrichment pipeline.
+
+Do not create a new endpoint.
+
+---
+
+# Contract 3 — true single-flight behavior
+
+While a background rebuild is running:
+
+```text
+browser GET #1 → stale LKG immediately
+browser GET #2 → stale LKG immediately
+browser GET #10 → stale LKG immediately
+```
+
+All of them must continue receiving the old LKG.
+
+Exactly one rebuild runs.
+
+No caller may start a second full enrichment merely because `_BULK_LKG_BUILDING` contains the ID.
+
+Required production test:
+
+1. Seed stale LKG.
+2. Pause builder with an async event.
+3. Trigger GET causing rebuild.
+4. While rebuild remains paused, execute 10 GETs.
+5. All 10 return old payload.
+6. Builder invocation count remains exactly 1.
+7. Release builder.
+8. New payload replaces old payload.
+
+Do not simulate this only by manipulating sets.
+
+Test the real route/helper boundary.
+
+---
+
+# Contract 4 — rebuild failure preserves LKG
+
+Inject a builder exception.
+
+Expected:
+
+```text
+old entry still exists
+old payload unchanged
+old timestamp remains original
+BUILDING flag clears
+next GET returns old LKG immediately
+future rebuild may retry
+```
+
+Do not set its timestamp to "now" merely because refresh failed.
+
+Preserve truthful freshness.
+
+Change the existing test currently named/behaving like:
+
+```text
+rebuild_failure_leaves_lkg_absent
+```
+
+to assert preservation instead.
+
+---
+
+# Contract 5 — do not force browser-blocking rebuild merely because an LKG is old
+
+For a structurally valid LKG:
+
+```text
+fresh
+→ serve
+
+stale
+→ serve + background rebuild
+
+very stale because rebuilds have failed
+→ still serve + background rebuild
+```
+
+Do not turn a valid LKG into a blocking cache miss solely because its age exceeded 20 minutes.
+
+A structural/version mismatch is different and may require a cold rebuild because membership correctness matters.
+
+Age should drive refresh urgency, not destroy availability.
+
+Preserve truthful age/staleness diagnostics.
+
+If the project requires a hard maximum for legal/security correctness, document it; otherwise use true stale-while-revalidate semantics.
+
+---
+
+# Contract 6 — structural changes still invalidate immediately
+
+Preserve current invalidation for:
+
+```text
+POST /api/watchlist/save
+POST /api/watchlist/{id}/ticker
+DELETE /api/watchlist/{id}/ticker/{symbol}
+POST /api/watchlist/{id}/tickers
+```
+
+Ticker membership must never remain stale after these operations.
+
+---
+
+# Proven invalidation gap — taxonomy/theme mutation
+
+The bulk Watchlist response contains:
+
+```text
+canonical_theme_id
+canonical_theme_name
+primary_theme_id
+theme_ids
+subtheme_ids
+```
+
+Theme/taxonomy assignment changes therefore materially change the cached payload.
+
+Audit all CURRENT production write paths that can alter those fields, including at minimum:
+
+```text
+existing Watchlist theme PATCH route
+PUT /api/themes/admin/ticker-taxonomy/{ticker}
+category override / primary-theme write path
+```
+
+After a successful authoritative theme write, affected Watchlist LKG data must be invalidated.
+
+Do not introduce a new source of truth.
+
+Preferred approach:
+
+* reuse a neutral existing invalidation boundary if one exists;
+* otherwise expose a narrowly scoped Watchlist bulk-cache invalidation helper through an architecture-safe module.
+
+Avoid circular imports.
+
+If resolving all Watchlists containing a ticker is expensive, clearing the in-process bulk-Watchlist LKG on an infrequent manual taxonomy mutation is acceptable and safer than serving wrong taxonomy.
+
+Do not clear it for read operations.
+
+---
+
+# Contract 7 — background manual-add hydration must refresh the LKG
+
+Audit:
+
+```text
+_priority_hydrate_symbols()
+```
+
+A manual add invalidates the LKG immediately, then background work hydrates:
+
+```text
+quote
+technical
+fundamentals
+market cap
+options
+```
+
+Potential bug:
+
+```text
+ticker added
+→ first GET builds new LKG while hydration is still pending
+→ hydration completes
+→ LKG still contains pending/incomplete row for up to TTL
+```
+
+If production behavior confirms this, invalidate or replace the bulk LKG when the relevant background hydration finishes.
+
+Do not invalidate on every tiny quote event.
+
+The frontend realtime quote channel already owns normal price freshness.
+
+The goal is specifically to surface newly completed structural/technical/fundamental hydration promptly.
+
+Add a focused regression test.
+
+---
+
+# Contract 8 — audit other material bulk-row writers
+
+List all background or admin processes that update fields exposed in the bulk Watchlist response.
+
+Classify them:
+
+```text
+HIGH FREQUENCY / realtime
+→ do NOT invalidate whole LKG
+→ frontend overlay or existing cache architecture owns freshness
+
+LOW FREQUENCY / material row mutation
+→ invalidate/rebuild bulk LKG where necessary
+```
+
+Examples to inspect:
+
+```text
+manual Stage2 hydration
+manual fundamentals hydration
+theme/category edits
+Watchlist analysis save/refresh completion
+```
+
+Do not broadly attach invalidation to every background job.
+
+---
+
+# Contract 9 — verify global GZipMiddleware against streaming endpoints
+
+`09f416b4` added:
+
+```python
+GZipMiddleware(minimum_size=1000)
+```
+
+The project has existing streaming response behavior, especially `/api/query`, and has previously had middleware-related streaming regressions.
+
+Do not rely on "pure ASGI" as proof.
+
+Run an actual controlled streaming test.
+
+Verify:
+
+```text
+/api/query still begins streaming promptly
+keepalive chunks are not delayed until full completion
+final JSON/result arrives intact
+no empty-response regression
+client disconnect behavior remains correct
+```
+
+Also inspect all endpoints using:
+
+```python
+StreamingResponse
+text/event-stream
+```
+
+If the installed Starlette/FastAPI GZipMiddleware automatically excludes SSE, prove it using the installed version/source or live response headers.
+
+If normal StreamingResponse endpoints are compressed, prove they still stream incrementally enough for their contract.
+
+If gzip causes a streaming regression:
+
+* do not remove Watchlist compression entirely;
+* use the smallest architecture-compatible exclusion or response-compression strategy.
+
+Do not hand-roll compressed JSON unless necessary.
+
+---
+
+# Contract 10 — benchmark the actual HTTP response, not only route execution
+
+For a warm LKG hit measure through the real server:
+
+```text
+route computation time
+JSON serialization time
+gzip time
+TTFB
+total HTTP response time
+raw bytes
+wire bytes
+```
+
+The cached value is still a large Python dict, so FastAPI must serialize it and gzip it on every response.
+
+Report whether serialization/compression is now a meaningful fraction of latency.
+
+Do not optimize it unless measurement proves it is significant.
+
+---
+
+# Required tests
+
+Replace the current mostly state-manipulation tests with production-boundary coverage where practical.
+
+At minimum:
+
+1. Fresh LKG returns without builder call.
+2. Stale LKG returns immediately.
+3. Stale LKG schedules exactly one builder.
+4. Old LKG remains present throughout rebuild.
+5. 10 GETs during rebuild all receive old LKG.
+6. 10 GETs during rebuild produce one builder call.
+7. Successful build atomically replaces old LKG.
+8. Failed build preserves old payload.
+9. Failed build preserves old timestamp.
+10. Failed build clears BUILDING.
+11. Very stale valid LKG still serves while refresh retries.
+12. Version mismatch does not serve structurally stale membership.
+13. Add invalidates.
+14. Remove invalidates.
+15. Bulk add invalidates.
+16. Save invalidates.
+17. Existing Watchlist theme edit invalidates.
+18. Atomic taxonomy assignment invalidates affected bulk LKG.
+19. Manual-add background hydration exposes refreshed row without waiting five minutes.
+20. Different Watchlists do not cross-contaminate.
+21. No duplicate full build during background rebuild.
+22. Rebuild function uses same canonical enrichment implementation as cold GET.
+23. No realtime earnings behavior changes.
+24. No RSS sweeper behavior changes.
+25. Streaming `/api/query` remains functional with gzip enabled.
+
+---
+
+# Live validation
+
+Use the Primary Watchlist.
+
+Scenario A:
+
+```text
+cold build
+→ seed LKG
+```
+
+Scenario B:
+
+```text
+force stale timestamp
+→ GET
+→ immediate stale response
+→ background build deliberately held open
+→ execute 10 more GETs
+```
+
+Required:
+
+```text
+all 10 fast
+1 builder
+old LKG remains in cache
+```
+
+Scenario C:
+
+```text
+force builder failure
+```
+
+Required:
+
+```text
+old LKG remains
+next GET fast
+```
+
+Scenario D:
+
+```text
+successful theme assignment
+→ next Watchlist GET reflects new taxonomy
+```
+
+Scenario E:
+
+```text
+manual add
+→ initial pending row
+→ hydration completes
+→ subsequent GET reflects completed hydration without waiting TTL
+```
+
+Scenario F:
+
+```text
+/api/query streaming request with gzip middleware enabled
+```
+
+Required:
+
+```text
+stream begins
+keepalive behavior preserved
+complete response arrives
+```
+
+---
+
+# Performance targets
+
+Preserve or improve:
+
+```text
+warm LKG server lookup: effectively immediate
+HTTP TTFB: target <500 ms
+wire size: approximately 1 MB or better
+full rebuild: current ≈3.9 s baseline
+```
+
+Do not regress the 84% compression improvement.
+
+---
+
+# Scope restrictions
+
+Do not:
+
+* modify frontend
+* change endpoint paths
+* remove bulk Watchlist fields
+* change ticker universe
+* change realtime quotes
+* change realtime FMP earnings
+* change RSS sweeper
+* change taxonomy hierarchy
+* add dependencies
+* increase DB pool sizes
+* increase request timeouts
+* push
+
+---
+
+# Repository hygiene
+
+Do not use:
+
+```bash
+git add .
+git add -A
+```
+
+Stage exact files only.
+
+Create exactly one correction commit:
+
+```text
+fix: preserve watchlist LKG during refresh
+```
+
+---
+
+# Required report
+
+Include:
+
+1. Starting HEAD/status.
+2. Confirmation AGENTS.md read first.
+3. Old pop-before-build defect.
+4. Old failure-loss defect.
+5. Old concurrent-miss defect.
+6. New internal builder architecture.
+7. Proof old LKG remains during build.
+8. Failure-preservation proof.
+9. Concurrent GET/builder-count proof.
+10. Age/stale semantics.
+11. Theme/taxonomy invalidation audit.
+12. Manual hydration invalidation behavior.
+13. Streaming/GZip validation.
+14. Actual HTTP serialization/gzip timing.
+15. Before/after Watchlist timings.
+16. Exact files changed.
+17. Tests and exit codes.
+18. Confirmation no frontend/earnings/RSS/taxonomy-structure changes.
+19. Commit SHA.

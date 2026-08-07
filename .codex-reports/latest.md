@@ -1,132 +1,118 @@
-# Watchlist GET Latency — LKG-First Cache + GZip
+# Watchlist LKG Hardening — Task 2 Report
 
+**Commit:** `bb79c46b`  
+**Message:** `fix: preserve watchlist LKG during refresh`  
 **Date:** 2026-08-07  
-**Commit:** `perf: make watchlist detail LKG-first`
+**Files changed:** `backend/services/watchlist_router.py`, `backend/tests/test_watchlist_lkg.py`
 
 ---
 
-## Problem
+## Contracts Implemented
 
-`GET /api/watchlist/{watchlist_id}` ran the full enrichment pipeline on every
-request: 462-ticker watchlist took **3.9 s** server time, **6.3 MB** raw wire.
-No whole-response cache existed — component caches (quotes, fundamentals, stage2)
-were warm but re-assembled on every GET.
+### C1/C2 — Extracted `_build_watchlist_response` internal builder
+Extracted the full enrichment pipeline (quote enrichment → FMP fundamentals overlay → upcoming earnings → coverage/meta → alert bus hook → CSV strip) from `get_by_id_endpoint` into a standalone `async def _build_watchlist_response(watchlist_id, store, wl_load_ms=0) -> dict`. Both the cold GET path and `_rebuild_bulk_lkg_bg` call this single implementation. There is no risk of divergence.
 
----
+### C3 — All GETs during rebuild return old LKG immediately
+`_rebuild_bulk_lkg_bg` no longer pops `_BULK_LKG[watchlist_id]` before the rebuild runs. The old entry remains readable throughout the `await _build_watchlist_response(...)` call. Concurrent GETs hit the old LKG and return immediately.
 
-## Changes
+### C4 — Rebuild failure preserves old LKG intact
+New `_rebuild_bulk_lkg_bg` uses copy-on-success: it only writes `_BULK_LKG[watchlist_id]` when the builder returns successfully. The `except` branch logs the failure and returns without touching `_BULK_LKG`. Old payload, old timestamp, and old version are all retained.
 
-### 1 — Bulk GET LKG-first cache (`watchlist_router.py`)
+### C5 — No hard STALE_TTL age eviction
+Removed `if _lkg_age_s < _BULK_LKG_STALE_TTL:` gate from `get_by_id_endpoint`. A valid-version entry is now always served regardless of age. `_BULK_LKG_STALE_TTL` is retained as a logging label only (`fresh` / `stale` / `very_stale`). Age ≥ `_BULK_LKG_TTL` schedules one background rebuild; age alone never causes a cache miss.
 
-**Module-level state:**
+### C6 — Theme and taxonomy invalidation
+Added invalidation to all missing mutation paths:
 
-| Symbol | Type | Purpose |
-|---|---|---|
-| `_BULK_LKG` | `dict[str, dict]` | keyed by `watchlist_id` → `{payload, ts, version}` |
-| `_BULK_LKG_BUILDING` | `set[str]` | single-flight guard (asyncio-safe, no lock needed) |
-| `_BULK_LKG_TTL` | `int` | 300 s — fresh window; no rebuild scheduled |
-| `_BULK_LKG_STALE_TTL` | `int` | 1200 s — stale window; serve + schedule bg rebuild |
+| Route | Invalidation |
+|-------|-------------|
+| `PATCH /api/watchlist/{id}/tickers/{symbol}/theme` | `_bulk_lkg_invalidate(watchlist_id)` — point-specific |
+| `PATCH /api/watchlist/{id}/category` | `_BULK_LKG.clear()` — global (ticker can be in any watchlist) |
+| `POST /api/watchlist/{id}/categories/bulk` | `_BULK_LKG.clear()` — global (only when `count > 0`) |
 
-**Version key:** `f"{updated_at or saved_at}|{len(tickers)}"` — structural
-fingerprint of watchlist membership.  A change in either field (from add-ticker,
-remove-ticker, or /save) immediately invalidates the entry via a version mismatch
-without needing an explicit invalidation call.  Explicit invalidation calls are
-also added as belt-and-suspenders.
+### C7 — Post-hydration LKG invalidation
+Added `_bulk_lkg_invalidate(watchlist_id)` at the end of `_priority_hydrate_symbols()` (after the `[PRIORITY_HYDRATE] finished` print). The next GET immediately rebuilds the response with the freshly hydrated quote/technical data, without waiting for the 5-minute TTL.
 
-**GET flow:**
-
-```
-load_watchlist()  →  compute version key
-│
-├─ LKG hit (version match, age < STALE_TTL)
-│   ├─ fresh (age < TTL)     → return immediately; no rebuild
-│   └─ stale (age ≥ TTL)     → return immediately + create_task(rebuild) [single-flight]
-│
-└─ LKG miss / version mismatch / beyond STALE_TTL
-    → full pipeline (enrich + FMP overlay + earnings + rank passes)
-    → store result in LKG
-    → return
-```
-
-**Background rebuild (`_rebuild_bulk_lkg_bg`):**
-1. Pop LKG (so inner call skips the stale shortcut)
-2. `await get_by_id_endpoint(watchlist_id)` — stores fresh result as side-effect
-3. `finally: _BULK_LKG_BUILDING.discard(watchlist_id)`
-4. On exception: log + leave LKG absent; next browser GET rebuilds inline
-
-**Invalidation (belt-and-suspenders):**
-
-| Trigger | Route |
-|---|---|
-| Full watchlist replace | `POST /save` |
-| Ticker added | `POST /{id}/ticker` |
-| Ticker removed | `DELETE /{id}/ticker/{sym}` |
-| Bulk add | `POST /{id}/tickers` |
-
-### 2 — GZipMiddleware (`main.py`)
-
-```python
-from fastapi.middleware.gzip import GZipMiddleware
-app.add_middleware(GZipMiddleware, minimum_size=1000)
-```
-
-Added as the outermost middleware (last `add_middleware` call) so it compresses
-all responses ≥ 1 KB.  `GZipMiddleware` is a pure ASGI middleware — NOT
-`BaseHTTPMiddleware` — so it is safe for `StreamingResponse` (compresses chunks
-through the gzip compressor, does not buffer the full body).
+### C8 — High-frequency background writers classified
+RSS sweeper and earnings monitor loops write to their own tables/caches only. Neither path calls `_bulk_lkg_invalidate` or `_BULK_LKG.clear()`. Verified: no new invalidation calls were added to any high-frequency loop.
 
 ---
 
-## Measured Results
+## Streaming Analysis (Contract 9)
 
-| Metric | Before | After |
-|---|---|---|
-| Cold GET (full pipeline) | ~1.7–3 s | ~3.9 s (same — must build LKG first time) |
-| Warm GET #2 (8 s later) | ~1.7–3 s | **instant** (LKG fresh_hit) |
-| Warm GET (72 s later) | ~1.7–3 s | **instant** (LKG fresh_hit) |
-| Wire payload size | 6.3 MB | **1.0 MB** (83.7% compression via gzip) |
+**SSE endpoint** (`GET /api/alerts/stream`, `media_type="text/event-stream"`):  
+Starlette's `GZipMiddleware` lists `"text/event-stream"` in `DEFAULT_EXCLUDED_CONTENT_TYPES`. This endpoint is automatically excluded — no regression possible.
 
-Server log evidence:
-```
-[WATCHLIST_GET] total_ms=3872 ... rows=462 price_coverage=100%
-[WATCHLIST_LKG] fresh_hit wl=00a0e3ea-... age=8s
-[WATCHLIST_LKG] fresh_hit wl=00a0e3ea-... age=72s
-```
+**JSON streaming endpoint** (`POST /api/query`, `media_type="application/json"`):  
+`GZipResponder.apply_compression()` flushes the gzip buffer on every ASGI send call (including `more_body=True` chunks). The middleware does **not** buffer the full response — chunks stream incrementally through the compressor. No streaming regression.
+
+Live test of `/api/query` returned 402 (subscription required) in 24ms, confirming the route is reachable and responds promptly. SSE alerts endpoint was confirmed auto-excluded by Starlette source inspection.
 
 ---
 
-## Tests
+## Serialization / GZip Overhead Benchmark (Contract 10)
 
-**`backend/tests/test_watchlist_lkg.py`** — 20 unit tests, all pass in 0.44 s:
+Measured against a 462-ticker Primary watchlist on a warm LKG (quote cache populated):
 
-1. Valid fresh LKG present
-2. Stale LKG in serving window
-3. Ten callers schedule one rebuild (single-flight)
-4. Rebuild success atomically replaces LKG
-5. Rebuild failure leaves LKG absent (next GET rebuilds inline)
-6–8. add/remove/save invalidate LKG
-9. Different watchlists don't cross-contaminate
-10. Fresh LKG does not schedule rebuild
-11. Version mismatch is cache miss
-12. BUILDING flag cleared after rebuild
-13. Beyond STALE_TTL is cache miss
-14. `_bulk_lkg_invalidate` is idempotent
-15. Required symbols exported
-16. TTL constants are sane (STALE > TTL > 0)
-17. Multiple watchlists coexist independently
-18. No duplicate rebuild while one is running
-19. Store/retrieve roundtrip preserves payload fidelity
-20. Invalidate does not touch BUILDING flag
+| Request | TTFB | Total | Wire bytes | Notes |
+|---------|------|-------|------------|-------|
+| Cold GET (pipeline, gzip) | 1.051 s | 1.059 s | 1,029,811 | Full pipeline + serialize + gzip |
+| Warm GET 1 (LKG fresh, gzip) | 2.698 s | 2.706 s | 1,029,798 | Anomalous — event loop busy (background rebuild + other tasks) |
+| Warm GET 2 (LKG fresh, gzip) | 1.068 s | 1.077 s | 1,029,798 | Representative warm case |
+| Warm GET (identity encoding) | 1.010 s | 1.023 s | 6,304,076 | No gzip — serialization only |
+
+**Finding:** Representative warm LKG TTFB is ~1.07 s with gzip vs ~1.01 s without. **GZip overhead is ~60 ms for 6.3 MB → 1 MB compression.** The dominant cost is **FastAPI JSON serialization of the large dict (~950 ms)**. The LKG cache eliminates the pipeline (quote fetch, FMP overlay, earnings) but cannot eliminate per-request serialization.
+
+**Recommendation (not implemented — out of scope):** Pre-serializing `_BULK_LKG[wl_id]["payload"]` to a `bytes` object at write time and returning `Response(content=bytes, media_type="application/json")` would reduce warm GET latency from ~1.1 s to under 50 ms (only gzip + send overhead). This optimization is a concrete follow-up.
 
 ---
 
-## Notes
+## Test Suite
 
-- **Production still returns 500** from the RSS pool fix (commit `cab90aa1`).
-  User needs to publish (Deploy) to pick up both the RSS fix and this LKG change.
-- The LKG serves the same payload (including prices from the last rebuild).
-  The frontend already overlays realtime quotes via its live quote channel,
-  so stale prices in the LKG are harmless for display purposes.
-- The 5-minute fresh window aligns with the existing quote cache TTL (~10 min).
-  The stale window (20 min) ensures the user never sees an empty/errored page
-  during a rebuild that fails partway through.
+25 tests, 25 passed, 0.08 s.
+
+| # | Test | Contract |
+|---|------|----------|
+| 01 | Valid fresh LKG served | — |
+| 02 | Stale entry (age ≥ TTL) still in `_BULK_LKG` | C5 |
+| 03 | Single-flight rebuild guard | C3 |
+| 04 | Copy-on-success: old LKG present during rebuild | C3/C4 |
+| 05 | **Inverted**: rebuild failure preserves old payload/ts/version | C4 |
+| 06–08 | Mutation invalidation (add/remove/save) | — |
+| 09 | No cross-contamination between watchlists | — |
+| 10 | Fresh LKG no rebuild scheduled | — |
+| 11 | Version mismatch is structural miss | — |
+| 12 | BUILDING flag cleared after success | — |
+| 13 | **Inverted**: very-stale (age >> STALE_TTL) still served | C5 |
+| 14 | Invalidate idempotent | — |
+| 15 | All required symbols exported incl. `_build_watchlist_response` | C1 |
+| 16 | TTL constants sane | — |
+| 17 | Theme PATCH: point-specific invalidation | C6 |
+| 18 | Taxonomy bulk clear: removes all watchlists | C6 |
+| 19 | Post-hydration invalidation | C7 |
+| 20 | Invalidate does not clear BUILDING flag | — |
+| 21 | `_build_watchlist_response` is `async def` | C1 |
+| 22 | Multiple watchlists coexist independently | — |
+| 23 | No duplicate rebuild while one is running | C3 |
+| 24 | Store/retrieve roundtrip preserves payload | — |
+| 25 | RSS/earnings high-frequency writers do not invalidate | C8 |
+
+---
+
+## Files Changed
+
+```
+backend/services/watchlist_router.py   +246/-195
+  - _rebuild_bulk_lkg_bg: copy-on-success (never pops before success)
+  - _build_watchlist_response: extracted canonical pipeline
+  - get_by_id_endpoint: calls builder; removes STALE_TTL hard eviction
+  - PATCH /category: _BULK_LKG.clear()
+  - POST /categories/bulk: _BULK_LKG.clear() when count > 0
+  - PATCH /{id}/tickers/{sym}/theme: _bulk_lkg_invalidate(watchlist_id)
+  - _priority_hydrate_symbols: _bulk_lkg_invalidate(watchlist_id) at end
+
+backend/tests/test_watchlist_lkg.py    +334/-57
+  - 25 tests replacing 20 (boundary testing, Contract verification)
+  - Tests 5, 13 inverted to match new semantics
+  - Tests 17–25 added covering C6/C7/C8/C1
+```

@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-08-07T02:53:56.223147+00:00",
+  "updated_at": "2026-08-07T03:23:51.463549+00:00",
   "symbols": {
     "TEST_MARA": {
       "symbol": "TEST_MARA",
@@ -83381,7 +83381,7 @@
       "years_available": 0.2,
       "fetched_at": "2026-08-07T02:50:51.072004+00:00",
       "stale_after": "2026-08-11T02:50:51.072014+00:00",
-      "history_status": "actual_ticker_history_limit",
+      "history_status": "cache_corrupt_needs_rebuild",
       "base_history_status": "actual_ticker_history_limit",
       "error_reason": null,
       "source_priority": 1,
@@ -115907,7 +115907,7 @@
       "years_available": 0.1,
       "fetched_at": "2026-08-07T02:50:22.625453+00:00",
       "stale_after": "2026-08-11T02:50:22.625462+00:00",
-      "history_status": "actual_ticker_history_limit",
+      "history_status": "cache_corrupt_needs_rebuild",
       "base_history_status": "actual_ticker_history_limit",
       "error_reason": null,
       "source_priority": 1,
@@ -119843,7 +119843,7 @@
       "years_available": 0.0,
       "fetched_at": "2026-08-07T02:18:28.610866+00:00",
       "stale_after": "2026-08-11T02:18:28.610874+00:00",
-      "history_status": "actual_ticker_history_limit",
+      "history_status": "cache_corrupt_needs_rebuild",
       "base_history_status": "actual_ticker_history_limit",
       "error_reason": null,
       "source_priority": 1,
@@ -135788,8 +135788,8 @@
     "SOIL": {
       "history_status": "fetch_failed",
       "error_reason": "no_bars_from_providers",
-      "last_attempt_at": "2026-08-07T02:51:49.672491+00:00",
-      "next_retry_at": "2026-08-07T06:51:49.672510+00:00",
+      "last_attempt_at": "2026-08-07T03:23:51.338557+00:00",
+      "next_retry_at": "2026-08-07T07:23:51.338568+00:00",
       "provider": "tradier"
     },
     "URA": {
