@@ -72,10 +72,14 @@ _volmc_registry: dict[str, dict]      = {}
 # A version mismatch (ticker added/removed, /save) immediately invalidates the
 # entry so stale membership cannot linger after mutations.
 #
-# TTL semantics:
-#   _BULK_LKG_TTL       — serve from cache; no rebuild scheduled (fresh window)
-#   _BULK_LKG_STALE_TTL — serve stale + schedule one background rebuild (stale window)
-#   beyond STALE_TTL    — cache miss; rebuild inline on next GET
+# TTL semantics (stale-while-revalidate; no hard age eviction):
+#   _BULK_LKG_TTL       — serve from cache without scheduling a rebuild (fresh)
+#   _BULK_LKG_STALE_TTL — diagnostic label; entry is still served; rebuild is
+#                          logged as "very_stale" rather than "stale"
+#   Version mismatch    — only this causes a structural miss → inline rebuild
+#
+# A valid-version entry is always served regardless of age; age only controls
+# how urgently a background rebuild is queued.
 #
 # Single-flight: _BULK_LKG_BUILDING prevents concurrent rebuilds per watchlist.
 _BULK_LKG:          dict[str, dict] = {}
@@ -95,26 +99,48 @@ def _bulk_lkg_invalidate(watchlist_id: str) -> None:
 
 async def _rebuild_bulk_lkg_bg(watchlist_id: str) -> None:
     """
-    Single-flight background task — rebuild the bulk GET LKG for watchlist_id.
+    Single-flight background task — refresh the bulk GET LKG for watchlist_id.
 
-    Called when a stale (age ≥ _BULK_LKG_TTL) but still-serving (age <
-    _BULK_LKG_STALE_TTL) entry exists.  Strategy:
-      1. Pop the current LKG so the inner get_by_id_endpoint call runs the
-         full enrichment pipeline (no cached shortcut).
-      2. get_by_id_endpoint stores the fresh result in _BULK_LKG before
-         returning, replacing the prior entry atomically.
-      3. On any exception the prior LKG remains absent; the next browser GET
-         will rebuild inline (safe cold-start path).
+    Copy-on-success model:
+      1. The OLD LKG entry remains in _BULK_LKG and continues to be served by
+         the GET route throughout this rebuild — it is never removed first.
+      2. _build_watchlist_response() runs the same canonical enrichment pipeline
+         as the inline GET path.
+      3. On success: atomically write the new entry, replacing the old.
+      4. On failure: the old entry is completely untouched — it continues to be
+         served on all subsequent GETs (with another rebuild queued next hit).
 
-    _BULK_LKG_BUILDING guards against duplicate concurrent rebuilds.
+    _BULK_LKG_BUILDING prevents a second rebuild from spawning while this
+    runs.  Always cleared in `finally` so the guard never sticks on error.
     """
+    import asyncio as _aio_bg
+    import time as _t_bg
     try:
-        _BULK_LKG.pop(watchlist_id, None)
-        await get_by_id_endpoint(watchlist_id)
+        from services.watchlist_service import load_watchlist as _lw_bg
+        _store_bg = await _aio_bg.get_event_loop().run_in_executor(
+            None, _lw_bg, watchlist_id
+        )
+        if _store_bg is None:
+            print(f"[WATCHLIST_LKG] rebuild skipped wl={watchlist_id}: watchlist not found")
+            return
+        # Build response using the canonical pipeline.
+        # Old LKG remains in _BULK_LKG throughout this await.
+        _result_bg = await _build_watchlist_response(watchlist_id, _store_bg)
+        _ver_bg = (
+            f"{_store_bg.get('updated_at') or _store_bg.get('saved_at')}|"
+            f"{len(_store_bg.get('tickers', []))}"
+        )
+        _BULK_LKG[watchlist_id] = {
+            "payload": _result_bg,
+            "ts":      _t_bg.monotonic(),
+            "version": _ver_bg,
+        }
+        print(f"[WATCHLIST_LKG] background rebuild complete wl={watchlist_id}")
     except Exception as _lkg_bg_err:
+        # Old LKG is untouched — still served by GET; next stale hit retries.
         print(
-            f"[WATCHLIST_LKG] background rebuild failed wl={watchlist_id}: "
-            f"{_lkg_bg_err}"
+            f"[WATCHLIST_LKG] background rebuild failed wl={watchlist_id} "
+            f"(old LKG preserved): {_lkg_bg_err}"
         )
     finally:
         _BULK_LKG_BUILDING.discard(watchlist_id)
@@ -2401,6 +2427,11 @@ async def _priority_hydrate_symbols(symbols: list[str], watchlist_id: str) -> No
             _HYDRATION_STATE[sym]["last_updated"] = _ts_done
     print(f"[PRIORITY_HYDRATE] finished for {deduped}")
 
+    # Invalidate bulk LKG so the next GET surfaces the freshly hydrated row
+    # without waiting for the 5-minute fresh-window TTL to expire.
+    # This covers quote, technical, and fundamentals completions.
+    _bulk_lkg_invalidate(watchlist_id)
+
 
 # ── Upload-triggered Stage2 warmup state ──────────────────────────────────────
 _UPLOAD_WARMUP_STATE: dict = {
@@ -4617,6 +4648,11 @@ async def patch_category_endpoint(request: Request, body: dict):
     except Exception as _ue:
         print(f"[WATCHLIST_CAT] Options Flow sync failed (non-fatal): {_ue}")
 
+    # A category change alters canonical_theme_id/name fields in the bulk
+    # Watchlist response.  We don't know which watchlist(s) contain this ticker
+    # so we clear all entries.  PATCH /category is an infrequent manual operation.
+    _BULK_LKG.clear()
+
     return {"success": True, "ticker": ticker, "category": category, "user_id": user_id}
 
 
@@ -4725,6 +4761,11 @@ async def bulk_categories_endpoint(request: Request, body: dict):
                     pass
         except Exception as _bsync_err:
             print(f"[WATCHLIST_CAT_BULK] cross-sync failed (non-fatal): {_bsync_err}")
+
+    # Bulk category assignments alter canonical_theme_id/name across any watchlist
+    # that contains the affected tickers.  Clear all LKG entries (infrequent op).
+    if count > 0:
+        _BULK_LKG.clear()
 
     return {
         "success": True,
@@ -6160,6 +6201,10 @@ async def patch_ticker_theme_endpoint(
     except Exception as _ue_th:
         print(f"[THEME_PATCH] Options Flow sync failed (non-fatal): {_ue_th}")
 
+    # Invalidate bulk LKG — theme assignment changes canonical_theme_id in the
+    # cached response for this specific watchlist.
+    _bulk_lkg_invalidate(watchlist_id)
+
     return {
         "success":      True,
         "watchlist_id": watchlist_id,
@@ -6272,75 +6317,42 @@ async def get_hydration_status_endpoint(watchlist_id: str, symbol: str):
     }
 
 
-@router.get("/{watchlist_id}")
-async def get_by_id_endpoint(watchlist_id: str):
+async def _build_watchlist_response(
+    watchlist_id: str,
+    store: dict,
+    wl_load_ms: int = 0,
+) -> dict:
     """
-    Return a specific watchlist by ID.
+    Internal canonical Watchlist enrichment pipeline.
 
-    Ticker rows are enriched on every GET with:
-      - name          (from Tradier description)
-      - price         (Tradier live, or CSV fallback)
-      - change_pct_1d (Tradier 1D % change)
-      - quote_source / quote_updated_at / volume_is_stale / price_is_stale / …
+    Called by:
+      - get_by_id_endpoint()   on structural cache miss (cold path)
+      - _rebuild_bulk_lkg_bg() for background LKG refresh (copy-on-success)
 
-    All existing LLM-generated fields (catalyst, sentiment, action_note, etc.)
-    are preserved.  Quote data is served from a 10-minute in-memory cache;
-    a background refresh is triggered automatically when the TTL expires.
+    Takes an already-loaded ``store`` dict (avoids double-loading from DB).
+    Returns the complete enriched response dict ready to serve and cache.
 
-    Performance contract:
-      - Zero third-party provider calls in the blocking request path.
-      - Warm response: under 500 ms.
-      - Cold-process response (with existing disk LKG): under 1.5 s.
+    This is the single implementation of the enrichment pipeline; both the
+    cold GET path and the background rebuild call this function so there is
+    no risk of the two code paths diverging independently.
     """
     import asyncio as _aio
-    import time as _t_get
-    _t0_get = _t_get.monotonic()
+    import time as _t
+    _t0 = _t.monotonic()
 
-    store = load_watchlist(watchlist_id)
-    if store is None:
-        return {"empty": True}
-    _wl_load_ms = round((_t_get.monotonic() - _t0_get) * 1000)
-
-    # ── LKG-first: return cached response when version matches and not expired ─
-    # Version key = structural fingerprint of watchlist membership.  A change in
-    # updated_at or ticker_count means the watchlist was mutated; we fall through
-    # to a full rebuild rather than returning stale membership data.
-    _wl_version = (
-        f"{store.get('updated_at') or store.get('saved_at')}|"
-        f"{len(store.get('tickers', []))}"
-    )
-    _lkg_entry = _BULK_LKG.get(watchlist_id)
-    if _lkg_entry and _lkg_entry.get("version") == _wl_version:
-        _lkg_age_s = _t_get.monotonic() - _lkg_entry["ts"]
-        if _lkg_age_s < _BULK_LKG_STALE_TTL:
-            # Schedule exactly one background rebuild when the fresh window expires.
-            if _lkg_age_s >= _BULK_LKG_TTL and watchlist_id not in _BULK_LKG_BUILDING:
-                _BULK_LKG_BUILDING.add(watchlist_id)
-                _aio.create_task(_rebuild_bulk_lkg_bg(watchlist_id))
-                print(
-                    f"[WATCHLIST_LKG] stale_hit wl={watchlist_id} "
-                    f"age={round(_lkg_age_s)}s — background rebuild queued"
-                )
-            else:
-                print(
-                    f"[WATCHLIST_LKG] fresh_hit wl={watchlist_id} "
-                    f"age={round(_lkg_age_s)}s"
-                )
-            return _lkg_entry["payload"]
-    # LKG absent, version mismatch, or beyond STALE_TTL — run full pipeline.
-
-    _t1_get = _t_get.monotonic()
+    # ── Quote enrichment ──────────────────────────────────────────────────────
+    _t1 = _t.monotonic()
     try:
         store = await _enrich_store_with_quotes(store)
     except Exception as _enrich_err:
         print(f"[WATCHLIST] Quote enrichment failed (returning raw): {_enrich_err}")
-    _enrich_ms = round((_t_get.monotonic() - _t1_get) * 1000)
+    _enrich_ms = round((_t.monotonic() - _t1) * 1000)
 
     # ── FMP fundamentals overlay (weekly cache) ───────────────────────────────
     # fund_snaps were pre-loaded inside _enrich_store_with_quotes (parallel with
     # the quote+name fetch) to save a second Neon round-trip.  We pop the temp
     # key here; if absent (e.g. enrich was skipped), we fall back to a fresh load.
-    _t2_get = _t_get.monotonic()
+    _t2 = _t.monotonic()
     try:
         from data.watchlist_fundamentals_store import get_snapshots_bulk as _get_fund_snaps
         from services.watchlist_fundamentals_refresh import apply_fmp_overlays as _apply_fmp
@@ -6354,21 +6366,21 @@ async def get_by_id_endpoint(watchlist_id: str):
             # Prefer fund_snaps pre-loaded by _enrich_store_with_quotes
             _snaps = store.pop("_fund_snaps_for_apply_fmp", None)
             if _snaps is None:
-                _loop_get = _aio.get_event_loop()
-                _snaps = await _loop_get.run_in_executor(None, _get_fund_snaps, _syms_f)
+                _loop = _aio.get_event_loop()
+                _snaps = await _loop.run_in_executor(None, _get_fund_snaps, _syms_f)
             if _snaps:
                 store["csv_data"] = _apply_fmp(_raw_csv, _snaps)
     except Exception:
         pass  # non-fatal — serve unmodified CSV data
     # Defensive cleanup — remove temp key if enrich was skipped (store unchanged)
     store.pop("_fund_snaps_for_apply_fmp", None)
-    _fund_ms = round((_t_get.monotonic() - _t2_get) * 1000)
+    _fund_ms = round((_t.monotonic() - _t2) * 1000)
 
     # ── Upcoming earnings (cache-first, non-blocking, ≤1.5 s timeout) ─────────
     # Resolves earnings for exactly this watchlist's tickers.
     # sync_on_miss=False → never waits for FMP; fires background sync on cache miss.
     # asyncio.wait_for guard ensures earnings never delay the watchlist response.
-    _t3_get = _t_get.monotonic()
+    _t3 = _t.monotonic()
     _upcoming_earnings: dict = {
         "watchlist_id":      watchlist_id,
         "symbols_requested": [],
@@ -6386,15 +6398,15 @@ async def get_by_id_endpoint(watchlist_id: str):
         _wl_tickers_earn = [t.strip().upper() for t in (store.get("tickers") or []) if t.strip()]
         if _wl_tickers_earn:
             try:
-                _fmp_key_get = os.getenv("FMP_API_KEY", "")
+                _fmp_key_build = os.getenv("FMP_API_KEY", "")
                 try:
-                    from config import FMP_API_KEY as _fmp_key_get  # type: ignore
+                    from config import FMP_API_KEY as _fmp_key_build  # type: ignore
                 except Exception:
                     pass
                 _earn_payload = await _aio.wait_for(
                     _gue_get(
                         _wl_tickers_earn,
-                        fmp_key                 = _fmp_key_get,
+                        fmp_key                 = _fmp_key_build,
                         sync_on_miss            = False,   # non-blocking GET path
                         background_sync_on_miss = True,
                     ),
@@ -6408,10 +6420,10 @@ async def get_by_id_endpoint(watchlist_id: str):
                 print(f"[WATCHLIST_GET] upcoming_earnings error (non-fatal): {_earn_err}")
     except Exception as _earn_import_err:
         _upcoming_earnings["cache_status"] = f"import_error:{type(_earn_import_err).__name__}"
-    _earn_ms = round((_t_get.monotonic() - _t3_get) * 1000)
+    _earn_ms = round((_t.monotonic() - _t3) * 1000)
 
     # ── Phase timing + coverage ───────────────────────────────────────────────
-    _total_ms = round((_t_get.monotonic() - _t0_get) * 1000)
+    _total_ms = round((_t.monotonic() - _t0) * 1000)
     _all_rows = [
         r for s in (store.get("analysis") or {}).get("sections", [])
         for r in s.get("tickers", [])
@@ -6429,7 +6441,7 @@ async def get_by_id_endpoint(watchlist_id: str):
         from services.watchlist_quote_cache import (
             _cache_ts as _qts, _QUOTE_TTL as _qttl, _get_lock as _qlock
         )
-        _qage   = _t_get.monotonic() - _qts
+        _qage   = _t.monotonic() - _qts
         _q_refreshing = _qlock().locked()
         if _qage < _qttl and not _q_refreshing:
             _data_state = "fresh"
@@ -6443,7 +6455,7 @@ async def get_by_id_endpoint(watchlist_id: str):
 
     print(
         f"[WATCHLIST_GET] wl={watchlist_id} total_ms={_total_ms} "
-        f"watchlist_load_ms={_wl_load_ms} row_enrichment_ms={_enrich_ms} "
+        f"watchlist_load_ms={wl_load_ms} row_enrichment_ms={_enrich_ms} "
         f"fundamentals_overlay_ms={_fund_ms} "
         f"saved_ticker_count={len(store.get('tickers', []))} rows={len(_all_rows)} "
         f"price_coverage={_price_cov:.0%} volume_coverage={_vol_cov:.0%} "
@@ -6512,9 +6524,73 @@ async def get_by_id_endpoint(watchlist_id: str):
             for row in _bulk_csv_out
         ]
 
-    # ── Persist result in LKG for sub-5-second subsequent GETs ──────────────
-    # Any concurrent background rebuild (_rebuild_bulk_lkg_bg) also lands here
-    # via the same code path; last write wins (both produce an equivalent result).
+    return store
+
+
+@router.get("/{watchlist_id}")
+async def get_by_id_endpoint(watchlist_id: str):
+    """
+    Return a specific watchlist by ID.
+
+    Ticker rows are enriched on every GET with:
+      - name          (from Tradier description)
+      - price         (Tradier live, or CSV fallback)
+      - change_pct_1d (Tradier 1D % change)
+      - quote_source / quote_updated_at / volume_is_stale / price_is_stale / …
+
+    All existing LLM-generated fields (catalyst, sentiment, action_note, etc.)
+    are preserved.  Quote data is served from a 10-minute in-memory cache;
+    a background refresh is triggered automatically when the TTL expires.
+
+    Performance contract:
+      - Zero third-party provider calls in the blocking request path.
+      - Warm response: under 500 ms.
+      - Cold-process response (with existing disk LKG): under 1.5 s.
+    """
+    import asyncio as _aio
+    import time as _t_get
+    _t0_get = _t_get.monotonic()
+
+    store = load_watchlist(watchlist_id)
+    if store is None:
+        return {"empty": True}
+    _wl_load_ms = round((_t_get.monotonic() - _t0_get) * 1000)
+
+    # ── LKG-first: serve cached response when structural version matches ─────────
+    # "version" = updated_at|ticker_count — changes on any membership mutation.
+    # Stale-while-revalidate semantics: a valid-version entry is always served
+    # regardless of age; age only controls whether to schedule a background rebuild.
+    _wl_version = (
+        f"{store.get('updated_at') or store.get('saved_at')}|"
+        f"{len(store.get('tickers', []))}"
+    )
+    _lkg_entry = _BULK_LKG.get(watchlist_id)
+    if _lkg_entry and _lkg_entry.get("version") == _wl_version:
+        _lkg_age_s = _t_get.monotonic() - _lkg_entry["ts"]
+        _age_label = (
+            "very_stale" if _lkg_age_s >= _BULK_LKG_STALE_TTL
+            else "stale"  if _lkg_age_s >= _BULK_LKG_TTL
+            else "fresh"
+        )
+        if _lkg_age_s >= _BULK_LKG_TTL and watchlist_id not in _BULK_LKG_BUILDING:
+            # Schedule exactly one background rebuild (copy-on-success).
+            # Old LKG continues to be served while the rebuild runs.
+            _BULK_LKG_BUILDING.add(watchlist_id)
+            _aio.create_task(_rebuild_bulk_lkg_bg(watchlist_id))
+            print(
+                f"[WATCHLIST_LKG] {_age_label}_hit wl={watchlist_id} "
+                f"age={round(_lkg_age_s)}s — background rebuild queued"
+            )
+        else:
+            print(
+                f"[WATCHLIST_LKG] {_age_label}_hit wl={watchlist_id} "
+                f"age={round(_lkg_age_s)}s"
+            )
+        return _lkg_entry["payload"]
+    # LKG absent or version mismatch (membership change) → rebuild inline.
+
+    store = await _build_watchlist_response(watchlist_id, store, _wl_load_ms)
+
     _BULK_LKG[watchlist_id] = {
         "payload": store,
         "ts":      _t_get.monotonic(),
