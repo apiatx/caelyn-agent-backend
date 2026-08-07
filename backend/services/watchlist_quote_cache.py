@@ -350,54 +350,72 @@ async def _fetch_via_home_service(symbols: list[str]) -> dict[str, dict]:
 
 
 # ── Legacy direct-Tradier path (used only if home_service isn't ready) ─────
-# Fires at most once per cold restart.  Physical HTTP is now routed through
-# TRADIER_LIMITER (reserved lane) so it counts against the 110-RPM global ceiling.
+# Fires at most once per cold restart.  Routes through the canonical TradierProvider
+# boundary (budget + global limiter + cache) — no raw httpx, no fail-open paths.
 
 async def _fetch_batch_direct(symbols: list[str], api_key: str) -> dict[str, dict]:
-    symbols_str = ",".join(s.upper() for s in symbols)
-    url = "https://api.tradier.com/v1/markets/quotes"
-    headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+    """Startup-only cold-cache fallback.
+
+    Admission contract:
+      1. Lane budget check (reserved).  If full → return {} immediately.
+      2. Blocking TRADIER_LIMITER.acquire() — fine at startup (no contention).
+      3. record_call("reserved").
+      4. TradierProvider.get_quotes() routed through _get_preadmitted() for HTTP.
+
+    There is NO fail-open path.  If the provider or budget module is unavailable
+    the call is skipped entirely — the caller falls back to disk LKG.
+    """
+    if not symbols:
+        return {}
     now_str = datetime.now(timezone.utc).isoformat() + "Z"
 
-    # Route through the global rate-limiter before any network I/O.
-    # Non-fatal: startup-only path — if the limiter is unavailable we still fire
-    # the quote batch rather than leave the cache cold.
     try:
-        from data.tradier_provider import TRADIER_LIMITER as _wqc_lim
-        from data.tradier_budget import record_call as _wqc_rb
-        await _wqc_lim.acquire()
-        _wqc_rb("reserved")
-    except Exception as _lim_exc:
-        print(f"[WQ_CACHE] limiter unavailable ({_lim_exc}); proceeding unmetered")
-
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(
-                url,
-                headers=headers,
-                params={"symbols": symbols_str, "greeks": "false"},
-            )
-        if resp.status_code != 200:
-            print(f"[WQ_CACHE] Tradier batch error {resp.status_code}: {resp.text[:200]}")
-            return {}
-
-        data = resp.json()
-        quotes_obj = data.get("quotes", {})
-        quote_list = quotes_obj.get("quote", []) if isinstance(quotes_obj, dict) else []
-        if isinstance(quote_list, dict):
-            quote_list = [quote_list]
-
-        result: dict[str, dict] = {}
-        for q in quote_list:
-            sym = (q.get("symbol") or "").upper()
-            if not sym:
-                continue
-            result[sym] = _normalise(sym, q, now_str)
-        return result
-
-    except Exception as e:
-        print(f"[WQ_CACHE] Tradier batch exception: {e}")
+        import data.tradier_budget as _bgt
+        from data.tradier_provider import TRADIER_LIMITER as _wqc_lim, get_provider as _get_prov
+    except Exception as _imp_exc:
+        print(f"[WQ_CACHE] provider import error ({_imp_exc}) — skipping batch")
         return {}
+
+    # Lane budget check (non-blocking)
+    if not _bgt.check_budget("reserved"):
+        _bgt.record_defer("reserved")
+        print(f"[WQ_CACHE] reserved lane full — skipping startup batch for {len(symbols)} symbols")
+        return {}
+
+    provider = _get_prov()
+    if provider is None:
+        print("[WQ_CACHE] No TRADIER_API_KEY — skipping startup batch")
+        return {}
+
+    # Blocking acquire: fine at startup, no background contention yet.
+    await _wqc_lim.acquire()
+    _bgt.record_call("reserved")
+
+    # Route HTTP through the provider's preadmitted path (already admitted above)
+    eligible = [s.upper() for s in symbols if s]
+    if not eligible:
+        return {}
+
+    raw_data = await provider._get_preadmitted(
+        "/markets/quotes",
+        {"symbols": ",".join(eligible), "greeks": "false"},
+    )
+    if not raw_data:
+        print("[WQ_CACHE] Tradier batch returned no data")
+        return {}
+
+    quotes_obj = raw_data.get("quotes", {})
+    quote_list = quotes_obj.get("quote", []) if isinstance(quotes_obj, dict) else []
+    if isinstance(quote_list, dict):
+        quote_list = [quote_list]
+
+    result: dict[str, dict] = {}
+    for q in quote_list:
+        sym = (q.get("symbol") or "").upper()
+        if not sym:
+            continue
+        result[sym] = _normalise(sym, q, now_str)
+    return result
 
 
 async def _fetch_direct(symbols: list[str]) -> dict[str, dict]:

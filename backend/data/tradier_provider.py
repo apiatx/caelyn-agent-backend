@@ -33,13 +33,37 @@ _TIMEOUT = 12  # seconds per request
 # When two coroutines simultaneously request the same expiration list or chain,
 # only one Tradier call fires.  The second awaits the first's Future.
 # Keys are evicted from the dict in the finally block of the owning coroutine.
-_EXPIRY_FUTURES: dict[str, "asyncio.Future[list[str]]"] = {}
-_CHAIN_FUTURES:  dict[str, "asyncio.Future[dict]"]     = {}
+_EXPIRY_FUTURES:     dict[str, "asyncio.Future[list[str]]"] = {}
+_CHAIN_FUTURES:      dict[str, "asyncio.Future[dict]"]      = {}
+_TIMESALES_FUTURES:  dict[str, "asyncio.Future[list[dict]]"] = {}
+_HISTORY_FUTURES:    dict[str, "asyncio.Future[list[dict]]"] = {}
 
 # Lifetime counters — read by /api/rate-status
-_coalesced_expiry_count: int = 0
-_coalesced_chain_count:  int = 0
+_coalesced_expiry_count:     int = 0
+_coalesced_chain_count:      int = 0
+_coalesced_timesales_count:  int = 0
+_coalesced_history_count:    int = 0
 _last_429_at: float | None   = None  # epoch seconds
+
+# ── Process-wide singleton provider (lazy) ────────────────────────────────────
+# Constructed on first call to get_provider(); avoids importing tradier_provider
+# just to instantiate TradierProvider everywhere.
+_SINGLETON_PROVIDER: "TradierProvider | None" = None
+
+
+def get_provider() -> "TradierProvider | None":
+    """Return the process-wide singleton TradierProvider, or None if no API key.
+
+    Uses TRADIER_API_KEY env var.  The singleton is constructed lazily so modules
+    that import this file during test bootstrapping don't require a real key.
+    """
+    global _SINGLETON_PROVIDER
+    if _SINGLETON_PROVIDER is None:
+        key = os.environ.get("TRADIER_API_KEY", "")
+        if not key:
+            return None
+        _SINGLETON_PROVIDER = TradierProvider(api_key=key)
+    return _SINGLETON_PROVIDER
 
 
 # ── Process-wide Tradier rate limiter ─────────────────────────────────────────
@@ -86,6 +110,31 @@ class _TradierRateLimiter:
                 f"— throttling {wait_for:.2f}s"
             )
             await asyncio.sleep(wait_for)
+
+    async def try_acquire_background(self, reserve: int = 5) -> bool:
+        """Atomically try to reserve one slot for a background caller.
+
+        Returns True and records the slot if the current window has enough headroom
+        to accommodate this call while preserving *reserve* slots for interactive
+        (non-background) traffic.
+
+        Returns False immediately without sleeping if headroom is insufficient.
+        NEVER blocks. NEVER sleeps. Safe to call from non-blocking background paths
+        (schedulers, warmup loops, supplement scans).
+
+        Callers that receive False must defer the physical request and use their
+        existing cache/LKG/null contract — they must NOT fall through to unmetered HTTP.
+        """
+        async with self._lock:
+            now = asyncio.get_event_loop().time()
+            cutoff = now - self._window
+            self._timestamps = [t for t in self._timestamps if t > cutoff]
+            # Need at least reserve + 1 slots free: 1 for this call + reserve for interactive.
+            if len(self._timestamps) + reserve + 1 <= self._max:
+                self._timestamps.append(now)
+                self.total_calls += 1
+                return True
+            return False
 
     def is_saturated(self) -> bool:
         """Non-blocking check: True when the rate window is full.
@@ -188,6 +237,39 @@ class TradierProvider:
             "Accept": "application/json",
         }
 
+    async def _get_preadmitted(self, path: str, params: dict | None = None) -> dict | list | None:
+        """Execute the HTTP portion of a Tradier request WITHOUT acquiring the rate limiter.
+
+        Pre-condition: the caller has ALREADY called
+            TRADIER_LIMITER.try_acquire_background(reserve=N) → True
+            data.tradier_budget.record_call(lane)
+        before invoking this method.
+
+        Use ONLY for background paths where non-blocking admission was already
+        performed.  Interactive paths must continue using _get(), which calls
+        TRADIER_LIMITER.acquire() (blocking).
+
+        Returns the parsed JSON body on HTTP 200, or None on error.
+        Does NOT retry on 429 — background callers should defer to next cycle.
+        """
+        url = f"{self.base_url}{path}"
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                resp = await client.get(url, headers=self._headers(), params=params or {})
+            if resp.status_code == 200:
+                return resp.json()
+            if resp.status_code == 429:
+                import time as _t
+                global _last_429_at
+                _last_429_at = _t.time()
+                print(f"[TRADIER][bg] 429 on {path} — deferring (background, no retry)")
+                return None
+            print(f"[TRADIER][bg] {path} error {resp.status_code}: {resp.text[:300]}")
+            return None
+        except Exception as e:
+            print(f"[TRADIER][bg] {path} exception: {e}")
+            return None
+
     async def _get(self, path: str, params: dict | None = None) -> dict | list | None:
         """Generic GET with lane-budget pre-check, rate limiting, and 429 auto-retry.
 
@@ -247,12 +329,16 @@ class TradierProvider:
         """Return coalescing counters and active in-flight futures (for /api/rate-status)."""
         import time as _t
         return {
-            "coalesced_expiry_requests_lifetime": _coalesced_expiry_count,
-            "coalesced_chain_requests_lifetime":  _coalesced_chain_count,
-            "active_expiry_futures":  len(_EXPIRY_FUTURES),
-            "active_chain_futures":   len(_CHAIN_FUTURES),
-            "last_429_at":            _last_429_at,
-            "last_429_ago_s":         (
+            "coalesced_expiry_requests_lifetime":     _coalesced_expiry_count,
+            "coalesced_chain_requests_lifetime":      _coalesced_chain_count,
+            "coalesced_timesales_requests_lifetime":  _coalesced_timesales_count,
+            "coalesced_history_requests_lifetime":    _coalesced_history_count,
+            "active_expiry_futures":    len(_EXPIRY_FUTURES),
+            "active_chain_futures":     len(_CHAIN_FUTURES),
+            "active_timesales_futures": len(_TIMESALES_FUTURES),
+            "active_history_futures":   len(_HISTORY_FUTURES),
+            "last_429_at":              _last_429_at,
+            "last_429_ago_s":           (
                 round(_t.time() - _last_429_at) if _last_429_at else None
             ),
         }
@@ -533,7 +619,10 @@ class TradierProvider:
         Historical OHLCV bars. Works for both equities AND option OCC symbols.
         interval: daily, weekly, monthly
         Tradier covers lifetime for equities; option history available for active contracts.
+
+        Coalescing: concurrent requests for the same key share one in-flight Future.
         """
+        global _coalesced_history_count
         symbol = symbol.upper()
         if not start:
             start = (date.today() - timedelta(days=365)).isoformat()
@@ -545,35 +634,164 @@ class TradierProvider:
         if cached is not None:
             return cached
 
-        data = await self._get("/markets/history", {
-            "symbol": symbol,
-            "interval": interval,
-            "start": start,
-            "end": end,
-        })
-        if not data:
-            return []
+        # In-flight coalescing
+        coalesce_key = cache_key
+        if coalesce_key in _HISTORY_FUTURES:
+            _coalesced_history_count += 1
+            try:
+                return await asyncio.shield(_HISTORY_FUTURES[coalesce_key])
+            except Exception:
+                return []
 
-        history = data.get("history", {})
-        if not history:
-            return []
-        days = history.get("day", [])
-        if isinstance(days, dict):
-            days = [days]
-
-        bars = []
-        for d in days:
-            bars.append({
-                "date": d.get("date"),
-                "open": _safe_float(d.get("open")),
-                "high": _safe_float(d.get("high")),
-                "low": _safe_float(d.get("low")),
-                "close": _safe_float(d.get("close")),
-                "volume": _safe_int(d.get("volume")),
+        loop = asyncio.get_event_loop()
+        fut: asyncio.Future = loop.create_future()
+        _HISTORY_FUTURES[coalesce_key] = fut
+        try:
+            data = await self._get("/markets/history", {
+                "symbol": symbol,
+                "interval": interval,
+                "start": start,
+                "end": end,
             })
+            if not data:
+                if not fut.done():
+                    fut.set_result([])
+                return []
 
-        cache.set(cache_key, bars, _HISTORY_TTL)
-        return bars
+            history = data.get("history", {})
+            if not history:
+                if not fut.done():
+                    fut.set_result([])
+                return []
+            days = history.get("day", [])
+            if isinstance(days, dict):
+                days = [days]
+
+            bars = []
+            for d in days:
+                bars.append({
+                    "date": d.get("date"),
+                    "open": _safe_float(d.get("open")),
+                    "high": _safe_float(d.get("high")),
+                    "low": _safe_float(d.get("low")),
+                    "close": _safe_float(d.get("close")),
+                    "volume": _safe_int(d.get("volume")),
+                })
+
+            cache.set(cache_key, bars, _HISTORY_TTL)
+            if not fut.done():
+                fut.set_result(bars)
+            return bars
+        except Exception as exc:
+            if not fut.done():
+                fut.set_exception(exc)
+            raise
+        finally:
+            _HISTORY_FUTURES.pop(coalesce_key, None)
+
+    async def get_history_background(
+        self,
+        symbol: str,
+        interval: str = "daily",
+        start: str | None = None,
+        end: str | None = None,
+        lane: str = "maintenance",
+        reserve: int = 5,
+    ) -> list[dict]:
+        """Non-blocking background variant of get_history().
+
+        Admission flow (no sleeping):
+          1. Cache hit → return immediately (zero provider calls).
+          2. In-flight coalescing → await existing Future (no new HTTP).
+          3. check_budget(lane) → if full: record_defer, return [].
+          4. TRADIER_LIMITER.try_acquire_background(reserve) → if False: return [].
+          5. record_call(lane) → account the physical slot.
+          6. _get_preadmitted() → HTTP (already admitted, no re-acquire).
+
+        Returns [] on any admission failure. Caller must use existing cache/LKG.
+        """
+        global _coalesced_history_count
+        import data.tradier_budget as _bgt
+
+        symbol = symbol.upper()
+        if not start:
+            start = (date.today() - timedelta(days=365)).isoformat()
+        if not end:
+            end = date.today().isoformat()
+
+        cache_key = f"tradier:history:{symbol}:{interval}:{start}:{end}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # In-flight coalescing
+        coalesce_key = cache_key
+        if coalesce_key in _HISTORY_FUTURES:
+            _coalesced_history_count += 1
+            try:
+                return await asyncio.shield(_HISTORY_FUTURES[coalesce_key])
+            except Exception:
+                return []
+
+        # Non-blocking admission
+        if not _bgt.check_budget(lane):
+            _bgt.record_defer(lane)
+            print(f"[TRADIER][bg/history] {lane!r} lane full — deferring {symbol}")
+            return []
+
+        admitted = await TRADIER_LIMITER.try_acquire_background(reserve=reserve)
+        if not admitted:
+            print(f"[TRADIER][bg/history] global headroom < {reserve+1} — deferring {symbol}")
+            return []
+
+        _bgt.record_call(lane)
+
+        # Register in-flight future
+        loop = asyncio.get_event_loop()
+        fut: asyncio.Future = loop.create_future()
+        _HISTORY_FUTURES[coalesce_key] = fut
+        try:
+            data = await self._get_preadmitted("/markets/history", {
+                "symbol": symbol,
+                "interval": interval,
+                "start": start,
+                "end": end,
+            })
+            if not data:
+                if not fut.done():
+                    fut.set_result([])
+                return []
+
+            history = data.get("history", {})
+            if not history:
+                if not fut.done():
+                    fut.set_result([])
+                return []
+            days = history.get("day", [])
+            if isinstance(days, dict):
+                days = [days]
+
+            bars = []
+            for d in days:
+                bars.append({
+                    "date": d.get("date"),
+                    "open": _safe_float(d.get("open")),
+                    "high": _safe_float(d.get("high")),
+                    "low": _safe_float(d.get("low")),
+                    "close": _safe_float(d.get("close")),
+                    "volume": _safe_int(d.get("volume")),
+                })
+
+            cache.set(cache_key, bars, _HISTORY_TTL)
+            if not fut.done():
+                fut.set_result(bars)
+            return bars
+        except Exception as exc:
+            if not fut.done():
+                fut.set_exception(exc)
+            return []
+        finally:
+            _HISTORY_FUTURES.pop(coalesce_key, None)
 
     # ── Time and Sales (intraday ticks / intervals) ─────────────────────
     async def get_timesales(
@@ -587,7 +805,11 @@ class TradierProvider:
         Intraday time-and-sales data. Works for equities and option OCC symbols.
         interval: tick, 1min, 5min, 15min
         Returns list of {timestamp, open, high, low, close, volume, vwap}.
+
+        Coalescing: concurrent requests for the same symbol+interval+window share
+        one in-flight Future rather than firing duplicate Tradier calls.
         """
+        global _coalesced_timesales_count
         symbol = symbol.upper()
         params: dict[str, str] = {"symbol": symbol, "interval": interval}
         if start:
@@ -600,31 +822,165 @@ class TradierProvider:
         if cached is not None:
             return cached
 
-        data = await self._get("/markets/timesales", params)
-        if not data:
+        # In-flight coalescing
+        coalesce_key = cache_key
+        if coalesce_key in _TIMESALES_FUTURES:
+            _coalesced_timesales_count += 1
+            try:
+                return await asyncio.shield(_TIMESALES_FUTURES[coalesce_key])
+            except Exception:
+                return []
+
+        loop = asyncio.get_event_loop()
+        fut: asyncio.Future = loop.create_future()
+        _TIMESALES_FUTURES[coalesce_key] = fut
+        try:
+            data = await self._get("/markets/timesales", params)
+            if not data:
+                if not fut.done():
+                    fut.set_result([])
+                return []
+
+            series_data = data.get("series", {})
+            if not series_data:
+                if not fut.done():
+                    fut.set_result([])
+                return []
+            raw = series_data.get("data", [])
+            if isinstance(raw, dict):
+                raw = [raw]
+
+            ticks = []
+            for t in raw:
+                ticks.append({
+                    "timestamp": t.get("timestamp"),
+                    "open": _safe_float(t.get("open")),
+                    "high": _safe_float(t.get("high")),
+                    "low": _safe_float(t.get("low")),
+                    "close": _safe_float(t.get("close")),
+                    "volume": _safe_int(t.get("volume")),
+                    "vwap": _safe_float(t.get("vwap")),
+                })
+
+            cache.set(cache_key, ticks, _TIMESALES_TTL)
+            if not fut.done():
+                fut.set_result(ticks)
+            return ticks
+        except Exception as exc:
+            if not fut.done():
+                fut.set_exception(exc)
+            raise
+        finally:
+            _TIMESALES_FUTURES.pop(coalesce_key, None)
+
+    async def get_timesales_background(
+        self,
+        symbol: str,
+        interval: str = "5min",
+        start: str | None = None,
+        end: str | None = None,
+        lane: str = "maintenance",
+        reserve: int = 5,
+        extra_params: dict | None = None,
+    ) -> list[dict]:
+        """Non-blocking background variant of get_timesales().
+
+        Admission flow (no sleeping):
+          1. Cache hit → return immediately (zero provider calls).
+          2. In-flight coalescing → await existing Future (no new HTTP).
+          3. check_budget(lane) → if full: record_defer, return [].
+          4. TRADIER_LIMITER.try_acquire_background(reserve) → if False: return [].
+          5. record_call(lane) → account the physical slot.
+          6. _get_preadmitted() → HTTP (already admitted, no re-acquire).
+
+        The semaphore (_INTRADAY_SEM) must be acquired by the *caller* around
+        this method call — not inside, so the semaphore is never held while
+        waiting for admission.
+
+        Returns [] on any admission failure. Caller must use existing cache/LKG.
+        """
+        global _coalesced_timesales_count
+        import data.tradier_budget as _bgt
+
+        symbol = symbol.upper()
+        params: dict[str, str] = {"symbol": symbol, "interval": interval}
+        if start:
+            params["start"] = start
+        if end:
+            params["end"] = end
+        if extra_params:
+            params.update(extra_params)
+
+        cache_key = f"tradier:timesales:{symbol}:{interval}:{start}:{end}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # In-flight coalescing — piggyback on an in-progress request for same key
+        coalesce_key = cache_key
+        if coalesce_key in _TIMESALES_FUTURES:
+            _coalesced_timesales_count += 1
+            try:
+                return await asyncio.shield(_TIMESALES_FUTURES[coalesce_key])
+            except Exception:
+                return []
+
+        # Non-blocking admission: lane budget check first (no global acquire yet)
+        if not _bgt.check_budget(lane):
+            _bgt.record_defer(lane)
+            print(f"[TRADIER][bg/timesales] {lane!r} lane full — deferring {symbol}")
             return []
 
-        series_data = data.get("series", {})
-        if not series_data:
+        admitted = await TRADIER_LIMITER.try_acquire_background(reserve=reserve)
+        if not admitted:
+            print(f"[TRADIER][bg/timesales] global headroom < {reserve+1} — deferring {symbol}")
             return []
-        raw = series_data.get("data", [])
-        if isinstance(raw, dict):
-            raw = [raw]
 
-        ticks = []
-        for t in raw:
-            ticks.append({
-                "timestamp": t.get("timestamp"),
-                "open": _safe_float(t.get("open")),
-                "high": _safe_float(t.get("high")),
-                "low": _safe_float(t.get("low")),
-                "close": _safe_float(t.get("close")),
-                "volume": _safe_int(t.get("volume")),
-                "vwap": _safe_float(t.get("vwap")),
-            })
+        # Record the lane call AFTER successful global admission
+        _bgt.record_call(lane)
 
-        cache.set(cache_key, ticks, _TIMESALES_TTL)
-        return ticks
+        # Register in-flight future so concurrent calls coalesce
+        loop = asyncio.get_event_loop()
+        fut: asyncio.Future = loop.create_future()
+        _TIMESALES_FUTURES[coalesce_key] = fut
+        try:
+            data = await self._get_preadmitted("/markets/timesales", params)
+            if not data:
+                if not fut.done():
+                    fut.set_result([])
+                return []
+
+            series_data = data.get("series", {})
+            if not series_data:
+                if not fut.done():
+                    fut.set_result([])
+                return []
+            raw = series_data.get("data", [])
+            if isinstance(raw, dict):
+                raw = [raw]
+
+            ticks = []
+            for t in raw:
+                ticks.append({
+                    "timestamp": t.get("timestamp"),
+                    "open": _safe_float(t.get("open")),
+                    "high": _safe_float(t.get("high")),
+                    "low": _safe_float(t.get("low")),
+                    "close": _safe_float(t.get("close")),
+                    "volume": _safe_int(t.get("volume")),
+                    "vwap": _safe_float(t.get("vwap")),
+                })
+
+            cache.set(cache_key, ticks, _TIMESALES_TTL)
+            if not fut.done():
+                fut.set_result(ticks)
+            return ticks
+        except Exception as exc:
+            if not fut.done():
+                fut.set_exception(exc)
+            return []
+        finally:
+            _TIMESALES_FUTURES.pop(coalesce_key, None)
 
     # ── Option Lookup ───────────────────────────────────────────────────
     async def lookup_options(self, underlying: str) -> list[str]:

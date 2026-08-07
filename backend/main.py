@@ -6318,30 +6318,40 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
     bypass_services: list[str] = []
 
     unmanaged_tradier_paths = [
-        # All paths routed through TRADIER_LIMITER as of the contention fix.
-        # Entry retained for historical audit; count is 0.
+        # All three previously-raw-httpx paths now route through TradierProvider's
+        # canonical admission boundary (budget + try_acquire_background/acquire + record_call).
+        # No fail-open unmetered paths remain among the audited active functions.
         {
             "module": "services/theme_rs_service.py",
             "function": "_fetch_intraday_bars",
             "endpoint": "/markets/timesales",
-            "mechanism": "TRADIER_LIMITER (maintenance lane) + _INTRADAY_SEM concurrency gate",
-            "note": "MANAGED — routed through global limiter; previously raw httpx + own Semaphore(20)",
+            "mechanism": (
+                "Non-blocking: check_budget('maintenance') → try_acquire_background(reserve=5) "
+                "→ record_call → _INTRADAY_SEM → TradierProvider._get_preadmitted(). "
+                "Semaphore acquired AFTER admission (never held during rate-limit wait). "
+                "In-flight coalescing via _INTRADAY_FUTURES. No fail-open."
+            ),
             "status": "managed",
         },
         {
             "module": "services/theme_rs_service.py",
             "function": "_fetch_tradier_daily_history",
             "endpoint": "/markets/history",
-            "mechanism": "TRADIER_LIMITER (maintenance lane)",
-            "note": "MANAGED — last-resort daily-bar fallback; previously bypassed TRADIER_LIMITER",
+            "mechanism": (
+                "Non-blocking: TradierProvider.get_history_background(lane='maintenance', reserve=5). "
+                "Budget check + try_acquire_background inside provider. No fail-open."
+            ),
             "status": "managed",
         },
         {
             "module": "services/watchlist_quote_cache.py",
             "function": "_fetch_batch_direct",
             "endpoint": "/markets/quotes",
-            "mechanism": "TRADIER_LIMITER (reserved lane)",
-            "note": "MANAGED — startup-only cold-cache fallback; previously raw httpx",
+            "mechanism": (
+                "Startup-only: check_budget('reserved') → blocking TRADIER_LIMITER.acquire() "
+                "→ record_call → TradierProvider._get_preadmitted(). "
+                "Blocking acquire is safe at startup (no contention). No raw httpx. No fail-open."
+            ),
             "status": "managed",
         },
     ]

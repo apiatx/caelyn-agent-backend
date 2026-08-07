@@ -105,10 +105,13 @@ _ETF_HOLDINGS_TOP_N = 10
 
 # Semaphore for FMP history calls (parallel bursting within rate-limit)
 _FMP_HIST_SEM = asyncio.Semaphore(25)
-# Semaphore for Tradier intraday timesales calls (raw httpx, bypasses TRADIER_LIMITER).
-# Caps the burst on the first cold-start fetch (222 unique proxy symbols).
-# Per-symbol 10-min cache means only ~1 burst per 10-min window during market hours.
+# Semaphore for Tradier intraday timesales HTTP concurrency gate (≤20 simultaneous).
+# Must NOT be held while waiting for rate-limit admission — acquire only after admitted.
 _INTRADAY_SEM = asyncio.Semaphore(20)
+# In-flight coalescing for intraday requests: sym → Future[list[dict]].
+# Prevents duplicate physical calls when N concurrent callers request the same symbol
+# during the same cold-start burst.
+_INTRADAY_FUTURES: dict[str, "asyncio.Future[list[dict]]"] = {}
 
 # ── Per-timeframe TTL constants ────────────────────────────────────────────────
 _TTL_1D_MARKET   = 60      # 1 minute  — 1D during market hours (Tradier, real-time)
@@ -762,9 +765,13 @@ async def _fetch_tradier_daily_history(symbol: str, days: int = 400) -> list[dic
     Returns sorted {date, close} bars.
     Cached 1h.
 
-    All physical HTTP calls are now routed through TRADIER_LIMITER (maintenance lane).
-    Previously this was an unmanaged bypass — as of the Tradier contention fix it counts
-    against the global 110-RPM ceiling like every other provider call.
+    Routes through TradierProvider.get_history_background() — the canonical physical
+    boundary — using non-blocking background admission (budget check + try_acquire_background).
+    If the maintenance lane or global headroom is insufficient the call is deferred and
+    [] is returned; the caller falls back to LKG or skips.
+
+    There is NO fail-open path: infrastructure unavailability means deferral, not
+    unmetered HTTP.
 
     Current call sites:
       - _fetch_proxy_history() Step 2 — only reached when canonical AND FMP both fail
@@ -773,129 +780,130 @@ async def _fetch_tradier_daily_history(symbol: str, days: int = 400) -> list[dic
     canonical cache.  It must NOT be added as a new primary call site.
     """
     sym = symbol.upper()
-    cache_key = f"tdier_hist:{sym}:{days}"
-    hit = cache.get(cache_key)
+    # Provider-level cache key is tradier:history:{sym}:daily:{start}:{end}.
+    # The service-level key below is a shorter alias checked first so callers can
+    # share the result without reproducing the date-parameterised key.
+    svc_cache_key = f"tdier_hist:{sym}:{days}"
+    hit = cache.get(svc_cache_key)
     if hit is not None:
         return hit
 
-    key = _tradier_key()
-    if not key:
-        return []
-
     start = (date.today() - timedelta(days=days)).isoformat()
     end   = date.today().isoformat()
-    base  = _tradier_base()
 
-    # Route through the global rate-limiter (maintenance lane) before any network I/O.
-    # Non-fatal guard: if the limiter module is unavailable we proceed rather than
-    # silently drop a last-resort fallback that the caller already needs.
+    # Use the canonical provider boundary — no raw httpx, no fail-open.
     try:
-        from data.tradier_provider import TRADIER_LIMITER as _hist_lim
-        from data.tradier_budget import record_call as _hist_rb
-        await _hist_lim.acquire()
-        _hist_rb("maintenance")
-    except Exception as _lim_exc:
-        print(f"[THEME_RS][Tradier hist] limiter unavailable ({_lim_exc}); proceeding unmetered")
-
-    try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            resp = await client.get(
-                f"{base}/markets/history",
-                headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
-                params={"symbol": sym, "interval": "daily", "start": start, "end": end},
-            )
-        if resp.status_code != 200:
-            return []
-        data    = resp.json()
-        history = data.get("history") or {}
-        days_raw = history.get("day") or []
-        if isinstance(days_raw, dict):
-            days_raw = [days_raw]
-
-        bars = []
-        for d in days_raw:
-            dt  = d.get("date") or ""
-            cls = d.get("close")
-            if dt and cls is not None:
-                try:
-                    bar: dict = {"date": str(dt)[:10], "close": float(cls)}
-                    # Preserve full OHLCV — same call, richer storage, no extra requests
-                    for _fld, _key in (("open", "open"), ("high", "high"),
-                                       ("low", "low"), ("volume", "volume")):
-                        _v = d.get(_key)
-                        if _v is not None:
-                            try:
-                                bar[_fld] = float(_v)
-                            except (TypeError, ValueError):
-                                pass
-                    bars.append(bar)
-                except (TypeError, ValueError):
-                    pass
-
-        bars.sort(key=lambda r: r["date"])
-        if bars:
-            cache.set(cache_key, bars, _HIST_TTL)
-        return bars
-
-    except Exception as e:
-        print(f"[THEME_RS][Tradier hist] {sym}: {e}")
+        from data.tradier_provider import get_provider as _get_prov
+        provider = _get_prov()
+    except Exception as _imp_exc:
+        print(f"[THEME_RS][Tradier hist] provider import error ({_imp_exc}) — skipping {sym}")
         return []
+
+    if provider is None:
+        # No API key configured — skip silently.
+        return []
+
+    bars = await provider.get_history_background(
+        symbol=sym,
+        interval="daily",
+        start=start,
+        end=end,
+        lane="maintenance",
+        reserve=5,
+    )
+
+    # The provider cache (1h TTL) already stores the result under the full key.
+    # Mirror to the short service alias so future svc_cache_key hits are instant.
+    if bars:
+        cache.set(svc_cache_key, bars, _HIST_TTL)
+    return bars
 
 
 async def _fetch_intraday_bars(sym: str) -> list[dict]:
     """
     Fetch Tradier 5-min intraday bars for today's market session.
     Returns [{date: ISO-timestamp (Eastern), close: float}] oldest→newest.
-    Cached 10 min per symbol per trading day — safe to call from the 60-s 1D
-    warmup loop without hammering the Tradier rate-limit bucket.
+    Cached 10 min per symbol per trading day.
 
-    Concurrency is gated by _INTRADAY_SEM (≤20 concurrent).  Every physical HTTP
-    call also passes through TRADIER_LIMITER (maintenance lane) so it counts against
-    the shared 110-RPM global ceiling.  Previously this was an unmanaged bypass.
+    Admission contract (fixes de859cc1 Defect 1 + Defect 2):
+      1. Cache hit → return immediately. No semaphore, no limiter.
+      2. In-flight coalescing → share existing Future. No semaphore, no new HTTP.
+      3. Lane budget check (maintenance) → defer immediately if full. No semaphore.
+      4. Non-blocking global admission via try_acquire_background(reserve=5).
+         → If headroom insufficient: defer immediately. No semaphore. No sleeping.
+      5. record_call("maintenance") — lane slot recorded.
+      6. _INTRADAY_SEM acquired (HTTP concurrency gate, ≤20 simultaneous).
+         → Semaphore is NEVER held while waiting for rate-limit admission.
+      7. _get_preadmitted() — HTTP only (already admitted; no re-acquire).
+
+    There is NO fail-open path. Infrastructure failure → deferral, not unmetered HTTP.
     """
     from datetime import date as _d, datetime, timezone, timedelta as _td
+    import data.tradier_budget as _bgt
+    from data.tradier_provider import TRADIER_LIMITER as _intra_lim, get_provider as _get_prov
 
     sym   = sym.upper()
     today = _d.today().isoformat()
     cache_key = f"theme_rs:intraday_5min:{sym}:{today}"
+
+    # ── Step 1: Cache check ────────────────────────────────────────────────────
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
 
-    key = _tradier_key()
-    if not key:
-        return []
-
-    base = _tradier_base()
-    try:
-        async with _INTRADAY_SEM:   # ≤20 concurrent; holds slot while waiting for limiter
-            # Route through the global rate-limiter (maintenance lane) before any network
-            # I/O.  The semaphore ensures ≤20 tasks compete for limiter slots at once,
-            # smoothing the burst on cold starts (up to ~222 proxy symbols).
-            try:
-                from data.tradier_provider import TRADIER_LIMITER as _intra_lim
-                from data.tradier_budget import record_call as _intra_rb
-                await _intra_lim.acquire()
-                _intra_rb("maintenance")
-            except Exception as _lim_exc:
-                print(f"[THEME_RS][intraday] limiter unavailable ({_lim_exc}); proceeding unmetered")
-            async with httpx.AsyncClient(timeout=12.0) as client:
-                resp = await client.get(
-                    f"{base}/markets/timesales",
-                    headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
-                    params={
-                        "symbol":         sym,
-                        "interval":       "5min",
-                        "start":          f"{today} 09:30",
-                        "end":            f"{today} 16:05",
-                        "session_filter": "open",
-                    },
-                )
-        if resp.status_code != 200:
+    # ── Step 2: In-flight coalescing ───────────────────────────────────────────
+    if sym in _INTRADAY_FUTURES:
+        try:
+            return await asyncio.shield(_INTRADAY_FUTURES[sym])
+        except Exception:
             return []
 
-        data   = resp.json()
-        series = data.get("series") or {}
+    # ── Step 3: Non-blocking lane budget check — no semaphore held ────────────
+    if not _bgt.check_budget("maintenance"):
+        _bgt.record_defer("maintenance")
+        print(f"[THEME_RS][intraday] maintenance lane full — deferring {sym}")
+        return []
+
+    # ── Step 4: Non-blocking global admission — no semaphore held ─────────────
+    admitted = await _intra_lim.try_acquire_background(reserve=5)
+    if not admitted:
+        print(f"[THEME_RS][intraday] global headroom insufficient — deferring {sym}")
+        return []
+
+    # ── Step 5: Record lane call (after successful global admission) ───────────
+    _bgt.record_call("maintenance")
+
+    # ── Step 6+7: Register future, then concurrency-gated HTTP ────────────────
+    loop = asyncio.get_event_loop()
+    fut: asyncio.Future = loop.create_future()
+    _INTRADAY_FUTURES[sym] = fut
+    try:
+        provider = _get_prov()
+        if provider is None:
+            # No API key — no HTTP. Return [] without wasting the admitted slot.
+            if not fut.done():
+                fut.set_result([])
+            return []
+
+        # Semaphore wraps ONLY the HTTP call — admission already complete above.
+        async with _INTRADAY_SEM:
+            resp_data = await provider._get_preadmitted(
+                "/markets/timesales",
+                {
+                    "symbol":         sym,
+                    "interval":       "5min",
+                    "start":          f"{today} 09:30",
+                    "end":            f"{today} 16:05",
+                    "session_filter": "open",
+                },
+            )
+
+        if not resp_data:
+            if not fut.done():
+                fut.set_result([])
+            return []
+
+        series = resp_data.get("series") or {}
         raw    = series.get("data") or []
         if isinstance(raw, dict):
             raw = [raw]
@@ -916,11 +924,18 @@ async def _fetch_intraday_bars(sym: str) -> list[dict]:
         bars_out.sort(key=lambda b: b["date"])
         if bars_out:
             cache.set(cache_key, bars_out, 600)   # 10-min TTL
+
+        if not fut.done():
+            fut.set_result(bars_out)
         return bars_out
 
     except Exception as exc:
         print(f"[THEME_RS][intraday] {sym}: {exc}")
+        if not fut.done():
+            fut.set_exception(exc)
         return []
+    finally:
+        _INTRADAY_FUTURES.pop(sym, None)
 
 
 async def _fetch_proxy_history(symbol: str, days: int = 400) -> tuple[list[dict], str]:
