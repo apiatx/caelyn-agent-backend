@@ -87,6 +87,14 @@ _BULK_LKG_BUILDING: set[str]        = set()
 _BULK_LKG_TTL       = 5 * 60    # 5 min — serve from cache without rebuild
 _BULK_LKG_STALE_TTL = 20 * 60   # 20 min — serve stale while rebuild runs in bg
 
+# Per-watchlist taxonomy generation counter.
+# Incremented by invalidate_bulk_lkg_for_ticker() whenever a canonical taxonomy
+# mutation affects a cached watchlist.  _rebuild_bulk_lkg_bg() captures the
+# counter value at task-start and discards its result if the counter advanced
+# while the rebuild was in flight, preventing a pre-mutation background rebuild
+# from overwriting the correct fresh payload written by the immediate inline GET.
+_TAXONOMY_GEN: dict[str, int] = {}
+
 
 def _bulk_lkg_invalidate(watchlist_id: str) -> None:
     """Drop the cached bulk GET response for a watchlist.
@@ -95,6 +103,60 @@ def _bulk_lkg_invalidate(watchlist_id: str) -> None:
     Idempotent: safe to call even when no entry is present.
     """
     _BULK_LKG.pop(watchlist_id, None)
+
+
+def invalidate_bulk_lkg_for_ticker(ticker: str) -> None:
+    """
+    Drop bulk LKG entries for all watchlists currently caching a payload that
+    contains *ticker*.
+
+    Called by the canonical taxonomy PUT immediately after a successful atomic
+    DB commit.  Because that route has no watchlist_id, we identify affected
+    watchlists by scanning the in-process LKG payload.
+
+    Safety contract:
+      - Only called AFTER the DB commit succeeds (failures raise before reaching
+        the caller, so no false-positive invalidations on failed transactions).
+      - Zero provider calls.  Zero DB queries.  Pure in-memory O(W × T) scan
+        where W = cached watchlists, T = tickers per section.
+      - Also increments _TAXONOMY_GEN[wl_id] for every affected watchlist so
+        that any background rebuild already in flight at the time of the taxonomy
+        mutation discards its pre-mutation result instead of overwriting the
+        correct fresh payload from the immediate post-mutation inline GET.
+    """
+    sym = (ticker or "").strip().upper()
+    if not sym:
+        return
+
+    affected: list[str] = []
+    for _wl_id, _entry in list(_BULK_LKG.items()):
+        _payload  = _entry.get("payload") or {}
+        _analysis = _payload.get("analysis") or {}
+        _sections = _analysis.get("sections") or []
+        _found    = False
+        for _sec in _sections:
+            for _row in _sec.get("tickers", []):
+                if str(_row.get("symbol") or "").strip().upper() == sym:
+                    _found = True
+                    break
+            if _found:
+                break
+        if _found:
+            affected.append(_wl_id)
+
+    for _wl_id in affected:
+        _bulk_lkg_invalidate(_wl_id)
+        _TAXONOMY_GEN[_wl_id] = _TAXONOMY_GEN.get(_wl_id, 0) + 1
+        print(
+            f"[WATCHLIST_LKG] taxonomy_invalidate wl={_wl_id} ticker={sym} "
+            f"gen={_TAXONOMY_GEN[_wl_id]}"
+        )
+
+    if not affected:
+        print(
+            f"[WATCHLIST_LKG] taxonomy_invalidate ticker={sym}: "
+            f"no cached watchlist payloads contain this ticker (LKG cold or ticker absent)"
+        )
 
 
 async def _rebuild_bulk_lkg_bg(watchlist_id: str) -> None:
@@ -106,7 +168,12 @@ async def _rebuild_bulk_lkg_bg(watchlist_id: str) -> None:
          the GET route throughout this rebuild — it is never removed first.
       2. _build_watchlist_response() runs the same canonical enrichment pipeline
          as the inline GET path.
-      3. On success: atomically write the new entry, replacing the old.
+      3. On success: atomically write the new entry, replacing the old —
+         BUT ONLY if the taxonomy generation counter has not advanced since
+         this task started.  If it has, a taxonomy mutation occurred during
+         this rebuild; the result is discarded so the mutation-correct inline
+         GET response (already stored by the immediate POST-mutation GET) is
+         never overwritten with pre-mutation state.
       4. On failure: the old entry is completely untouched — it continues to be
          served on all subsequent GETs (with another rebuild queued next hit).
 
@@ -115,6 +182,11 @@ async def _rebuild_bulk_lkg_bg(watchlist_id: str) -> None:
     """
     import asyncio as _aio_bg
     import time as _t_bg
+
+    # Capture taxonomy generation BEFORE any await so we can detect mutations
+    # that happened while this rebuild was running.
+    _gen_at_start = _TAXONOMY_GEN.get(watchlist_id, 0)
+
     try:
         from services.watchlist_service import load_watchlist as _lw_bg
         _store_bg = await _aio_bg.get_event_loop().run_in_executor(
@@ -130,6 +202,18 @@ async def _rebuild_bulk_lkg_bg(watchlist_id: str) -> None:
             f"{_store_bg.get('updated_at') or _store_bg.get('saved_at')}|"
             f"{len(_store_bg.get('tickers', []))}"
         )
+
+        # Race guard: if a taxonomy mutation occurred while we were building,
+        # the immediate POST-mutation inline GET has already stored a correct
+        # fresh entry.  Discard our pre-mutation result to avoid overwriting it.
+        if _TAXONOMY_GEN.get(watchlist_id, 0) != _gen_at_start:
+            print(
+                f"[WATCHLIST_LKG] rebuild result DISCARDED wl={watchlist_id}: "
+                f"taxonomy mutated during rebuild "
+                f"(gen_start={_gen_at_start} gen_now={_TAXONOMY_GEN.get(watchlist_id, 0)})"
+            )
+            return
+
         _BULK_LKG[watchlist_id] = {
             "payload": _result_bg,
             "ts":      _t_bg.monotonic(),
@@ -1280,6 +1364,28 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             f"{_wl_ov_err}"
         )
 
+    # ── Canonical Theme resolution context — built ONCE per request ────────────
+    # Shared by _build_ticker_row() for every row path (normal, skeleton, missing-
+    # append, uncategorized reclassification).  Calling build_theme_resolution_context()
+    # once here and capturing it in the closure eliminates per-ticker rebuilds.
+    #
+    # WHY: the normal path passes stored LLM analysis rows directly to
+    # _build_ticker_row() as base_row.  Those rows carry a canonical_theme_id
+    # that was correct when the LLM ran but may be stale after a manual taxonomy
+    # assignment.  resolve_primary_theme_for_ticker() enforces the authoritative
+    # precedence chain (manual_override always wins) so the identity block inside
+    # _build_ticker_row() always reflects the current persisted state, not the
+    # stored LLM result.
+    _wl_theme_ctx = None
+    try:
+        from services.theme_resolver import build_theme_resolution_context as _wl_build_ctx
+        _wl_theme_ctx = _wl_build_ctx()
+    except Exception as _wl_ctx_err:
+        print(
+            f"[WATCHLIST_ENRICH] theme_resolver context build failed (non-fatal): "
+            f"{_wl_ctx_err}"
+        )
+
     def _build_ticker_row(sym: str, base_row: dict) -> dict:
         """Build one enriched ticker row from quote + CSV data."""
         sym = sym.strip().upper()
@@ -1543,6 +1649,44 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         #     "sub_theme".  parent_theme_id is NOT used as a classification
         #     proxy: 19 standalone sub_themes have no parent_theme_id.
         try:
+            # ── Authoritative resolver pass ──────────────────────────────────
+            # Override the LLM-derived canonical_theme_id with the current
+            # canonical assignment from theme_resolver.  The resolver's
+            # precedence chain (manual_override wins) ensures that a manual
+            # taxonomy assignment always outranks any stale LLM classification
+            # embedded in the stored analysis section row.
+            #
+            # _wl_theme_ctx is pre-built once per request (closure-captured)
+            # so this is a pure dict lookup — zero provider calls per ticker.
+            try:
+                from services.theme_resolver import (
+                    resolve_primary_theme_for_ticker as _wl_res_fn,
+                )
+                _ind_csv  = csv_map.get(sym, {})
+                _ind_val  = (
+                    _ind_csv.get("Industry") or _ind_csv.get("industry") or ""
+                ).strip()
+                _res      = _wl_res_fn(sym, industry=_ind_val, ctx=_wl_theme_ctx)
+                _res_id   = _res.get("theme_id")
+                _res_src  = _res.get("source")
+                if _res_id is not None:
+                    # Resolver found a definitive result — use it unconditionally.
+                    # Covers: manual_override, canonical_map, themes_page_membership,
+                    # industry_fallback, llm_classified.
+                    enriched["canonical_theme_id"]   = _res_id
+                    enriched["canonical_theme_name"] = _res.get("theme_name")
+                    enriched["theme_source"]         = _res_src
+                elif _res_src == "deprecated_suppressed":
+                    # Resolver explicitly cleared a deprecated ID; follow its lead.
+                    enriched["canonical_theme_id"]   = None
+                    enriched["canonical_theme_name"] = None
+                    enriched["theme_source"]         = "deprecated_suppressed"
+                # else: source == "no_mapping" — resolver found nothing; preserve
+                # whatever the LLM analysis row may already carry.  An LLM result
+                # for an unmapped ticker is still more useful than null.
+            except Exception:
+                pass  # non-fatal: fall back to LLM-derived canonical_theme_id
+
             _id_raw = (
                 enriched.get("canonical_theme_id")
                 or enriched.get("primary_theme_id")

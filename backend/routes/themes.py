@@ -1369,6 +1369,29 @@ async def admin_put_ticker_taxonomy(
     # ── 10. Single cache invalidation after successful commit ─────────────────
     _invalidate_caches()
 
+    # ── 10b. Watchlist bulk LKG invalidation — taxonomy-aware ─────────────────
+    # The watchlist bulk LKG version fingerprint is based on updated_at|ticker_count,
+    # neither of which changes on a taxonomy write.  Without this call, any GET
+    # within the next 5–20 min would return the stale cached row (old canonical_theme_id,
+    # old section membership, old theme_ids).
+    #
+    # invalidate_bulk_lkg_for_ticker() scans the in-process LKG for all watchlist
+    # payloads that contain this ticker and pops those entries.  It also bumps
+    # the per-watchlist _TAXONOMY_GEN counter so any background rebuild already
+    # in flight discards its pre-mutation result instead of overwriting the correct
+    # fresh payload from the immediate POST-mutation inline GET.
+    #
+    # Must run AFTER _invalidate_caches() (which clears category_overrides cache)
+    # so the inline GET that rebuilds the LKG reads the freshly committed DB state.
+    # Only reached when txn_result["ok"] is True — failed transactions raise above.
+    try:
+        from services.watchlist_router import invalidate_bulk_lkg_for_ticker as _wl_lkg_inv
+        _wl_lkg_inv(ticker)
+    except Exception as _lkg_err:
+        _log.warning(
+            "[taxonomy PUT] watchlist LKG invalidation failed (non-fatal): %s", _lkg_err
+        )
+
     # ── 11. Post-commit optional downstream hints (non-authoritative) ─────────
     if to_add:
         try:
