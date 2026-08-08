@@ -1,0 +1,347 @@
+BACKEND OPENCODE / DEEPSEEK — REMOVE TAXONOMY SAVE LATENCY FROM THE USER REQUEST PATH
+
+Work only in the live CaelynAI BACKEND Replit workspace.
+
+Read and obey the live AGENTS.md first.
+
+The live Replit workspace is the primary source of truth.
+GitHub is reference/backup only.
+
+This is a LATENCY correction to the existing canonical taxonomy PUT.
+
+DO NOT redesign taxonomy.
+DO NOT change persistence schema.
+DO NOT create another endpoint.
+DO NOT add Redis/pubsub.
+DO NOT change provider schedules.
+DO NOT add provider calls.
+DO NOT remove the atomic transaction.
+DO NOT undo the Watchlist LKG coherence fix.
+DO NOT touch frontend code.
+
+Canonical mutation remains:
+
+PUT /api/themes/admin/ticker-taxonomy/{ticker}
+
+============================================================
+PROVEN USER FAILURE
+===================
+
+The frontend Express proxy currently aborts this backend request after 15 seconds.
+
+A real user attempt on ACMR displayed:
+
+Theme save timed out
+
+yet Neon subsequently showed the assignment successfully committed:
+
+watchlist_category_overrides:
+ticker = ACMR
+category = Semiconductor Equipment
+reason = themes_page:semicap_equip
+
+theme_ticker_overrides:
+symbol = ACMR
+theme_id = semicap_equip
+action = add
+source = manual_admin
+
+Both persistence rows share the same timestamp.
+
+Therefore the current backend PUT can commit successfully but take long enough
+that the frontend abandons the response.
+
+That creates an ambiguous write:
+
+frontend says failure
+DB says success
+
+This must stop.
+
+============================================================
+FIRST — MEASURE, DO NOT EDIT
+============================
+
+Read live:
+
+backend/routes/themes.py
+backend/services/theme_merge_layer.py
+backend/services/category_overrides.py
+backend/services/watchlist_router.py
+backend/data/pg_storage.py
+
+and existing taxonomy persistence/coherence tests.
+
+Instrument or locally time the canonical PUT by PHASE.
+
+Use time.monotonic() around at minimum:
+
+1. validation / normalization
+2. current membership read
+3. atomic_taxonomy_write_db()
+4. category_overrides cache invalidation
+5. refresh_enriched_universe()
+6. theme RS cache invalidation
+7. options sectors cache invalidation
+8. invalidate_bulk_lkg_for_ticker()
+9. optional downstream hints
+10. authoritative _get_ticker_theme_memberships() reread
+11. total request duration
+
+Do not guess.
+
+Run several controlled transitions and report actual phase timings.
+
+Use a controlled ticker and restore its exact original state afterward through
+the canonical PUT.
+
+============================================================
+ARCHITECTURAL REQUIREMENT
+=========================
+
+The synchronous user request must contain ONLY work required to establish:
+
+"the requested taxonomy state has durably committed and can be read back correctly"
+
+Critical synchronous path should be approximately:
+
+validate
+→ atomic DB transaction
+→ invalidate the category_overrides cache required for authoritative reread
+→ invalidate affected Watchlist bulk LKG
+→ authoritative reread / verification
+→ HTTP response
+
+Anything that is merely downstream propagation must NOT hold the Save button open.
+
+Audit each current post-commit operation and classify it as:
+
+A. REQUIRED FOR AUTHORITATIVE READ-AFTER-WRITE
+
+or
+
+B. DOWNSTREAM / DERIVED / BEST-EFFORT
+
+Do not move anything until you prove its classification from live code.
+
+============================================================
+KNOWN SUSPECT
+=============
+
+Current _invalidate_caches() synchronously performs:
+
+* invalidate_overrides_cache("default")
+* refresh_enriched_universe()
+* invalidate_theme_rs_cache()
+* invalidate_sectors_cache()
+
+The first item is known to be required before the authoritative reread because
+the atomic transaction bypasses category_overrides service-layer invalidation.
+
+The others appear to be derived-cache propagation and may not need to block the
+canonical PUT.
+
+PROVE THIS.
+
+Specifically verify that _get_ticker_theme_memberships() / theme_resolver can
+correctly resolve the newly persisted primary using:
+
+watchlist_category_overrides
++
+invalidate_overrides_cache("default")
+
+without needing refresh_enriched_universe() to complete first.
+
+Also verify that membership display metadata for the newly assigned canonical ID
+already exists in the static active registry.
+
+If proven, do not run refresh_enriched_universe() synchronously in this PUT.
+
+============================================================
+PREFERRED IMPLEMENTATION
+========================
+
+Keep the atomic transaction and critical read-after-write operations synchronous.
+
+Move ONLY proven non-authoritative post-commit propagation out of the response
+critical path using the smallest existing FastAPI mechanism.
+
+Prefer FastAPI BackgroundTasks or an equivalent existing application pattern.
+
+Do NOT invent a scheduler or queue system.
+
+The response should be allowed to return after:
+
+1. transaction committed
+2. critical cache invalidation completed
+3. affected Watchlist LKG invalidated
+4. authoritative reread succeeded
+5. authoritative response body constructed
+
+Then background/best-effort work may perform, if proven safe:
+
+* refresh_enriched_universe()
+* theme RS cache invalidation
+* Options Flow sector cache invalidation
+* high-priority downstream hints
+* other non-authoritative propagation currently performed after commit
+
+Do NOT put blocking synchronous work directly onto the asyncio event loop if it
+is expensive.
+
+If a synchronous background function can block materially, use the established
+FastAPI threadpool/background-task behavior rather than asyncio.create_task on a
+blocking function.
+
+============================================================
+PRESERVE THESE FIXES
+====================
+
+Do not regress:
+
+* atomic_taxonomy_write_db()
+* category_overrides cache invalidation after successful commit
+* authoritative post-commit reread
+* Watchlist bulk LKG invalidation
+* _TAXONOMY_GEN stale-background-rebuild guard
+* manual override precedence
+* primary/subtheme/additional membership normalization
+
+A failed transaction must still return failure.
+
+A failed authoritative reread must still return failure.
+
+Downstream cache refresh failure AFTER an already verified commit must be logged
+and allowed to recover through its normal cache lifecycle; it must not hold the
+HTTP response hostage.
+
+============================================================
+IMPORTANT — DO NOT "FIX" THIS BY ONLY RAISING A TIMEOUT
+=======================================================
+
+The backend should not routinely require 15+ seconds to save one classification.
+
+Do not paper over backend latency by suggesting a 60-second browser timeout.
+
+The frontend will receive a separate safety-margin correction after this.
+
+Backend target:
+
+normal warm save:
+ideally < 2 seconds
+
+acceptable ceiling:
+< 5 seconds
+
+No ordinary warm save should come remotely close to 15 seconds.
+
+============================================================
+TESTS
+=====
+
+Preserve all existing:
+
+test_taxonomy_persistence.py
+test_watchlist_taxonomy_coherence.py
+
+Add focused latency/lifecycle tests proving:
+
+1. atomic transaction failure:
+
+   * no authoritative success
+   * no background propagation scheduled as successful work
+
+2. successful transaction:
+
+   * critical category cache invalidation happens before reread
+
+3. successful transaction:
+
+   * Watchlist LKG invalidation happens before response
+
+4. authoritative reread:
+
+   * happens before response
+
+5. downstream refresh:
+
+   * does NOT need to finish before the response can be returned
+
+6. downstream failure:
+
+   * cannot convert an already verified successful write into a client-visible
+     write failure
+
+7. no provider calls are introduced
+
+8. existing 20-transition write→GET stress remains green
+
+============================================================
+LIVE VALIDATION
+===============
+
+After implementation:
+
+Time 10 controlled canonical PUT requests.
+
+For each report:
+
+transaction_ms
+critical_invalidation_ms
+authoritative_reread_ms
+response_total_ms
+
+Also log downstream background duration separately.
+
+Required result:
+
+* 10/10 HTTP success
+* 0 timeouts
+* 0 authoritative mismatches
+* 0 stale immediate Watchlist reads
+* median response well below 5 seconds
+* max response below 10 seconds
+* preferably all warm responses below 3 seconds
+
+Then restore the controlled ticker exactly.
+
+DO NOT use ACMR unless necessary; ACMR currently has a real user assignment.
+
+============================================================
+FILE SCOPE
+==========
+
+Expected production file:
+
+backend/routes/themes.py
+
+Possibly a very small existing helper adjustment only if live code proves
+necessary.
+
+Do NOT modify watchlist_router.py unless the existing LKG API itself is broken.
+
+Do NOT modify database schema.
+
+If more than one additional production file is required, stop and explain why.
+
+============================================================
+FINAL REPORT
+============
+
+Report:
+
+* exact measured slow phase before fix
+* phase timings before
+* exact code/lifecycle change
+* which operations remain synchronous and why
+* which operations became post-response and why
+* phase timings after
+* 10-save latency distribution
+* all tests/results
+* provider-call impact
+* live write→immediate-read evidence
+* controlled ticker restoration
+* files changed
+* git diff/stat
+* commit SHA
+* final git status
