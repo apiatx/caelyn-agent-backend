@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-08-08T16:27:38.186839+00:00",
+  "updated_at": "2026-08-08T16:37:29.677598+00:00",
   "symbols": {
     "TEST_MARA": {
       "symbol": "TEST_MARA",
@@ -80169,8 +80169,8 @@
       "oldest_bar_date": "2021-04-21",
       "newest_bar_date": "2026-07-30",
       "years_available": 5.2,
-      "fetched_at": "2026-08-08T16:16:30.945828+00:00",
-      "stale_after": "2026-08-12T16:16:30.945838+00:00",
+      "fetched_at": "2026-08-08T15:16:23.382273+00:00",
+      "stale_after": "2026-08-12T15:16:23.382284+00:00",
       "history_status": "available_lifetime_under_10y",
       "base_history_status": "available_lifetime_under_10y",
       "error_reason": null,
@@ -80180,8 +80180,8 @@
       "is_provider_cap": false,
       "depth_confidence": 0.85,
       "fib_scope": "multi_year",
-      "last_attempt_at": "2026-08-08T16:16:30.945828+00:00",
-      "next_retry_at": "2026-08-12T16:16:30.945838+00:00",
+      "last_attempt_at": "2026-08-08T15:16:23.382273+00:00",
+      "next_retry_at": "2026-08-12T15:16:23.382284+00:00",
       "cache_usable": true,
       "is_10y_complete": true,
       "volume_change_1d_pct": 9.898024,
@@ -135824,8 +135824,8 @@
     "SOIL": {
       "history_status": "fetch_failed",
       "error_reason": "no_bars_from_providers",
-      "last_attempt_at": "2026-08-08T16:16:01.839029+00:00",
-      "next_retry_at": "2026-08-08T20:16:01.839045+00:00",
+      "last_attempt_at": "2026-08-08T15:15:51.804560+00:00",
+      "next_retry_at": "2026-08-08T19:15:51.804575+00:00",
       "provider": "tradier"
     },
     "URA": {

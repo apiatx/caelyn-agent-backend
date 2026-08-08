@@ -63,14 +63,23 @@ SOURCE_LKG = "lkg"
 SOURCE_NONE = "none"
 
 # ── Cache key namespace ───────────────────────────────────────────────────────
-_LIVE_CACHE_PREFIX = "realtime_quote:live:"
-_LKG_CACHE_PREFIX = "realtime_quote:lkg:"
+_LIVE_CACHE_PREFIX   = "realtime_quote:live:"
+_LKG_CACHE_PREFIX    = "realtime_quote:lkg:"
+# Negative/no-data cache for OTC symbols FMP has no quote for.
+# Prevents redundant FMP calls on every frontend poll when a symbol is genuinely
+# absent from FMP's coverage.  Only set on a confirmed empty FMP response (not
+# on network errors, which may be transient).  Key = canonical OTC:SYMBOL.
+_OTC_NODATA_PREFIX   = "realtime_quote:nodata:"
 
 # ── Cache TTLs (seconds) ──────────────────────────────────────────────────────
-_TTL_REGULAR = 15
+_TTL_REGULAR  = 15
 _TTL_EXTENDED = 30
-_TTL_CLOSED = 300
-_TTL_LKG = 24 * 3600  # 24h LKG retention
+_TTL_CLOSED   = 300
+_TTL_LKG      = 24 * 3600  # 24h LKG retention
+# No-data TTL: suppress retries for 5 min (matches _TTL_CLOSED for consistency).
+# Short enough that a genuinely newly-listed OTC ticker will be retried within
+# the same trading session.
+_OTC_NODATA_TTL = 300
 
 # Public.com / vendor concurrency
 _TRADIER_CONCURRENCY = 6     # ~6 parallel Tradier batch requests max
@@ -468,6 +477,20 @@ class RealtimeQuotesService:
         for canonical in otc_canonical:
             bare = _otc_to_fmp(canonical)  # "BESIY" (the FMP HTTP parameter)
 
+            # ── Negative-cache check ─────────────────────────────────────────
+            # If a previous call confirmed FMP has no data for this symbol,
+            # skip the FMP call entirely until the nodata TTL expires.
+            # This prevents every frontend poll from consuming a governor slot
+            # on a symbol FMP genuinely does not cover.
+            # Transient errors (network/timeout) do NOT set the nodata entry,
+            # so they are always retried on the next poll.
+            if cache is not None:
+                try:
+                    if cache.get(_OTC_NODATA_PREFIX + canonical):
+                        continue   # no-data still fresh — skip FMP call
+                except Exception:
+                    pass
+
             ok = await fmp_governor.acquire("realtime_otc_quotes")
             if not ok:
                 print(f"[REALTIME_OTC] fmp_governor denied {canonical} — skipping")
@@ -481,13 +504,30 @@ class RealtimeQuotesService:
             except Exception as exc:
                 fmp_governor.record_call()
                 print(f"[REALTIME_OTC] FMP error for {canonical} ({bare}): {exc}")
-                continue
+                continue  # transient error — do NOT set nodata cache
 
             if not q:
+                # FMP returned an empty response — set nodata cache so repeated
+                # polls don't retry within _OTC_NODATA_TTL seconds.
+                if cache is not None:
+                    try:
+                        cache.set(_OTC_NODATA_PREFIX + canonical, True, _OTC_NODATA_TTL)
+                    except Exception:
+                        pass
+                print(f"[REALTIME_OTC] no data from FMP for {canonical} — "
+                      f"suppressing for {_OTC_NODATA_TTL}s")
                 continue
 
             price = q.get("price")
             if price is None:
+                # FMP returned a response but price field is absent/null.
+                if cache is not None:
+                    try:
+                        cache.set(_OTC_NODATA_PREFIX + canonical, True, _OTC_NODATA_TTL)
+                    except Exception:
+                        pass
+                print(f"[REALTIME_OTC] null price from FMP for {canonical} — "
+                      f"suppressing for {_OTC_NODATA_TTL}s")
                 continue
 
             # Derive float/int or None — never synthesize 0 for missing fields.
