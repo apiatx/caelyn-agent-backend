@@ -1,0 +1,376 @@
+REPLIT AGENT — POST-MIGRATION TAXONOMY QUALITY AUDIT:
+VERIFY PRIMARY VS ADDITIONAL SEMANTICS FOR THE 40 MIGRATED TICKERS
+AND CORRECT ONLY PROVEN MISCLASSIFICATIONS
+
+Work in the live backend Replit workspace:
+
+/home/runner/workspace
+
+Current production taxonomy retirement commit:
+
+34aafb75 — fix: retire deprecated themes from live taxonomy
+
+DO NOT redesign or undo that commit.
+
+The deprecated-theme retirement mechanics are working:
+
+- live runtime universe excludes deprecated nodes
+- public Theme RS excludes deprecated nodes
+- Options Flow excludes deprecated groups
+- write APIs reject deprecated nodes
+- Neon currently has 0 active deprecated theme memberships
+
+This task is ONLY a post-migration QUALITY/CORRECTNESS audit of the 40 ticker
+reassignments.
+
+The live Replit filesystem and current Neon state are authoritative.
+
+────────────────────────────────────────────────────────
+MANDATORY FIRST STEP
+────────────────────────────────────────────────────────
+
+1. Read AGENTS.md completely.
+2. Record:
+   - root
+   - branch
+   - HEAD
+   - git status -sb
+   - ahead/behind
+   - recent commits
+3. Read:
+   - migrations/migrate_deprecated_themes.py
+   - services/theme_resolver.py
+   - services/theme_ticker_mapper.py
+   - services/theme_rs_universe.py
+   - services/theme_merge_layer.py
+   - services/category_overrides.py
+   - data/pg_storage.py atomic_taxonomy_write_db
+4. Read-only audit Neon before editing.
+5. Do not change the 104-node active/deprecated boundary.
+6. Do not change Theme RS, Options Flow, provider schedules, or frontend.
+
+────────────────────────────────────────────────────────
+PROVEN ISSUE 1 — BAND IS CURRENTLY MISCLASSIFIED
+────────────────────────────────────────────────────────
+
+Current live DB state was independently verified as:
+
+BAND:
+  active theme membership = memory_storage
+  watchlist category override = "Memory & Storage"
+
+This is not a valid classification for Bandwidth Inc.
+
+Bandwidth Inc. is a cloud communications / CPaaS company providing voice,
+messaging, emergency-services APIs and communications network infrastructure.
+
+Audit the current active taxonomy and choose the closest truthful existing
+structural node.
+
+Likely candidates may include:
+
+cloud_software
+networking_fabric_infra
+or another current active Communications/Software node
+
+but DO NOT blindly choose from this prompt.
+
+Use current company/profile evidence and exact taxonomy definitions.
+
+Memory & Storage must not remain unless repository/company evidence somehow
+proves it, which is extremely unlikely.
+
+────────────────────────────────────────────────────────
+PROVEN ISSUE 2 — MIGRATION DID NOT ALWAYS SET PRIMARY
+────────────────────────────────────────────────────────
+
+migrate_deprecated_themes.py names its field:
+
+new_primary_theme_id
+
+but for many rows it only adds:
+
+theme_ticker_overrides action='add'
+
+without supplying primary_operation.
+
+atomic_taxonomy_write_db explicitly defines:
+
+primary_operation action='set'
+→ watchlist_category_overrides
+→ canonical primary
+
+Therefore membership addition alone is NOT proof that the migration set the
+canonical primary.
+
+Audit this for ALL 40 migrated tickers.
+
+For every ticker report:
+
+ticker
+active memberships[]
+watchlist_category_override
+static mapper primary theme_id
+Themes-page membership winner
+resolve_primary_theme_for_ticker() result
+resolver source
+migration-script intended result
+
+Then classify each active membership as:
+
+PRIMARY
+ADDITIONAL
+ERRONEOUS
+
+────────────────────────────────────────────────────────
+PRIMARY MODEL TO PRESERVE
+────────────────────────────────────────────────────────
+
+Canonical model remains:
+
+one actual economic sector
++
+one primary thematic membership
++
+zero or more intentional additional thematic memberships
+
+Do not conflate:
+
+membership
+with
+primary membership.
+
+Do not change actual sector.
+
+────────────────────────────────────────────────────────
+MULTI-MEMBERSHIP TICKERS — REQUIRED REVIEW
+────────────────────────────────────────────────────────
+
+At minimum inspect every migrated ticker that now has multiple active themes.
+
+Known example:
+
+UUUU:
+  rare_earth
+  uranium_nuclear_fuel
+
+The migration comment states:
+
+rare_earth = primary
+uranium_nuclear_fuel = additional
+
+Prove that the CURRENT runtime resolver actually returns that result.
+
+If not, correct it through the EXISTING canonical primary-store primitive.
+
+Also review legitimate additional exposures that may have been LOST when the
+deprecated membership was tombstoned.
+
+Examples requiring evidence-based review:
+
+TSM
+  primary may correctly remain Semiconductors
+  determine whether Packaging & Substrates should be an intentional additional
+  exposure because of its advanced-packaging business
+
+VSAT
+  primary may correctly remain Space Economy
+  determine whether Satellite Communications should be an intentional additional
+  exposure replacing the meaningful portion of old AI Networking
+
+AMAT / KLAC / ONTO
+  primary semicap classification may be correct
+  determine whether any old packaging membership represented a genuine
+  Packaging & Substrates secondary exposure or was simply legacy noise
+
+Do not add extras just because a company participates tangentially.
+Only meaningful thematic exposure belongs as additional membership.
+
+────────────────────────────────────────────────────────
+40-TICKER QUALITY AUDIT
+────────────────────────────────────────────────────────
+
+Review every ticker from MIGRATIONS.
+
+Do not assume:
+
+"existing active theme" == "good primary"
+
+That assumption already failed for BAND.
+
+Build a review table:
+
+ticker
+company/business description
+old deprecated memberships
+current active memberships
+current category override
+current mapper primary
+current resolver primary
+recommended primary
+recommended additional[]
+change needed?
+reason
+
+Use existing stored/FMP company profile data first.
+
+FMP profile/reference data is already an approved project data source.
+
+Do NOT create a new provider path or API endpoint.
+
+If current stored profile data is sufficient, use it.
+
+────────────────────────────────────────────────────────
+SPECIAL CHECKS
+────────────────────────────────────────────────────────
+
+Review particularly:
+
+BAND
+AMCR
+OCC
+TSM
+VSAT
+AMAT
+KLAC
+ONTO
+GLW
+UUUU
+SILC
+OSS
+
+This does NOT mean all are wrong.
+
+They are cases where:
+- old bucket was broad,
+- multiple active themes exist,
+- or the replacement is not an obvious one-to-one semantic migration.
+
+────────────────────────────────────────────────────────
+RESOLVER ORDERING AUDIT
+────────────────────────────────────────────────────────
+
+Current build_theme_resolution_context() creates a symbol→theme map by walking
+ENRICHED_THEME_RS_UNIVERSE and taking the first membership found.
+
+Determine whether this can cause an ADDITIONAL theme to masquerade as PRIMARY.
+
+Do not redesign the resolver unless a migrated ticker actually demonstrates
+the bug.
+
+If a concrete affected ticker proves this ambiguity:
+
+use the existing explicit primary source to ensure primary wins.
+
+Prefer fixing stored primary state over creating another resolver rule if the
+existing architecture already supports explicit primary.
+
+If repository evidence proves the resolver itself violates the established
+Taxonomy-v2 primary/additional contract generally, STOP and report before a
+broad resolver change.
+
+────────────────────────────────────────────────────────
+WRITE RULE
+────────────────────────────────────────────────────────
+
+Only correct rows with proven mismatch.
+
+Use:
+
+atomic_taxonomy_write_db
+
+No direct ad-hoc table mutations.
+
+For a corrected ticker, atomically:
+
+- set the intended primary if necessary
+- retain/add only justified additional active memberships
+- remove erroneous active memberships
+- leave deprecated tombstones intact
+- leave actual sector untouched
+
+No schema changes.
+No new table.
+No new endpoint.
+No new cache.
+
+────────────────────────────────────────────────────────
+VALIDATION
+────────────────────────────────────────────────────────
+
+After corrections prove:
+
+1. deprecated active memberships remain 0.
+2. deprecated category labels remain 0.
+3. BAND no longer resolves to Memory & Storage.
+4. every one of the 40 migrated tickers resolves to the reviewed intended
+   active primary.
+5. every additional membership is intentional.
+6. no additional membership is accidentally selected as primary.
+7. Watchlist rows expose the intended primary_theme_id.
+8. theme_ids still include intended additional memberships.
+9. Home/Theme RS still contain 0 deprecated groups.
+10. Options Flow still contains 0 deprecated groups.
+11. all deprecated write-rejection tests still pass.
+
+Run existing taxonomy/watchlist/theme tests.
+
+git diff --check.
+
+────────────────────────────────────────────────────────
+DO NOT TOUCH
+────────────────────────────────────────────────────────
+
+Do not alter:
+- deprecated-node runtime filtering
+- get_active_runtime_registry
+- 104-node runtime universe contract
+- LKG sanitizers
+- Options Flow scanner
+- Tradier
+- FMP schedules
+- earnings
+- Watchlist performance work
+- frontend
+
+────────────────────────────────────────────────────────
+COMMIT
+────────────────────────────────────────────────────────
+
+If code/data corrections are needed:
+
+stage exact task files only.
+
+One local commit:
+
+fix: correct migrated theme assignments
+
+Do not push.
+
+If all required corrections are data-only through existing canonical primitives
+and no source change is necessary, do not invent a production code edit just to
+create a commit.
+
+────────────────────────────────────────────────────────
+REPORT
+────────────────────────────────────────────────────────
+
+Write to the AGENTS.md-required report location.
+
+Include:
+
+1. Starting HEAD/status.
+2. Full 40-ticker audit table.
+3. BAND root cause and correction.
+4. Every changed primary.
+5. Every changed additional membership.
+6. Every reviewed ticker requiring no change.
+7. Current primary-store semantics.
+8. Resolver-ordering findings.
+9. Before/after DB rows for changed tickers.
+10. Post-state: 0 deprecated memberships.
+11. Watchlist resolver validation.
+12. Tests and exit codes.
+13. Exact files/data changed.
+14. git diff --check.
+15. commit SHA if source changes were required.

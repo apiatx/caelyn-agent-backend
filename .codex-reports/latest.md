@@ -1,428 +1,274 @@
-# Taxonomy V3 Deprecated-Theme Migration
-## Complete Deprecated Theme Removal From Every Live Runtime/Public Data Path
+# POST-MIGRATION TAXONOMY QUALITY AUDIT — THEME ASSIGNMENT CORRECTIONS
 
-**Task file:** `attached_assets/Pasted-REPLIT-AGENT-COMPLETE-TAXONOMY-V2-DEPRECATED-THEME-MIGR_1786148630251.txt`  
-**Report date:** 2026-08-07  
-**Commit SHA:** `34aafb75`
-
----
-
-## 1. Starting State
-
-| Field | Value |
-|---|---|
-| Repo root | `/home/runner/workspace` |
-| Branch | `main` |
-| HEAD before migration | `8dac834a` ("Published your App") |
-| git status before | 1 local commit ahead of `origin/main` (ETF-only perf fix); runtime JSON dirty |
-| Migration commit | `34aafb75` fix: retire deprecated themes from live taxonomy |
-| HEAD after | `34aafb75` (1 commit ahead of `origin/main`) |
-
-**git diff --check:** Clean — no trailing whitespace warnings.
+**Task:** Verify primary vs. additional semantics for the 40 migrated tickers; correct only proven misclassifications.  
+**Date:** 2026-08-08  
+**Starting HEAD:** `16f6d02f` (main, origin/main)  
+**Branch:** main  
+**git status -sb:** 1 dirty (attached_assets new file, unstaged — runtime cache diffs ignored)
 
 ---
 
-## 2. The Eight Deprecated Nodes
+## 1. Primary-Store Semantics
 
-Verified live in `services/theme_rs_universe.py`:
+The canonical primary for a ticker is determined by `resolve_primary_theme_for_ticker()` in the following priority order:
 
-| Deprecated ID | Display Name (raw registry) | V3 Active Replacements |
-|---|---|---|
-| `ai_networking` | AI Networking | `dc_connectivity_silicon`, `networking_fabric_infra`, `optical_interconnects`, `servers_compute_systems`, `satellite_comms`, `test_measurement` |
-| `semicap_equipment` | Semiconductor Equipment & Materials | `semicap_equip`, `test_measurement`, `optical_components_lasers` |
-| `lithium_battery` | Lithium & Battery Technology | `battery_tech_storage`, `lithium` |
-| `uranium_nuclear` | Uranium & Nuclear Energy | `uranium_nuclear_fuel`, `smr_advanced_reactors`, `nuclear_utilities_operators` |
-| `chemicals_materials` | Chemicals & Materials | `advanced_materials` |
-| `photonics_lasers` | Photonics & Lasers | `optical_components_lasers`, `optical_interconnects` |
-| `substrates_packaging` | Substrates & Packaging | `semicap_equip`, `advanced_materials`, `test_measurement` |
-| `travel_transportation` | Travel & Transportation | `travel_leisure`, `freight_logistics` |
+| Step | Source | Wins when |
+|------|--------|-----------|
+| 1 | `theme_ticker_mapper` (LLM → foreign_alias → THEME_RS_UNIVERSE proxy/candidate → home_service → ETF universe) | ticker has any static or LLM-file entry |
+| 2 | `map_industry_to_theme` industry fallback | Step 1 empty |
+| 3 | `ENRICHED_THEME_RS_UNIVERSE` membership (themes-page) | display_name differs from Step 1/2 result |
+| 4 | `watchlist_category_overrides` manual override | **always wins** |
+| 5 | Phase 5 deprecated guard | if final `theme_id` is deprecated → suppress to `None` |
 
-All eight have `classification="deprecated"` and `assignable=False` in the raw registry. They are retained as alias records for backward-compatible historical parsing only.
+`atomic_taxonomy_write_db` with `primary_operation action='set'` is the canonical write path for the primary store (writes `watchlist_category_overrides`). A theme membership addition alone (`action='add'` in `theme_ticker_overrides`) does **not** set the canonical primary.
 
 ---
 
-## 3. Complete Reference Audit (Phase 1)
+## 2. Resolver-Ordering Audit Finding
 
-### A. ALLOWED historical/alias references (not changed)
-- Raw `THEME_RS_UNIVERSE` entries: 8 deprecated nodes retained for alias parsing
-- Migration maps in `theme_rs_universe.py`: `migration_targets` metadata on each deprecated node
-- `_REPRESENTATIVE_ETF_MAP` entries for deprecated IDs (harmless display hints, deprecated ID not in enriched universe so never reached)
-- Unit test fixtures that test deprecated registry metadata
+`build_theme_resolution_context()` builds `themes_page_map` by iterating `ENRICHED_THEME_RS_UNIVERSE` and assigning the **first** theme that contains a ticker. For tickers in multiple themes (e.g. UUUU in `nuclear_energy`, `rare_earth`, `uranium_nuclear_fuel`), whichever theme comes first in the dict iteration order wins the themes-page slot. This can cause an additional theme to masquerade as primary when:
 
-### B. ILLEGAL live references found and fixed
+- No mapper entry exists for the ticker (Step 1 returns None), AND
+- The iteration order places the wrong theme before the intended primary.
 
-| Location | Reference | Type | Phase |
-|---|---|---|---|
-| `theme_merge_layer._build()` | Full raw `THEME_RS_UNIVERSE` including deprecated passed to `_build_enriched_universe()` | Runtime universe base | 3 |
-| `theme_merge_layer._SECTION_TO_THEME_ID["AI Networking"]` | `"ai_networking"` | Legacy label → deprecated ID | 2 |
-| `theme_merge_layer._SECTION_TO_THEME_ID["Lithium & Battery Tech"]` | `"lithium_battery"` | Legacy label → deprecated ID | 2 |
-| `theme_merge_layer._SECTION_TO_THEME_ID["Semi Equipment & Materials"]` | `"semicap_equipment"` | Legacy label → deprecated ID | 2 |
-| `theme_merge_layer._SECTION_TO_THEME_ID["Semi Equipment"]` | `"semicap_equipment"` | Legacy label → deprecated ID | 2 |
-| `theme_merge_layer._CATEGORY_TO_THEME_ID["AI Networking"]` | `"ai_networking"` | Category label → deprecated ID | 2 |
-| `theme_resolver.resolve_primary_theme_for_ticker()` | No post-resolution deprecated guard | Resolver output | 5 |
-| `routes/themes._perform_membership_write()` | No deprecated check — only `theme_id in universe` | Write gate | 6 |
-| `routes/themes._perform_theme_membership_only_write()` | Same gap | Write gate | 6 |
-| `routes/themes.admin_bulk_memberships()` | Same gap | Write gate | 6 |
-| `theme_rs_service._load_lkg()` | No deprecated filter on old LKG rows | LKG load | 9 |
-| `theme_rs_service._load_1d_lkg()` | No deprecated filter on old 1D curves | LKG load | 9 |
-| DB `theme_ticker_overrides` | 46 active add rows for deprecated IDs, 40 tickers | Stored data | 7 |
-| DB `watchlist_category_overrides` | 14 rows with deprecated category labels | Stored data | 7 |
+**Affected tickers identified:** UUUU, AMAT, OKLO, SMR, LEU, VIAV, MXL.
+
+**Resolution:** Set explicit `watchlist_category_overrides` rows (primary_operation) for all affected tickers. No resolver redesign required — the existing architecture supports explicit primary via the cat_override mechanism.
 
 ---
 
-## 4. Pre-Migration Live DB Counts (re-audited)
+## 3. Full 40-Ticker Audit Table
 
-| Metric | Count |
-|---|---|
-| Active (`action='add'`) deprecated `theme_ticker_overrides` rows | **46** |
-| Unique tickers with at least one deprecated active membership | **40** |
-| Tickers with two deprecated active memberships | **6** (AAOI, AEHR, GLW, KLAC, ONTO, TRT) |
-| Tickers with existing good active non-deprecated membership | **6** (ABSI→biotech, BAND→memory_storage, RDDT→software, TSM→semiconductors, UUUU→rare_earth, VSAT→space) |
-| `watchlist_category_overrides` rows with deprecated labels | **14** |
-
----
-
-## 5. Every Affected Ticker — Migration Table
-
-| Ticker | Deprecated Removed | Active Added | Category Override → | Notes |
-|---|---|---|---|---|
-| AAOI | ai_networking, photonics_lasers | optical_interconnects | Optical Interconnects | Makes networking hardware for data-center optics; AAOI optical interconnect focus |
-| ABSI | ai_networking | — (kept biotech) | — | Biotech is correct primary; AI Networking was never a valid membership |
-| ACLS | semicap_equipment | semicap_equip | — | Ion implant equipment; clean match to active node |
-| ADTN | ai_networking | networking_fabric_infra | Networking & Fabric Infrastructure | Network switching/routing; fits fabric/infra not optical |
-| AEHR | semicap_equipment, substrates_packaging | test_measurement | Test & Measurement | AEHR makes wafer test equipment; not a substrate/packaging company |
-| AMAT | substrates_packaging | semicap_equip | — | Applied Materials is core semicap equipment, not substrates/packaging |
-| AMCR | substrates_packaging | advanced_materials | — | Amcor is specialty packaging/materials; advanced_materials is closest active node |
-| ASPI | uranium_nuclear | uranium_nuclear_fuel | Uranium Mining & Nuclear Fuel | Alpha-S produces uranium and specialty materials; fuel cycle fits |
-| BAND | ai_networking | — (kept memory_storage) | — | Bandwidth.com is cloud comms/CPaaS; memory_storage is also incorrect but not our scope |
-| CEG | uranium_nuclear | nuclear_utilities_operators | Nuclear Utilities & Operators | Constellation Energy is a nuclear power operator |
-| CIEN | ai_networking | optical_interconnects | — | Ciena makes optical networking hardware; optical_interconnects correct |
-| DNN | uranium_nuclear | uranium_nuclear_fuel | — | Denison Mines — uranium exploration/mining |
-| ELVA | lithium_battery | battery_tech_storage | Battery Technology & Energy Storage | Electrovaya — solid-state battery manufacturer |
-| ENVX | lithium_battery | battery_tech_storage | — | Enovix — silicon-anode battery technology |
-| FN | photonics_lasers | optical_components_lasers | — | II-VI/Fabrinet — optical component manufacturing |
-| GLW | photonics_lasers, substrates_packaging | optical_components_lasers | Optical Components & Lasers | Corning's core business is optical fiber and specialty glass |
-| IMSR | uranium_nuclear | smr_advanced_reactors | SMRs & Advanced Reactors | Integral Molten Salt Reactor — advanced reactor design company |
-| KLAC | semicap_equipment, substrates_packaging | semicap_equip | — | KLA is core process control and inspection for semicap |
-| LAC | lithium_battery | lithium | — | Lithium Americas — lithium mining/development |
-| LEU | uranium_nuclear | uranium_nuclear_fuel | — | Centrus Energy — uranium enrichment services |
-| LPTH | semicap_equipment | optical_components_lasers | Optical Components & Lasers | LightPath Technologies — optical components/lenses, not semicap equipment |
-| MAXX | chemicals_materials | advanced_materials | — | MAXX Solar — advanced materials |
-| MXL | ai_networking | dc_connectivity_silicon | — | MaxLinear makes data-center connectivity silicon/PHY chips |
-| NNE | uranium_nuclear | smr_advanced_reactors | SMRs & Advanced Reactors | Nano Nuclear Energy — micro-reactor technology |
-| OCC | ai_networking | optical_components_lasers | — | Optical Cable Corp — fiber optic cable manufacturer |
-| OKLO | uranium_nuclear | smr_advanced_reactors | — | Oklo — advanced fission reactor startup |
-| ONTO | semicap_equipment, substrates_packaging | semicap_equip | — | Onto Innovation — optical metrology and process control |
-| OSS | ai_networking | servers_compute_systems | Servers & Compute Systems | One Stop Systems — GPU-accelerated computing platforms |
-| QS | lithium_battery | battery_tech_storage | — | QuantumScape — solid-state battery cells |
-| RDDT | ai_networking | — (kept software) | — | Reddit is a software/social platform; AI Networking was incorrect |
-| SATS | ai_networking | satellite_comms | — | EchoStar — satellite communications operator |
-| SILC | photonics_lasers | networking_fabric_infra | Networking & Fabric Infrastructure | Silicom — network interface cards and fabric adapters |
-| SMR | uranium_nuclear | smr_advanced_reactors | — | NuScale Power — SMR technology developer |
-| TRT | semicap_equipment, substrates_packaging | test_measurement | Test & Measurement | Trio-Tech — semiconductor test and burn-in systems |
-| TSM | substrates_packaging | — (kept semiconductors) | — | TSMC is a foundry/semiconductor company; substrates was incorrect |
-| UEC | uranium_nuclear | uranium_nuclear_fuel | — | Uranium Energy Corp — uranium mining |
-| URG | uranium_nuclear | uranium_nuclear_fuel | Uranium Mining & Nuclear Fuel | Ur-Energy — uranium in-situ recovery |
-| UUUU | uranium_nuclear | uranium_nuclear_fuel (added alongside rare_earth) | — | Energy Fuels — uranium + rare earth processing; both are correct |
-| VIAV | ai_networking | test_measurement | — | Viavi Solutions — network test and measurement instruments |
-| VSAT | ai_networking | — (kept space) | — | ViaSat is a satellite communications company; space is correct |
-
-### Ambiguous decision explanations
-
-**ai_networking → multiple targets:** The old ai_networking bucket lumped together pure optical networking (AAOI, CIEN, OCC → optical_interconnects), data center interconnect silicon (MXL → dc_connectivity_silicon), network fabric/switching (ADTN, SILC → networking_fabric_infra), compute systems (OSS → servers_compute_systems), satellite comms (SATS → satellite_comms), and test equipment (VIAV → test_measurement). Each was classified by actual business focus, not bucket name similarity.
-
-**semicap_equipment + substrates_packaging → multiple targets:** Equipment companies (ACLS, KLAC, ONTO) → semicap_equip. Test/burn-in companies (AEHR, TRT) → test_measurement. Optical component companies that were mis-filed (LPTH) → optical_components_lasers.
-
-**UUUU (rare_earth + uranium_nuclear_fuel):** Energy Fuels genuinely operates in both uranium and rare earth processing. The existing active `rare_earth` membership is preserved; `uranium_nuclear_fuel` is added as an intentional secondary. The deprecated `uranium_nuclear` is removed.
+| Ticker | Company / Business | Old Deprecated | DB Active Memberships | Cat Override (before) | Mapper Primary | Resolver Before | Recommended Primary | Recommended Additional | Change? | Reason |
+|--------|-------------------|----------------|-----------------------|----------------------|----------------|-----------------|--------------------|-----------------------|---------|--------|
+| AAOI | AAOI — optical interconnect ICs | ai_networking, photonics_lasers | optical_interconnects | Optical Interconnects | optical_interconnects | optical_interconnects | optical_interconnects | optical_components_lasers (static) | ✗ | Correct |
+| ABSI | AbSci — AI protein design / biotech | ai_networking | biotech | Biotech | — | biotech | biotech | — | ✗ | Correct |
+| ACLS | Axcelis — ion implant equipment | semicap_equipment | semicap_equip | — | semicap_equip | semicap_equip | semicap_equip | — | ✗ | Correct |
+| ADTN | Adtran — fiber broadband networking | ai_networking | networking_fabric_infra | Networking & Fabric Infrastructure | — | networking_fabric_infra | networking_fabric_infra | — | ✗ | Correct |
+| AEHR | Aehr Test — semiconductor burn-in test | semicap_equipment, substrates_packaging | test_measurement | Test & Measurement | test_measurement | test_measurement | test_measurement | — | ✗ | Correct |
+| **AMAT** | Applied Materials — semicon equipment | substrates_packaging | semicap_equip, semiconductors | — | semiconductors | **semiconductors** | **semicap_equip** | semiconductors (additional) | ✓ | Resolver returned semantically lower-priority theme; AMAT is equipment-maker not chipmaker |
+| AMCR | Amcor — flexible packaging | substrates_packaging | advanced_materials | — | advanced_materials | advanced_materials | advanced_materials | — | ✗ | Correct |
+| **ASPI** | ASP Isotopes — laser uranium enrichment | uranium_nuclear | uranium_nuclear_fuel | Uranium & Nuclear Energy (deprecated display name) | uranium_nuclear (deprecated) | name="Uranium & Nuclear Energy" (deprecated) / id=uranium_nuclear_fuel | **Uranium Mining & Nuclear Fuel** | — | ✓ | Category override carried deprecated display name → name/id mismatch; mapper had stale foreign_alias_map entry |
+| **BAND** | Bandwidth Inc — CPaaS / cloud comms API | ai_networking | **memory_storage** (pre-existing wrong membership) | Memory & Storage | datacenter_infra (LLM, wrong) | **memory_storage** | **cloud_software** | — | ✓ | Both DB membership and category override were factually wrong; Bandwidth is a CPaaS SaaS, not a storage company |
+| CEG | Constellation Energy — nuclear power | uranium_nuclear | nuclear_utilities_operators | Nuclear Utilities & Operators | nuclear_utilities_operators | nuclear_utilities_operators | nuclear_utilities_operators | — | ✗ | Correct |
+| CIEN | Ciena — optical networking equipment | ai_networking | optical_interconnects | — | optical_interconnects | optical_interconnects | optical_interconnects | — | ✗ | Correct |
+| DNN | Denison Mines — uranium mining | uranium_nuclear | uranium_nuclear_fuel | — | uranium_nuclear (LLM, deprecated) | uranium_nuclear_fuel (themes_page overrides) | uranium_nuclear_fuel | — | ✗ | Themes_page correctly overrides stale LLM; final correct |
+| ELVA | Electrovaya — lithium battery cells | lithium_battery | battery_tech_storage | Battery Technology & Energy Storage | power_cooling (LLM, wrong) | battery_tech_storage (themes_page overrides) | battery_tech_storage | — | ✗ | Themes_page + cat_override correctly override stale LLM |
+| ENVX | Enovix — silicon anode batteries | lithium_battery | battery_tech_storage | — | battery_tech_storage | battery_tech_storage | battery_tech_storage | — | ✗ | Correct |
+| FN | Fabrinet — optical contract manufacturer | photonics_lasers | optical_components_lasers | — | photonics_optical | photonics_optical | photonics_optical | optical_components_lasers (static) | ✗ | photonics_optical is a valid primary for a photonic systems manufacturer |
+| GLW | Corning — optical fiber / photonics | photonics_lasers, substrates_packaging | optical_components_lasers | Optical Components & Lasers | semiconductors (LLM, wrong) | optical_components_lasers (cat_override wins) | optical_components_lasers | — | ✗ | Cat_override correctly overrides stale LLM |
+| **IMSR** | Terrestrial Energy — integral MSR reactor | uranium_nuclear | smr_advanced_reactors | Uranium & Nuclear Energy (deprecated display name) | uranium_nuclear (LLM, deprecated) | name="Uranium & Nuclear Energy" / id=smr_advanced_reactors | **SMRs & Advanced Reactors** | — | ✓ | Same pattern as ASPI — deprecated display name in cat_override causing name/id mismatch |
+| KLAC | KLA Corp — process control equipment | semicap_equipment, substrates_packaging | semicap_equip | — | semicap_equip | semicap_equip | semicap_equip | — | ✗ | Correct; no meaningful packaging_substrates additional (KLAC's packaging inspection is minor relative to core process control) |
+| LAC | Lithium Americas — lithium mining | lithium_battery | lithium | — | lithium | lithium | lithium | — | ✗ | Correct |
+| **LEU** | Centrus Energy — uranium enrichment | uranium_nuclear | uranium_nuclear_fuel | — | nuclear_energy (static) | **nuclear_energy** | **uranium_nuclear_fuel** | — | ✓ | Resolver returned higher-level nuclear_energy; uranium_nuclear_fuel is more specific and accurate primary |
+| LPTH | LightPath — optical components | semicap_equipment | optical_components_lasers | Optical Components & Lasers | photonics_optical | optical_components_lasers (cat_override wins) | optical_components_lasers | — | ✗ | Cat_override correctly overrides |
+| MAXX | Ultralife / Materials-Co — advanced materials | chemicals_materials | advanced_materials | — | — | advanced_materials (themes_page) | advanced_materials | — | ✗ | Correct |
+| **MXL** | MaxLinear — DC connectivity silicon | ai_networking | dc_connectivity_silicon | — | semiconductors (LLM, wrong) | **semiconductors** | **dc_connectivity_silicon** | — | ✓ | LLM override + iteration order caused wrong primary; dc_connectivity_silicon is MaxLinear's correct identity |
+| NNE | Nano Nuclear Energy — SMR developer | uranium_nuclear | smr_advanced_reactors | SMRs & Advanced Reactors | industrials (LLM, wrong) | smr_advanced_reactors (cat_override wins) | smr_advanced_reactors | — | ✗ | Cat_override correctly overrides stale LLM |
+| OCC | OCC Corp — optical cable/connectivity | ai_networking | optical_components_lasers | — | ai_networking (LLM, deprecated) | optical_components_lasers (themes_page overrides) | optical_components_lasers | — | ✗ | Themes_page correctly overrides stale deprecated LLM |
+| **OKLO** | Oklo — nuclear microreactor | uranium_nuclear | smr_advanced_reactors | — | nuclear_energy (static) | **nuclear_energy** | **SMRs & Advanced Reactors** | nuclear_energy (static additional) | ✓ | Same iteration-order issue; smr_advanced_reactors is Oklo's primary identity |
+| ONTO | Onto Innovation — semicon metrology | semicap_equipment, substrates_packaging | semicap_equip | — | test_measurement | semicap_equip (themes_page) | semicap_equip | packaging_substrates (static) | ✗ | packaging_substrates already in static universe; no DB addition needed |
+| OSS | One Stop Systems — rugged compute | ai_networking | servers_compute_systems | Servers & Compute Systems | datacenter_infra (LLM) | servers_compute_systems (cat_override wins) | servers_compute_systems | — | ✗ | Cat_override correctly overrides |
+| QS | QuantumScape — solid-state battery | lithium_battery | battery_tech_storage | — | battery_tech_storage | battery_tech_storage | battery_tech_storage | — | ✗ | Correct |
+| RDDT | Reddit — social software platform | ai_networking | software | Software | ai_networking (LLM, deprecated) | software (cat_override wins) | software | — | ✗ | Cat_override correctly overrides stale deprecated LLM |
+| SATS | EchoStar — satellite broadband | ai_networking | satellite_comms | — | — | satellite_comms (themes_page) | satellite_comms | — | ✗ | Correct |
+| SILC | SILC Technologies — silicon photonics | photonics_lasers | networking_fabric_infra | Networking & Fabric Infrastructure | ai_networking (LLM, deprecated) | networking_fabric_infra (cat_override wins) | networking_fabric_infra | — | ✗ | Cat_override correctly overrides stale deprecated LLM |
+| **SMR** | NuScale Power — small modular reactor | uranium_nuclear | smr_advanced_reactors | — | nuclear_energy (static) | **nuclear_energy** | **SMRs & Advanced Reactors** | nuclear_energy (static) | ✓ | Same iteration-order issue as OKLO |
+| TRT | Trio-Tech — burn-in/test services | semicap_equipment, substrates_packaging | test_measurement | Test & Measurement | semicap_equipment (foreign_alias, deprecated) | test_measurement (cat_override wins) | test_measurement | — | ✗* | Resolver correct via cat_override; foreign_alias_map stale entry updated in code |
+| **TSM** | TSMC — foundry + advanced packaging | substrates_packaging | semiconductors | — | semiconductors | semiconductors | semiconductors | **packaging_substrates (added)** | ✓ | CoWoS/SoIC advanced packaging is meaningful thematic exposure; added as intentional additional |
+| UEC | Uranium Energy Corp — uranium mining | uranium_nuclear | uranium_nuclear_fuel | — | — | uranium_nuclear_fuel (themes_page) | uranium_nuclear_fuel | — | ✗ | Correct |
+| URG | Ur-Energy — uranium mining | uranium_nuclear | uranium_nuclear_fuel | Uranium Mining & Nuclear Fuel | uranium_nuclear_fuel | uranium_nuclear_fuel | uranium_nuclear_fuel | — | ✗ | Correct |
+| **UUUU** | Energy Fuels — uranium + rare earth | uranium_nuclear | rare_earth, uranium_nuclear_fuel | — | nuclear_energy (static) | **nuclear_energy** | **rare_earth** | uranium_nuclear_fuel (intentional) | ✓ | Migration intent was rare_earth primary; resolver returned nuclear_energy due to iteration order |
+| **VIAV** | Viavi Solutions — optical test equipment | ai_networking | test_measurement | — | photonics_optical (static) | **photonics_optical** | **test_measurement** | photonics_optical (static) | ✓ | Migration added test_measurement as replacement; resolver returned static-universe photonics_optical |
+| VSAT | ViaSat — satellite broadband | ai_networking | space | Space Economy | ai_networking (LLM, deprecated) | space (cat_override wins) | space | satellite_comms (static) | ✗ | Cat_override correctly overrides; satellite_comms present as static additional |
 
 ---
 
-## 6. Post-Migration DB Counts
+## 4. Corrections Applied
 
-| Metric | Count |
-|---|---|
-| Active (`action='add'`) deprecated `theme_ticker_overrides` rows | **0** ✓ |
-| Unique tickers with deprecated active membership | **0** ✓ |
-| `watchlist_category_overrides` rows with deprecated labels | **0** ✓ |
+### 4a. DB Corrections (via `atomic_taxonomy_write_db`, `correct_theme_assignments_v1.py`)
 
----
+| Ticker | Membership ops | Category set |
+|--------|---------------|-------------|
+| BAND | remove memory_storage, add cloud_software | Cloud Software |
+| ASPI | — | Uranium Mining & Nuclear Fuel |
+| IMSR | — | SMRs & Advanced Reactors |
+| UUUU | — | Rare Earth Elements |
+| AMAT | — | Semiconductor Equipment |
+| OKLO | — | SMRs & Advanced Reactors |
+| SMR | — | SMRs & Advanced Reactors |
+| LEU | — | Uranium Mining & Nuclear Fuel |
+| VIAV | — | Test & Measurement |
+| MXL | — | Data Center Connectivity & Interconnect Silicon |
+| TSM | add packaging_substrates | — |
 
-## 7. Category Override Cleanup (14 rows)
+All 11 succeeded. `atomic_taxonomy_write_db` used exclusively. No direct SQL mutations.
 
-| Old Label | Tickers | New Label |
-|---|---|---|
-| AI Networking | ADTN, OSS | Networking & Fabric Infrastructure, Servers & Compute Systems |
-| Lithium & Battery Tech | ELVA | Battery Technology & Energy Storage |
-| Photonics / Lasers | AAOI, GLW, SILC | Optical Interconnects, Optical Components & Lasers, Networking & Fabric Infrastructure |
-| Semi Equipment & Materials | LPTH | Optical Components & Lasers |
-| Substrates / Packaging | AEHR, TRT | Test & Measurement |
-| Uranium & Nuclear Energy | ASPI, CEG, IMSR, NNE, URG | Uranium Mining & Nuclear Fuel, Nuclear Utilities & Operators, SMRs & Advanced Reactors |
+### 4b. Source Code Corrections
 
----
+**`backend/services/category_overrides.py`** — `_SEED_OVERRIDES`:
+- ASPI: `"Uranium & Nuclear Energy"` → `"Uranium Mining & Nuclear Fuel"` (**critical**: seed runs on every server restart and would have re-overwritten the DB fix)
+- IMSR: `"Uranium & Nuclear Energy"` → `"SMRs & Advanced Reactors"` (**critical**: same reason)
 
-## 8. Resolver Changes (Phase 5)
+**`backend/services/theme_ticker_mapper.py`** — `_FOREIGN_ALIAS_MAP`:
+- ASPI: `("Nuclear / Grid", "uranium_nuclear")` → `("Uranium Mining & Nuclear Fuel", "uranium_nuclear_fuel")` — stale entry pointing at deprecated theme_id
+- TRT/AIM:TRT: `("Semi Equipment & Materials", "semicap_equipment")` → `("Test & Measurement", "test_measurement")` — stale entry pointing at deprecated theme_id
 
-**File:** `services/theme_resolver.py`  
-**Change:** Post-resolution guard added at the return boundary of `resolve_primary_theme_for_ticker()`. After any resolution path (mapper, themes-page membership, manual category override), the function now checks the raw registry for `classification == "deprecated"`. If the resolved `theme_id` is deprecated, it is set to `None` with source `"deprecated_suppressed"`.
-
-**Result:** `resolve_primary_theme_for_ticker(ticker).theme_id` is always:
-- An active assignable `theme` or `sub_theme` ID
-- `None` (legitimately unassigned)
-- Never deprecated, never market_lens, never a sector as thematic primary
-
----
-
-## 9. Runtime/Enriched Universe Boundary (Phase 3)
-
-**New function:** `get_active_runtime_registry()` in `services/theme_rs_universe.py`
-
-```python
-def get_active_runtime_registry(registry=None):
-    """Excludes deprecated nodes; preserves market_lens."""
-    reg = registry or THEME_RS_UNIVERSE
-    return {k: v for k, v in reg.items() if v.get("classification") != "deprecated"}
-```
-
-**`_build()` fix in `theme_merge_layer.py`:** Now calls `get_active_runtime_registry(THEME_RS_UNIVERSE)` to produce `active_base` (104 nodes) and passes it to `_build_enriched_universe()` instead of the full raw registry (112 nodes). This is the single upstream fix that automatically cleans every downstream consumer.
-
-**Invariant enforced:**
-```
-any(meta.get("classification") == "deprecated" 
-    for meta in ENRICHED_THEME_RS_UNIVERSE.values()) == False
-```
-Verified live: `ENRICHED_THEME_RS_UNIVERSE` = 104 nodes, 0 deprecated.
-
-**Legacy label maps fixed:**
-- `_SECTION_TO_THEME_ID["AI Networking"]` → `None` (ambiguous; defer to per-ticker resolver)
-- `_SECTION_TO_THEME_ID["Lithium & Battery Tech"]` → `None` (ambiguous; split into lithium/battery_tech_storage)
-- `_SECTION_TO_THEME_ID["Semi Equipment & Materials"]` → `None` (ambiguous split)
-- `_SECTION_TO_THEME_ID["Semi Equipment"]` → `"semicap_equip"` (specific enough)
-- `_SECTION_TO_THEME_ID["Photonics / Lasers"]` → `"optical_components_lasers"` (pre-existing active redirect)
-- `_CATEGORY_TO_THEME_ID["AI Networking"]` → removed entirely
+**`backend/data/llm_theme_overrides.json`**:
+- BAND: updated from `datacenter_infra` to `cloud_software` (wrong theme)
+- IMSR: entry removed (carried deprecated `uranium_nuclear` theme_id)
 
 ---
 
-## 10. Theme RS Before/After Row Counts
+## 5. Before/After DB Rows — Changed Tickers
 
-| Metric | Before | After |
-|---|---|---|
-| `ENRICHED_THEME_RS_UNIVERSE` nodes | 112 (incl. 8 deprecated) | **104** (0 deprecated) |
-| RS compute universe (`_EXPECTED_THEME_COUNT`) | 112 | **104** |
-| LKG disk snapshot rows | 112 | **104** (sanitized on first load) |
-| 1D LKG curves | 112 | **104** (8 deprecated curves stripped on first load) |
-| RS `classification=all` API rows | 112 | **104** (verified live) |
-| RS `classification=theme` API rows | 23 | 23 (unchanged — no theme-class deprecated nodes) |
-| RS `classification=sub_theme` API rows | 67 | 67 (unchanged — no sub_theme-class deprecated nodes) |
+### BAND
+| State | theme_ticker_overrides (active) | watchlist_category_overrides |
+|-------|--------------------------------|------------------------------|
+| Before | memory_storage (add) | "Memory & Storage" |
+| After | cloud_software (add) | "Cloud Software" |
 
-The 8 deprecated nodes had classification `"deprecated"`, so they appeared under `classification=all` only. Themes and sub_themes counts are unchanged.
+### ASPI
+| State | cat override |
+|-------|-------------|
+| Before | "Uranium & Nuclear Energy" (deprecated display name) |
+| After | "Uranium Mining & Nuclear Fuel" |
 
-### Confirmation: deprecated rows no longer distort RS rankings
+### IMSR
+| State | cat override |
+|-------|-------------|
+| Before | "Uranium & Nuclear Energy" |
+| After | "SMRs & Advanced Reactors" |
 
-Deprecated nodes had their own proxy symbol baskets (e.g. ai_networking had AAOI, CIEN, etc. — which are also in dc_connectivity_silicon, optical_interconnects etc.). These duplicate baskets inflated the RS percentile peer universe to 112 nodes and caused those symbols' returns to be double-counted in the denominator. After Phase 3 the percentile/rank universe is 104 active nodes only. No duplicate deprecated baskets contribute to rankings.
+### UUUU
+| State | cat override | active memberships |
+|-------|-------------|--------------------|
+| Before | — (none) | rare_earth, uranium_nuclear_fuel |
+| After | "Rare Earth Elements" | rare_earth, uranium_nuclear_fuel |
 
----
+### AMAT
+| State | cat override | active memberships |
+|-------|-------------|--------------------|
+| Before | — (none) | semicap_equip (+ semiconductors from static) |
+| After | "Semiconductor Equipment" | semicap_equip |
 
-## 11. Options Flow Before/After Universe/Group Counts
+### OKLO / SMR / LEU / VIAV / MXL
+| Ticker | Before (cat override) | After |
+|--------|----------------------|-------|
+| OKLO | — | "SMRs & Advanced Reactors" |
+| SMR | — | "SMRs & Advanced Reactors" |
+| LEU | — | "Uranium Mining & Nuclear Fuel" |
+| VIAV | — | "Test & Measurement" |
+| MXL | — | "Data Center Connectivity & Interconnect Silicon" |
 
-Options Flow `build_sector_tree()` accepts `ENRICHED_THEME_RS_UNIVERSE` as its argument. After Phase 3 this is already deprecated-free. No separate Options Flow fix was required.
-
-| Metric | Before | After |
-|---|---|---|
-| Options Flow sector groups | 11 | **11** (sectors, same structure) |
-| Options Flow theme nodes | included deprecated | **0 deprecated** |
-| Supplement required universe | included deprecated-only symbols | **clean** (deprecated nodes removed from enriched universe) |
-| Net-premium theme entity generation | could generate deprecated rows | **blocked** (deprecated IDs not in enriched universe) |
-
-**Verified live:** `GET /api/options-flow/sectors` HTTP=200, `sectors` array = 11 entries, 0 deprecated theme IDs.
-
-Tradier cadence, scan cadence, freshness, premium/P&C calculations, and scanner lanes untouched.
-
----
-
-## 12. Watchlist Identity Validation (Phase 12)
-
-The DB migration (Phase 7) immediately cleared all deprecated memberships from `theme_ticker_overrides` and `watchlist_category_overrides`. Cache invalidation was called at end of migration:
-
-- `refresh_enriched_universe()` → rebuilt ENRICHED_THEME_RS_UNIVERSE with 104 nodes
-- `invalidate_theme_rs_cache()` → LKG sanitized 112→104, background 1D refresh queued
-- `invalidate_sectors_cache()` → Options Flow tree cache cleared
-
-Server startup confirmed sanitization log:
-```
-[THEME_RS] LKG sanitized: removed 8 deprecated theme row(s) from old snapshot (112 → 104 themes)
-[THEME_RS] 1D LKG sanitized: removed 8 deprecated curve(s): ['photonics_lasers',
-  'lithium_battery', 'uranium_nuclear', 'semicap_equipment', 'substrates_packaging',
-  'ai_networking', 'chemicals_materials', 'travel_transportation']
-```
-
-**Sample ex-deprecated tickers resolved by live resolver:**
-| Ticker | theme_id | deprecated? |
-|---|---|---|
-| AAOI | optical_interconnects | No ✓ |
-| AEHR | test_measurement | No ✓ |
-| KLAC | semicap_equip | No ✓ |
-| ELVA | battery_tech_storage | No ✓ |
-| MAXX | advanced_materials | No ✓ |
-| SMR | smr_advanced_reactors | No ✓ |
-
-LKG disk file on disk after restart: **104 rows, 0 deprecated** ✓
+### TSM
+| State | active memberships |
+|-------|-------------------|
+| Before | semiconductors |
+| After | semiconductors, packaging_substrates |
 
 ---
 
-## 13. Home Validation
+## 6. Post-State Validation
 
-The `/api/themes/relative-strength` endpoint is the canonical RS source consumed by the Home dashboard. It now returns 104 active themes, 0 deprecated. No separate Home endpoint exists that would source deprecated data.
+### Resolver — All 40 Tickers Post-Correction
+
+| Ticker | Resolved Name | Theme ID | Source |
+|--------|--------------|----------|--------|
+| AAOI | Optical Interconnects | optical_interconnects | manual_override |
+| ABSI | Biotech | biotech | manual_override |
+| ACLS | Semiconductor Equipment | semicap_equip | canonical_map |
+| ADTN | Networking & Fabric Infrastructure | networking_fabric_infra | manual_override |
+| AEHR | Test & Measurement | test_measurement | manual_override |
+| AMAT | Semiconductor Equipment | semicap_equip | manual_override ✓ |
+| AMCR | Advanced Materials | advanced_materials | canonical_map |
+| ASPI | Uranium Mining & Nuclear Fuel | uranium_nuclear_fuel | manual_override ✓ |
+| BAND | Cloud Software | cloud_software | manual_override ✓ |
+| CEG | Nuclear Utilities & Operators | nuclear_utilities_operators | manual_override |
+| CIEN | Optical Interconnects | optical_interconnects | canonical_map |
+| DNN | Uranium Mining & Nuclear Fuel | uranium_nuclear_fuel | themes_page_membership |
+| ELVA | Battery Technology & Energy Storage | battery_tech_storage | manual_override |
+| ENVX | Battery Technology & Energy Storage | battery_tech_storage | canonical_map |
+| FN | Photonics & Optical Systems | photonics_optical | canonical_map |
+| GLW | Optical Components & Lasers | optical_components_lasers | manual_override |
+| IMSR | SMRs & Advanced Reactors | smr_advanced_reactors | manual_override ✓ |
+| KLAC | Semiconductor Equipment | semicap_equip | canonical_map |
+| LAC | Lithium | lithium | canonical_map |
+| LEU | Uranium Mining & Nuclear Fuel | uranium_nuclear_fuel | manual_override ✓ |
+| LPTH | Optical Components & Lasers | optical_components_lasers | manual_override |
+| MAXX | Advanced Materials | advanced_materials | themes_page_membership |
+| MXL | Data Center Connectivity & Interconnect Silicon | dc_connectivity_silicon | manual_override ✓ |
+| NNE | SMRs & Advanced Reactors | smr_advanced_reactors | manual_override |
+| OCC | Optical Components & Lasers | optical_components_lasers | themes_page_membership |
+| OKLO | SMRs & Advanced Reactors | smr_advanced_reactors | manual_override ✓ |
+| ONTO | Semiconductor Equipment | semicap_equip | themes_page_membership |
+| OSS | Servers & Compute Systems | servers_compute_systems | manual_override |
+| QS | Battery Technology & Energy Storage | battery_tech_storage | canonical_map |
+| RDDT | Software | software | manual_override |
+| SATS | Satellite Communications | satellite_comms | themes_page_membership |
+| SILC | Networking & Fabric Infrastructure | networking_fabric_infra | manual_override |
+| SMR | SMRs & Advanced Reactors | smr_advanced_reactors | manual_override ✓ |
+| TRT | Test & Measurement | test_measurement | manual_override |
+| TSM | Semiconductors | semiconductors | canonical_map |
+| UEC | Uranium Mining & Nuclear Fuel | uranium_nuclear_fuel | themes_page_membership |
+| URG | Uranium Mining & Nuclear Fuel | uranium_nuclear_fuel | manual_override |
+| UUUU | Rare Earth Elements | rare_earth | manual_override ✓ |
+| VIAV | Test & Measurement | test_measurement | manual_override ✓ |
+| VSAT | Space Economy | space | manual_override |
+
+### DB Checks
+- Active deprecated theme_ticker_overrides rows: **0**
+- BAND active memberships: `[cloud_software]`
+- BAND category: "Cloud Software"
+- ASPI category: "Uranium Mining & Nuclear Fuel"
+- IMSR category: "SMRs & Advanced Reactors"
+- UUUU category: "Rare Earth Elements"
+- TSM active memberships: `[semiconductors, packaging_substrates]`
+
+### Theme RS / Options Flow
+- ENRICHED_THEME_RS_UNIVERSE: 104 nodes, 0 deprecated (unchanged)
+- GET /api/themes/list → 104 themes, 0 deprecated
+- GET /api/options-flow/sectors → 11 sector groups, 0 deprecated
+
+### Write-Rejection Gate (unchanged)
+- POST /api/themes/admin/memberships with deprecated theme_id → HTTP 422 ✓
 
 ---
 
-## 14. Public API Validation (Phase 13 Live Results)
-
-| Check | Endpoint | HTTP | Result |
-|---|---|---|---|
-| E | `GET /api/themes/list` | 200 | 104 themes, **0 deprecated** ✓ |
-| F1 | `GET /api/themes/relative-strength?classification=all` | 200 | 104 rows, **0 deprecated** ✓ |
-| F2 | `GET /api/themes/relative-strength?classification=sub_theme` | 200 | 67 rows, **0 deprecated** ✓ |
-| F3 | `GET /api/themes/relative-strength?classification=theme` | 200 | 23 rows, **0 deprecated** ✓ |
-| H | `GET /api/options-flow/sectors` | 200 | 11 sector groups, **0 deprecated** ✓ |
-
----
-
-## 15. Future-Write Rejection Tests (Phase 6 + Phase 13 Live)
-
-New helper `_validate_thematic_assignment(theme_id)` in `routes/themes.py` — called for every `action='add'` across all 3 membership write paths.
-
-### Live rejection tests (with auth):
-
-| Test | Endpoint | Payload | HTTP | Response |
-|---|---|---|---|---|
-| Deprecated ai_networking | `POST /api/themes/admin/memberships` | `{theme_id: "ai_networking", action: "add"}` | **422** | "retired deprecated node... migration_targets: ['dc_connectivity_silicon', 'networking_fabric_infra']" ✓ |
-| Deprecated uranium_nuclear (bulk) | `POST /api/themes/admin/memberships/bulk` | `{edits: [{theme_id: "uranium_nuclear", action: "add"}]}` | **404** | "Unknown theme_id(s): ['uranium_nuclear']" (not in enriched universe = Phase 3 catches it) ✓ |
-| Active theme remove | `POST /api/themes/admin/memberships` | `{theme_id: "semiconductors", action: "remove"}` | **200** | Success — removes work fine ✓ |
-
-**Validation rules enforced (422 for add of):**
-- `classification == "deprecated"` → 422 "retired deprecated node"
-- `classification == "sector"` → 422 "sector node — use theme/sub_theme"
-- `classification == "market_lens"` → 422 "market_lens node — cannot be assigned"
-- `assignable == False` → 422 "assignable=False"
-- Unknown ID (not in enriched universe) → 404
-
----
-
-## 16. Cache / LKG Sanitization
-
-| Cache | Action | Status |
-|---|---|---|
-| `ENRICHED_THEME_RS_UNIVERSE` | Rebuilt via `refresh_enriched_universe()` after migration | 104 nodes, 0 deprecated ✓ |
-| Theme RS memory cache | Invalidated via `invalidate_theme_rs_cache()` | Background refresh queued ✓ |
-| Theme RS 5Y LKG disk | Sanitized by `_load_lkg()` on next load (Phase 9) | 112→104 rows ✓ |
-| Theme RS 1D LKG disk | Sanitized by `_load_1d_lkg()` on next load (Phase 9) | 8 deprecated curves removed ✓ |
-| Options Flow sectors cache | Invalidated via `invalidate_sectors_cache()` | Rebuilt from 104-node enriched universe ✓ |
-
-Phase 9 sanitization in `_load_lkg()` and `_load_1d_lkg()` is permanent — any future restart with an old snapshot will strip deprecated rows before serving. No good active LKG data was lost.
-
----
-
-## 17. Provider Schedules / Freshness — Untouched
-
-- Tradier scheduler: unchanged
-- FMP calls: unchanged
-- Options scan cadence: unchanged
-- Quote refresh cadence: unchanged
-- Canonical history: unchanged
-- Earnings monitor: unchanged
-- Watchlist performance/LKG refresh: unchanged
-
-No new provider calls were added. No earnings changes. No sector reclassification. No LLM architecture change.
-
----
-
-## 18. Tests
+## 7. Tests
 
 ```
-PASSED  tests/test_theme_hierarchy.py — 324 passed in 3.74s
+324 passed in 5.18s
 ```
 
-### New regression tests (30) — `TestDeprecatedExclusion` block
-
-| # | Test | Asserts |
-|---|---|---|
-| 1 | `test_raw_registry_has_8_deprecated` | Raw registry has exactly 8 deprecated nodes |
-| 2 | `test_active_runtime_registry_has_zero_deprecated` | `get_active_runtime_registry()` returns 0 deprecated |
-| 3 | `test_active_runtime_registry_size` | Active = raw − 8 |
-| 4 | `test_enriched_universe_has_zero_deprecated` | ENRICHED_THEME_RS_UNIVERSE has 0 deprecated |
-| 5 | `test_enriched_universe_excludes_all_deprecated_ids` | None of the 8 IDs are keys |
-| 6 | `test_assignable_registry_excludes_deprecated` | All 8 absent from assignable registry |
-| 7 | `test_theme_rs_service_universe_has_zero_deprecated` | theme_rs_service alias has 0 deprecated |
-| 8 | `test_lkg_floor_matches_active_count` | `_EXPECTED_THEME_COUNT` = 104 |
-| 9 | `test_load_lkg_sanitizes_deprecated_rows` | `_load_lkg()` strips deprecated rows from old file |
-| 10 | `test_load_1d_lkg_sanitizes_deprecated_curves` | `_load_1d_lkg()` strips deprecated curves |
-| 11 | `test_enriched_proxy_symbols_excludes_deprecated_only_tickers` | All proxy symbols referenced by ≥1 active node |
-| 12 | `test_options_flow_uses_active_only_universe` | 8 deprecated IDs absent from enriched universe |
-| 13-17 | `test_resolver_never_returns_deprecated` (×5 tickers) | Resolver returns active or None |
-| 18 | `test_resolver_with_deprecated_category_override` | Resolver suppresses stale deprecated category |
-| 19 | `test_legacy_photonics_lasers_resolves_active` | "Photonics / Lasers" → active optical node |
-| 20 | `test_legacy_semi_equipment_resolves_active` | "Semi Equipment" → "semicap_equip" |
-| 21-23 | `test_ambiguous_legacy_label_not_deprecated` (×3) | "AI Networking", "Lithium & Battery Tech", "Semi Equipment & Materials" → None |
-| 24 | `test_category_map_has_no_deprecated_ids` | _CATEGORY_TO_THEME_ID values ∩ deprecated = {} |
-| 25 | `test_section_map_has_no_deprecated_ids` | _SECTION_TO_THEME_ID values ∩ deprecated = {} |
-| 26 | `test_validate_rejects_deprecated_primary` | `_validate_thematic_assignment("ai_networking")` → 422 |
-| 27 | `test_validate_rejects_deprecated_additional` | `_validate_thematic_assignment("uranium_nuclear")` → 422 |
-| 28 | `test_validate_rejects_all_8_deprecated_ids` | All 8 → 422 |
-| 29 | `test_validate_rejects_unknown_theme` | Unknown ID → 404 |
-| 30 | `test_validate_rejects_sector` (×7 parametrized) | Sector nodes → 422 |
-| 31 | `test_validate_rejects_market_lens` | Market lens nodes → 422 |
-| 32 | `test_validate_passes_for_active_theme` | `"semiconductors"` → no exception |
-| 33 | `test_validate_passes_for_active_sub_theme` | `"semicap_equip"` → no exception |
-| 34 | `test_validate_passes_for_parent_theme` | `"nuclear_energy"` → no exception |
-| 35-39 | `TestMigrationResults` (DB, 5 tests) | 0 deprecated add rows; ABSI keeps biotech; UUUU correct; AAOI category updated; no sector written |
-| 40-44 | `test_migrated_tickers_resolve_to_active_theme` (×5) | AAOI/KLAC/SMR/SILC/MAXX → active themes |
-| 45 | `test_active_runtime_keeps_market_lens` | market_lens nodes preserved in active runtime |
-| 46 | `test_enriched_theme_rs_universe_invariant` | Core invariant: no deprecated in enriched universe |
-
-Also updated 4 pre-existing tests that asserted the old (pre-Phase 2) deprecated mapping behavior:
-- `test_standalone_subtheme_row_has_rollup_without_parent_theme_id` → `test_subtheme_row_with_parent_has_rollup` (ai_networking retired; dc_connectivity_silicon used)
-- `test_deprecated_node_assignable_false_repaired` → updated to assert Phase 9 behavior (LKG strips deprecated upstream)
-- `test_section_map_ai_networking_points_to_deprecated_node` → `test_section_map_ai_networking_is_none_post_v3` 
-- `test_category_map_ai_networking_points_to_deprecated_node` → `test_category_map_ai_networking_is_none_post_v3`
+All pre-existing taxonomy/watchlist/theme tests pass.
 
 ---
 
-## 19. git diff --check
+## 8. Files Changed
 
-```
-(no output — clean)
-```
-
----
-
-## 20. Exact Files Changed/Staged
-
-```
-backend/services/theme_rs_universe.py        +31 lines   (get_active_runtime_registry)
-backend/services/theme_merge_layer.py        +38 lines   (active_base boundary; label map fixes)
-backend/services/theme_resolver.py           +13 lines   (deprecated suppression guard)
-backend/routes/themes.py                     +95 lines   (_validate_thematic_assignment + 3 write-path calls)
-backend/services/theme_rs_service.py         +39 lines   (_DEPRECATED_THEME_IDS; LKG/1D sanitization)
-backend/migrations/migrate_deprecated_themes.py   (NEW)  idempotent migration script
-backend/tests/test_theme_hierarchy.py        +671 lines  (30 new tests; 4 pre-existing updated)
-backend/.codex-reports/latest.md             (NEW)       this report
-```
-
-Runtime/cache files (dirty but not staged):
-- `backend/data/themes_rs_lkg.json`, `backend/data/themes_rs_1d_lkg.json`, `backend/data/watchlist_stage2_lkg.json`, etc.
+| File | Change |
+|------|--------|
+| `backend/migrations/correct_theme_assignments_v1.py` | New idempotent correction script (DB writes via atomic_taxonomy_write_db) |
+| `backend/services/category_overrides.py` | Fixed `_SEED_OVERRIDES`: ASPI + IMSR display names (critical — seed overwrites DB on restart) |
+| `backend/services/theme_ticker_mapper.py` | Fixed `_FOREIGN_ALIAS_MAP`: ASPI → `uranium_nuclear_fuel`; TRT/AIM:TRT → `test_measurement` |
+| `backend/data/llm_theme_overrides.json` | BAND updated to `cloud_software`; IMSR stale deprecated entry removed |
 
 ---
 
-## 21. Final Commit SHA
+## 9. git diff --check
 
-```
-34aafb75  fix: retire deprecated themes from live taxonomy
-```
-
-**Push status:** Not pushed — awaiting user review per task instructions.
+CLEAN (no whitespace errors)
 
 ---
 
-## Summary
+## 10. Commit SHA
 
-All 13 phases complete. The `ENRICHED_THEME_RS_UNIVERSE` is permanently deprecated-free (104 nodes). All 40 affected tickers were individually classified and migrated to correct active theme IDs. No future write can assign a deprecated, sector, or market_lens node as a thematic membership. 324/324 tests pass. Zero deprecated nodes appear in any public API response.
+`9a0ad8cd` — "fix: correct migrated theme assignments"
+
+---
+
+## 11. No-Change Tickers (32 of 40)
+
+AAOI, ABSI, ACLS, ADTN, AEHR, AMCR, CEG, CIEN, DNN, ELVA, ENVX, FN, GLW, KLAC, LAC, LPTH, MAXX, NNE, OCC, ONTO, OSS, QS, RDDT, SATS, SILC, TRT (code cleanup only), UEC, URG, VIAV\*, VSAT  
+(\*VIAV had a cat_override added, counted in changed tickers above)
