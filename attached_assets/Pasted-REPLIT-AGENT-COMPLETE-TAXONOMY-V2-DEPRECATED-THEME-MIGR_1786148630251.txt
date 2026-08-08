@@ -1,0 +1,847 @@
+REPLIT AGENT — COMPLETE TAXONOMY V2 DEPRECATED-THEME MIGRATION AND
+REMOVE DEPRECATED THEMES FROM EVERY LIVE RUNTIME/PUBLIC DATA PATH
+
+Work only in the live BACKEND Replit workspace:
+
+/home/runner/workspace
+
+This is a canonical taxonomy correctness task.
+
+The user is currently seeing [Deprecated] themes in:
+
+- Watchlist taxonomy/filter buttons
+- Watchlist ticker classifications
+- Home Theme Performance
+- Options Flow theme groupings
+
+This is NOT intended behavior.
+
+The canonical registry explicitly defines deprecated nodes as:
+
+classification="deprecated"
+assignable=False
+
+and states that deprecated nodes are retained ONLY for backward-compatible
+alias resolution.
+
+They must NOT exist as live/public taxonomy nodes.
+
+The live Replit filesystem/runtime is authoritative.
+GitHub is reference/history only.
+
+────────────────────────────────────────────────────────
+MANDATORY FIRST STEP
+────────────────────────────────────────────────────────
+
+1. Find and read live backend AGENTS.md completely.
+2. Follow its exact report destination and repository rules.
+3. Record:
+   - repo root
+   - branch
+   - exact HEAD
+   - git status -sb
+   - ahead/behind
+   - recent 20 commits
+4. Preserve unrelated work/runtime files.
+5. Do not reset/revert/rebase/pull/push/clean/stash.
+6. Read completely or relevant full sections of:
+
+   services/theme_rs_universe.py
+   services/theme_merge_layer.py
+   services/theme_resolver.py
+   services/theme_ticker_mapper.py
+   services/category_overrides.py
+   services/theme_rs_service.py
+   routes/themes.py
+   data/options_flow_sectors.py
+   data/options_theme_supplement.py
+   data/pg_storage.py
+   services/watchlist_router.py
+
+7. Find the existing Taxonomy-v2 atomic ticker taxonomy write/storage primitive
+   introduced around:
+
+   2b0bddd4 — fix: make ticker taxonomy updates truly atomic
+
+   Reuse it.
+
+Do NOT create an independent taxonomy storage path.
+
+────────────────────────────────────────────────────────
+CANONICAL DEPRECATED IDS
+────────────────────────────────────────────────────────
+
+The registry currently defines exactly these retired structural nodes:
+
+ai_networking
+semicap_equipment
+lithium_battery
+uranium_nuclear
+chemicals_materials
+photonics_lasers
+substrates_packaging
+travel_transportation
+
+Verify live source before proceeding.
+
+Their registry records may remain for historical alias parsing.
+
+They are NOT assignable and must NOT participate in live taxonomy.
+
+────────────────────────────────────────────────────────
+KNOWN LIVE DATABASE EVIDENCE
+────────────────────────────────────────────────────────
+
+A read-only Neon audit immediately before this task found:
+
+46 active deprecated theme_ticker_overrides membership rows
+40 unique tickers with at least one deprecated active membership
+6 tickers also have another non-deprecated active membership
+34 have no non-deprecated override membership
+6 tickers have TWO deprecated active memberships
+
+The six with multiple deprecated memberships are currently:
+
+AAOI
+AEHR
+GLW
+KLAC
+ONTO
+TRT
+
+At least these category overrides also still contain legacy labels:
+
+AI Networking:
+  ADTN
+  OSS
+
+Lithium & Battery Tech:
+  ELVA
+
+Photonics / Lasers:
+  AAOI
+  GLW
+  SILC
+
+Semi Equipment & Materials:
+  LPTH
+
+Substrates / Packaging:
+  AEHR
+  TRT
+
+Uranium & Nuclear Energy:
+  ASPI
+  CEG
+  IMSR
+  NNE
+  URG
+
+DO NOT assume this list is still exact.
+
+Repeat the read-only live audit yourself before writing anything.
+
+────────────────────────────────────────────────────────
+PHASE 1 — COMPLETE GLOBAL REFERENCE AUDIT
+────────────────────────────────────────────────────────
+
+Search the entire backend for:
+
+all 8 deprecated IDs
+all 8 deprecated display labels
+"[Deprecated]"
+"classification" == "deprecated"
+migration_targets
+
+Classify every occurrence as one of:
+
+A. ALLOWED HISTORICAL/ALIAS REFERENCE
+
+Examples:
+registry retired-node metadata
+migration maps
+backward compatibility input parsing
+migration tests
+
+B. ILLEGAL LIVE REFERENCE
+
+Examples:
+runtime performance universe
+public endpoint row
+scanner universe
+resolver output
+assignment target
+stored current membership
+stored current primary override
+Home/Options grouping source
+
+Report the exact list before editing.
+
+────────────────────────────────────────────────────────
+PHASE 2 — DEFINE ONE CANONICAL ACTIVE-RUNTIME BOUNDARY
+────────────────────────────────────────────────────────
+
+Do not rely on every downstream consumer remembering to filter deprecated IDs.
+
+Create/reuse the smallest canonical registry helper that defines:
+
+ACTIVE RUNTIME NODE
+=
+classification != "deprecated"
+
+This is NOT necessarily identical to get_assignable_registry():
+
+market_lens nodes may intentionally remain performance lenses while being
+non-assignable.
+
+Do not accidentally delete/change market-lens behavior in this task.
+
+We need two concepts:
+
+1. runtime/public theme registry
+   - excludes deprecated
+   - preserves intentional market lenses where current consumers need them
+
+2. assignable thematic registry
+   - existing structural assignability rules
+   - excludes deprecated
+   - excludes market_lens
+   - respects assignable=False
+
+Use these centrally.
+
+────────────────────────────────────────────────────────
+PHASE 3 — ENRICHED UNIVERSE MUST NEVER CONTAIN DEPRECATED NODES
+────────────────────────────────────────────────────────
+
+Current architecture deep-copies the entire raw registry in
+_build_enriched_universe().
+
+Correct this at the source.
+
+ENRICHED_THEME_RS_UNIVERSE must become the LIVE active runtime universe and
+must contain zero classification="deprecated" entries.
+
+The raw THEME_RS_UNIVERSE may retain deprecated alias records.
+
+Do not simply frontend-filter them.
+
+Required invariant:
+
+any(
+    meta.classification == "deprecated"
+    for meta in ENRICHED_THEME_RS_UNIVERSE.values()
+) == False
+
+Also ensure:
+
+ENRICHED_ALL_PROXY_SYMBOLS
+ENRICHED_ALL_CANDIDATE_SYMBOLS
+
+are derived only from the active runtime universe.
+
+This automatically removes retired duplicate baskets from Theme RS and the
+Options Flow supplement universe.
+
+────────────────────────────────────────────────────────
+PHASE 4 — FIX LEGACY LABEL RESOLUTION
+────────────────────────────────────────────────────────
+
+Current theme_merge_layer contains legacy mappings that still point directly
+to deprecated nodes, including current/live equivalents of:
+
+"AI Networking"              → ai_networking
+"Lithium & Battery Tech"     → lithium_battery
+"Semi Equipment & Materials" → semicap_equipment
+"Semi Equipment"             → semicap_equipment
+
+and category mapping such as:
+
+"AI Networking" → ai_networking
+
+No live resolver may return a deprecated ID.
+
+Audit all legacy maps.
+
+For UNAMBIGUOUS legacy labels:
+redirect to the correct active replacement.
+
+Examples:
+
+Chemicals & Materials
+→ advanced_materials
+
+Substrates / Packaging
+→ packaging_substrates
+
+For AMBIGUOUS old catch-all labels:
+DO NOT point the generic legacy label to one arbitrary child and DO NOT point
+it to the deprecated node.
+
+Resolution must become ticker-specific using existing canonical taxonomy
+information.
+
+Preferred precedence:
+
+1. existing current assignable primary taxonomy
+2. current assignable manual membership/override
+3. canonical static ticker mapper
+4. current active taxonomy candidate/registry evidence
+5. deterministic company/business classification using existing project
+   classifier if needed
+6. active parent-theme fallback where Taxonomy v2 explicitly permits direct
+   parent membership
+
+Never return a deprecated ID merely because historical input used an old label.
+
+────────────────────────────────────────────────────────
+PHASE 5 — RESOLVER MUST NEVER OUTPUT DEPRECATED
+────────────────────────────────────────────────────────
+
+Current build_theme_resolution_context() indexes the entire enriched universe.
+
+After Phase 3 the enriched universe should already be active-only.
+
+Still harden the resolver:
+
+- primary theme result may not be classification="deprecated"
+- Themes-page membership may not inject deprecated
+- manual category override resolving to a deprecated label must be treated as
+  migration-required and resolved to an active target
+- no deprecated display_name may win over an active canonical mapping
+
+Required invariant:
+
+resolve_primary_theme_for_ticker(ticker).theme_id
+
+is either:
+
+active assignable theme/sub_theme
+or None
+
+Never deprecated.
+Never market_lens.
+Never sector as thematic primary.
+
+Preserve current sector identity separately.
+
+────────────────────────────────────────────────────────
+PHASE 6 — BLOCK ALL FUTURE DEPRECATED WRITES
+────────────────────────────────────────────────────────
+
+Audit EVERY taxonomy/membership write endpoint and shared helper.
+
+At minimum:
+
+POST /api/themes/admin/memberships
+POST /api/themes/admin/additional-memberships
+POST /api/themes/admin/assign-primary-theme
+POST /api/themes/admin/memberships/bulk
+PUT /api/themes/admin/ticker-taxonomy/{ticker}
+any Watchlist PATCH theme/category compatibility path
+
+Current validation often checks only:
+
+theme_id in universe
+
+That is insufficient.
+
+Centralize validation so a new/current thematic assignment must be:
+
+exists
+AND assignable=True
+AND classification in ("theme", "sub_theme")
+
+or whatever exact active structural contract Taxonomy v2 already establishes.
+
+Attempts to assign:
+
+deprecated
+market_lens
+sector
+
+as a thematic membership must return a clear 4xx error.
+
+Do not silently remap an explicit new admin request.
+
+Historical input migration and new writes are different contracts.
+
+────────────────────────────────────────────────────────
+PHASE 7 — AUDIT AND MIGRATE LIVE STORED DATA
+────────────────────────────────────────────────────────
+
+This phase is REQUIRED.
+
+Do not merely hide deprecated memberships.
+
+Read live:
+
+theme_ticker_overrides
+watchlist_category_overrides
+other persisted mapper/taxonomy state
+current Watchlist rows/identity fields where applicable
+
+Build one migration review table containing every affected ticker:
+
+ticker
+deprecated_membership_ids[]
+deprecated_category_override
+current resolver result
+current active memberships[]
+candidate migration targets[]
+chosen primary target
+chosen additional targets[]
+reason/evidence
+confidence
+write operations required
+
+There were 40 unique affected tickers in the pre-task audit.
+
+Re-audit exact current count.
+
+────────────────────────────────────────────────────────
+MIGRATION SELECTION RULES
+────────────────────────────────────────────────────────
+
+Do NOT mechanically move every old bucket to one new bucket.
+
+The old buckets were intentionally split because they were too broad.
+
+Examples:
+
+ai_networking:
+  dc_connectivity_silicon
+  networking_fabric_infra
+  optical_interconnects
+  possibly another active node when business evidence clearly fits better
+
+semicap_equipment:
+  semicap_equip
+  semicap_materials_node
+  test_measurement
+  packaging_substrates
+
+lithium_battery:
+  lithium
+  battery_tech_storage
+
+uranium_nuclear:
+  uranium_nuclear_fuel
+  nuclear_equipment_services
+  smr_advanced_reactors
+  nuclear_utilities_operators
+  nuclear_energy parent when genuinely broad/ambiguous
+
+photonics_lasers:
+  optical_components_lasers
+  optical_interconnects
+  photonics_optical parent when genuinely broad
+
+travel_transportation:
+  travel_leisure
+  freight_logistics
+  transportation_mobility parent when broad
+
+chemicals_materials:
+  advanced_materials or the appropriate active child if one clearly fits
+
+substrates_packaging:
+  packaging_substrates ONLY when the company actually fits packaging/substrates.
+  Legacy bad assignments such as equipment/test/optical companies must be
+  classified into their actual active theme instead.
+
+Important:
+
+The existing live data proves some old memberships were bad.
+
+Do not assume:
+"stock was in deprecated X → closest-name replacement X2"
+
+Classify the actual company.
+
+────────────────────────────────────────────────────────
+PRIMARY VS ADDITIONAL
+────────────────────────────────────────────────────────
+
+Preserve Taxonomy v2 model:
+
+one actual sector
+one primary thematic membership
+zero or more intentional additional memberships
+
+If ticker already has a clearly correct active primary theme:
+KEEP IT.
+
+Remove the deprecated membership.
+
+Do not overwrite a good active primary merely because an old deprecated
+additional membership exists.
+
+If an old deprecated membership represents a real secondary exposure:
+replace it with the appropriate ACTIVE additional membership only if it is
+still semantically justified.
+
+Do not preserve duplication merely for historical continuity.
+
+Examples from the pre-task DB audit where old+new coexist:
+
+ABSI: deprecated AI Networking + active Biotech
+BAND: deprecated AI Networking + active Memory & Storage
+RDDT: deprecated AI Networking + active Software
+TSM: deprecated Substrates / Packaging + active Semiconductors
+UUUU: deprecated Uranium/Nuclear + active Rare Earth
+VSAT: deprecated AI Networking + active Space
+
+Do NOT blindly delete the active theme or assume it is the correct primary.
+
+Determine canonical primary/additional roles using current taxonomy semantics.
+
+────────────────────────────────────────────────────────
+WRITE SAFETY
+────────────────────────────────────────────────────────
+
+Use the EXISTING Taxonomy-v2 atomic storage/write primitive.
+
+Do not perform ad-hoc independent writes to:
+
+theme_ticker_overrides
+watchlist_category_overrides
+mapper state
+
+if the existing atomic primitive can perform them consistently.
+
+For each ticker, the migration must atomically achieve:
+
+- active primary set correctly
+- intended active additional memberships set correctly
+- deprecated active memberships removed
+- deprecated primary/category override replaced/removed
+- no half-migrated state
+
+Prefer an existing bulk/transaction primitive if available.
+
+If the existing primitive cannot perform a required migration atomically:
+
+STOP and report the exact missing capability before inventing another storage
+path.
+
+Do not directly mutate actual sector.
+
+────────────────────────────────────────────────────────
+PHASE 8 — THEME RS / HOME MUST BE ACTIVE-ONLY
+────────────────────────────────────────────────────────
+
+Theme RS currently computes every node in THEME_RS_UNIVERSE/enriched universe.
+
+After correction:
+
+zero deprecated theme rows may enter:
+
+_compute()
+_score_and_state()
+RS percentile universe
+RS ranks
+performance curves
+leaders/laggards
+LKG
+TTL cache
+public API
+
+This matters not only cosmetically:
+
+deprecated rows currently distort the percentile/rank peer universe.
+
+Update count guards/test expectations to active runtime counts rather than old
+counts that included deprecated nodes.
+
+Home consumes Theme RS data.
+
+Do not create a Home-specific replacement taxonomy.
+
+The clean Theme RS response should automatically make Home clean.
+
+────────────────────────────────────────────────────────
+PHASE 9 — OLD THEME RS LKG/CACHE CANNOT RESURRECT DEPRECATED ROWS
+────────────────────────────────────────────────────────
+
+Audit:
+
+Theme RS memory cache
+historical LKG
+1D LKG
+basket hashes
+startup cache seeding
+
+Old snapshots may contain deprecated rows.
+
+At load/serve time:
+
+- strip any deprecated IDs before response
+- mark old snapshot schema/taxonomy version stale if appropriate
+- trigger normal background rebuild
+- never serve deprecated rows while waiting
+
+Prefer a taxonomy schema/version bump if an existing version mechanism exists.
+
+Do not delete good active LKG data unnecessarily.
+
+────────────────────────────────────────────────────────
+PHASE 10 — OPTIONS FLOW MUST USE ACTIVE RUNTIME UNIVERSE
+────────────────────────────────────────────────────────
+
+Current options_flow_sectors.build_sector_tree() walks every enriched registry
+node.
+
+Correct its contract so:
+
+- all_theme_syms excludes deprecated nodes
+- sector grouping excludes deprecated nodes
+- theme nodes exclude deprecated
+- scan coverage denominator excludes deprecated-only duplicate symbols
+- Options Flow supplement required universe excludes retired baskets
+- historical net-premium theme entity rows are not generated for deprecated
+  theme IDs going forward
+
+Do NOT change:
+
+Tradier cadence
+options scan cadence
+options freshness
+premium calculations
+P/C calculations
+scanner lanes
+
+This should REDUCE redundant coverage work, not reduce freshness.
+
+Invalidate existing Options Flow tree cache after taxonomy migration.
+
+────────────────────────────────────────────────────────
+PHASE 11 — PUBLIC THEME APIs MUST NEVER EXPOSE DEPRECATED NODES
+────────────────────────────────────────────────────────
+
+Verify:
+
+GET /api/themes/list
+GET /api/themes/relative-strength
+GET /api/themes/relative-strength?classification=all
+GET /api/themes/relative-strength?classification=theme
+GET /api/themes/relative-strength?classification=sub_theme
+
+Public responses:
+
+deprecated count = 0
+
+Do not expose "[Deprecated]" display names.
+
+Admin/debug endpoints may expose historical deprecated records ONLY when the
+endpoint is explicitly diagnostic and clearly labels them as historical.
+
+Assignment lists/dropdowns must use assignable active structural nodes only.
+
+────────────────────────────────────────────────────────
+PHASE 12 — WATCHLIST BULK/LKG INVALIDATION
+────────────────────────────────────────────────────────
+
+After migration, Watchlist rows must immediately stop carrying deprecated:
+
+primary_theme_id
+canonical_theme_name
+theme_ids
+subtheme_ids
+additional memberships
+
+Audit the whole-response Watchlist LKG.
+
+The taxonomy migration must invalidate/rebuild any Watchlist cache that could
+continue serving the pre-migration deprecated identity.
+
+Do not wait 5/20 minutes for UI correctness.
+
+Do not alter quote/options refresh cadence.
+
+────────────────────────────────────────────────────────
+PHASE 13 — FULL LIVE VALIDATION
+────────────────────────────────────────────────────────
+
+After migration and cache invalidation, prove via live endpoints:
+
+A. canonical registry diagnostics
+   deprecated raw registry = 8
+   deprecated live/runtime universe = 0
+
+B. live DB
+   active deprecated theme_ticker_overrides add rows = 0
+
+C. watchlist_category_overrides
+   deprecated category labels = 0
+
+D. Watchlist primary
+   every ticker theme identity is active or legitimately unassigned
+   zero deprecated IDs/names
+
+E. /api/themes/list
+   zero deprecated
+
+F. /api/themes/relative-strength?timeframe=1D&classification=all
+   zero deprecated
+
+G. Home dashboard/theme performance source
+   zero deprecated
+
+H. Options Flow sectors/themes tree
+   zero deprecated theme IDs/names
+
+I. assignment/admin list
+   zero deprecated selectable targets
+
+J. try assigning deprecated ai_networking through each write API
+   request is rejected
+   NO DB row changed
+
+────────────────────────────────────────────────────────
+NO FUNCTIONALITY LOSS
+────────────────────────────────────────────────────────
+
+Do not delete the deprecated registry metadata itself if aliases/history use it.
+
+Historical labels still need to be understandable.
+
+Correct flow:
+
+old historical label
+→ recognize retired alias
+→ resolve/migrate to active current taxonomy
+
+NOT:
+
+old historical label
+→ return deprecated node as current taxonomy
+
+────────────────────────────────────────────────────────
+DO NOT TOUCH
+────────────────────────────────────────────────────────
+
+No frontend changes in this backend task.
+
+No Tradier scheduler changes.
+
+No FMP changes.
+
+No earnings changes.
+
+No options cadence changes.
+
+No quote cadence changes.
+
+No canonical-history changes.
+
+No Watchlist performance/LKG redesign.
+
+No sector reclassification.
+
+No new provider.
+
+No LLM architecture change.
+
+────────────────────────────────────────────────────────
+TESTS
+────────────────────────────────────────────────────────
+
+Add regression tests covering at minimum:
+
+1. raw registry still contains 8 deprecated alias nodes.
+2. active runtime universe contains 0 deprecated nodes.
+3. enriched universe contains 0 deprecated nodes.
+4. assignable registry excludes deprecated.
+5. Theme RS compute produces 0 deprecated rows.
+6. Theme RS classification=all serves 0 deprecated rows.
+7. stale LKG containing deprecated row is sanitized.
+8. 1D LKG containing deprecated row is sanitized.
+9. deprecated rows do not affect RS percentile/rank universe.
+10. Options Flow universe excludes deprecated nodes.
+11. Options Flow theme tree contains 0 deprecated groups.
+12. Options Flow scan coverage excludes retired duplicate baskets.
+13. resolver never returns deprecated theme ID.
+14. legacy unambiguous label resolves active.
+15. ambiguous legacy label never returns deprecated ID.
+16. deprecated primary assignment rejected.
+17. deprecated additional membership rejected.
+18. deprecated generic membership rejected.
+19. deprecated bulk add rejected.
+20. sector cannot be assigned as thematic membership.
+21. market_lens cannot be assigned as thematic membership.
+22. active theme assignment still succeeds.
+23. active subtheme assignment still succeeds.
+24. parent-theme direct assignment remains valid where taxonomy permits it.
+25. migration preserves good active primary.
+26. migration removes deprecated additional.
+27. migration replaces deprecated primary/category override.
+28. migration leaves actual sector untouched.
+29. Watchlist bulk row contains no deprecated IDs/names.
+30. taxonomy migration invalidates relevant caches once.
+
+Run all AGENTS.md-required taxonomy/themes/options/watchlist tests.
+
+git diff --check
+
+────────────────────────────────────────────────────────
+COMMIT HYGIENE
+────────────────────────────────────────────────────────
+
+Do not use:
+
+git add .
+git add -A
+
+Do not stage:
+
+runtime cache JSON
+LKG churn
+logs
+reports outside AGENTS-required path
+pasted prompt assets
+
+Stage exact intended source/tests/migration artifact only.
+
+If a deterministic migration script is needed:
+place it in the project's established migration/admin-script location and make
+it idempotent.
+
+One local commit after validation:
+
+fix: retire deprecated themes from live taxonomy
+
+Do not push until user reviews the report.
+
+────────────────────────────────────────────────────────
+REQUIRED REPORT
+────────────────────────────────────────────────────────
+
+Write to exact AGENTS.md-required report path.
+
+Include:
+
+1. Starting HEAD/status.
+2. All eight deprecated nodes.
+3. Complete reference audit.
+4. Pre-migration live DB counts.
+5. Every affected ticker migration table:
+   old memberships → new primary/additional memberships.
+6. Explanation for every ambiguous ticker decision.
+7. Post-migration DB counts.
+8. Category override cleanup.
+9. Resolver changes.
+10. Runtime/enriched-universe boundary.
+11. Theme RS before/after row counts.
+12. Confirmation deprecated rows no longer affect RS rankings.
+13. Options Flow before/after universe/group counts.
+14. Watchlist identity validation.
+15. Home validation.
+16. Public API validation.
+17. Future-write rejection tests.
+18. Cache/LKG sanitation/invalidation.
+19. Confirmation provider schedules/freshness untouched.
+20. Tests with exit codes.
+21. git diff --check.
+22. Exact files changed/staged.
+23. Final commit SHA.
