@@ -1,0 +1,487 @@
+REPLIT AGENT — FINAL OTC REAL-TIME QUOTE ROUTING CORRECTION
+
+The prior OTC task is mostly correct for fundamentals, earnings, and the slower
+Watchlist/Home quote cache.
+
+DO NOT redo those pieces.
+
+One required quote path was missed:
+
+The Watchlist frontend uses useRealtimeQuotes(), which polls:
+
+    /api/market/realtime-quotes
+
+at approximately:
+
+    regular session: 20 seconds
+    pre/post:        45 seconds
+    closed:          3 minutes
+
+This is the actual live Tradier quote path used to overlay current prices on
+Watchlist rows.
+
+The active backend audit confirms that OTC:BESIY is currently rejected by this
+endpoint before reaching any provider because routes/realtime_quotes.py uses a
+symbol validator that does not permit ":".
+
+Therefore OTC still does NOT receive the same live quote cadence as normal U.S.
+Watchlist securities.
+
+Fix ONLY this missing OTC routing.
+
+============================================================
+HARD RULES
+============================================================
+
+1. DO NOT modify the existing Tradier scheduler/provider behavior for normal
+   U.S. symbols.
+
+2. DO NOT modify the frontend polling cadence.
+
+3. DO NOT modify the already-completed weekly fundamentals work.
+
+4. DO NOT modify the already-completed earnings-monitor work.
+
+5. DO NOT create a new scheduler.
+
+6. DO NOT create a new endpoint.
+
+7. DO NOT route OTC through Tradier, Public.com, Twelve Data, or any other
+   fallback provider.
+
+8. OTC quote ownership is FMP only.
+
+9. Use the existing fmp_governor for every NEW OTC FMP HTTP call.
+
+10. Preserve canonical identity:
+
+       application/cache/output: OTC:BESIY
+       FMP HTTP parameter only: BESIY
+
+11. Genuine foreign symbols such as:
+
+       TSX:FLT
+       LSE:VOD
+       ASX:EQR
+
+   must remain invalid/ineligible for this U.S./OTC realtime quote path.
+
+12. Never synthesize zero for missing FMP fields.
+
+============================================================
+EXISTING LIVE PATH TO EXTEND
+============================================================
+
+Audit the active Replit implementation before editing:
+
+    routes/realtime_quotes.py
+        GET /api/market/realtime-quotes
+        POST /api/market/realtime-quotes
+        _validate_symbols()
+
+            ↓
+
+    services/realtime_quotes_service.py
+        get_realtime_quotes()
+
+Existing normal-U.S. behavior is approximately:
+
+    live cache
+        ↓ miss
+    Tradier
+        ↓ miss
+    Public fallback
+        ↓ miss
+    FMP fallback
+        ↓ miss
+    Twelve Data
+        ↓ miss
+    LKG
+
+DO NOT CHANGE THAT NORMAL-U.S. CHAIN.
+
+Add an OTC-specific branch inside the SAME realtime quote service.
+
+============================================================
+PART 1 — ROUTER VALIDATION
+============================================================
+
+Update symbol validation narrowly so these are accepted:
+
+    AAPL
+    NVDA
+    BRK.B
+    OTC:BESIY
+    OTC:NLST
+
+Do NOT simply allow arbitrary colon-containing symbols.
+
+Only the canonical OTC format should receive the new exception.
+
+Conceptual contract:
+
+    plain supported U.S. symbol  → valid
+    OTC:<valid provider symbol> → valid
+    any other exchange prefix   → invalid
+
+Examples that MUST remain invalid:
+
+    TSX:FLT
+    LSE:VOD
+    ASX:EQR
+    FRA:APR
+    AIM:ENSI
+
+Preserve all existing symbol-count/request-size safety.
+
+============================================================
+PART 2 — REALTIME SERVICE PROVIDER PARTITION
+============================================================
+
+At the beginning of the realtime quote service, partition requested symbols
+into:
+
+    normal_us
+    otc_canonical
+
+Normal U.S. symbols continue through the exact existing provider path without
+behavior changes.
+
+OTC symbols must NOT enter the existing:
+
+    Tradier
+    Public
+    generic FMP fallback
+    Twelve Data
+
+fallback chain.
+
+Instead OTC gets one dedicated branch using FMP.
+
+Use the existing canonical OTC helper rather than creating another prefix
+normalizer if possible.
+
+Example:
+
+    canonical = OTC:BESIY
+    FMP call symbol = BESIY
+    returned quote symbol = OTC:BESIY
+
+============================================================
+PART 3 — MATCH THE EXISTING REALTIME CACHE CONTRACT
+============================================================
+
+OTC must use the SAME realtime quote cache semantics as U.S. rows:
+
+    realtime_quote:live:<CANONICAL>
+    realtime_quote:lkg:<CANONICAL>
+
+So for BESIY the keys must be:
+
+    realtime_quote:live:OTC:BESIY
+    realtime_quote:lkg:OTC:BESIY
+
+NOT:
+
+    realtime_quote:live:BESIY
+
+Use the same session-aware live TTL already used by this service:
+
+    regular approximately 15 sec
+    pre/post approximately 30 sec
+    closed approximately 300 sec
+
+Do not create another TTL system.
+
+The frontend's existing 20s / 45s / 3min polling then naturally produces the
+desired OTC cadence with no frontend changes.
+
+============================================================
+PART 4 — FMP QUOTE CALL
+============================================================
+
+The user's FMP Starter plan supports:
+
+    Stock Quote
+    Stock Quote Short
+    Aftermarket Trade
+    Aftermarket Quote
+
+but NOT:
+
+    Stock Batch Quote
+    Batch Aftermarket Quote
+
+Therefore OTC live quote misses must use individual symbol calls.
+
+Do NOT invent or use an FMP batch quote request.
+
+Every NEW OTC FMP call must go through:
+
+    fmp_governor.acquire(...)
+    HTTP call
+    fmp_governor.record_call()
+
+Use the existing shared governor instance.
+
+Do not introduce another semaphore/token bucket specifically for OTC.
+
+If a concurrency primitive is needed only to prevent local task explosion, it
+must not replace governor admission and must not create a second independent
+rate budget.
+
+============================================================
+PART 5 — SESSION BEHAVIOR
+============================================================
+
+First inspect what the current FMP provider abstraction already supports.
+
+During regular session:
+    use the existing supported FMP stock quote path.
+
+During pre/post market:
+    if the existing FMP provider already exposes the Starter-supported
+    Aftermarket Quote/Trade path and live runtime verification confirms useful
+    OTC data, use that existing path.
+
+Do NOT build a broad new aftermarket subsystem just for this task.
+
+If FMP aftermarket data is genuinely unavailable for a particular OTC ticker,
+preserve the last good quote and mark freshness/session state accurately rather
+than pretending regular-session data is a fresh aftermarket quote.
+
+Closed session:
+    preserve the same realtime-service cache/LKG semantics used today.
+
+============================================================
+PART 6 — OUTPUT SHAPE
+============================================================
+
+Return OTC quotes in the SAME RealtimeQuote contract consumed by
+useRealtimeQuotes / mergeRealtimeQuote.
+
+Populate only fields actually supplied/derived legitimately:
+
+    symbol = OTC:BESIY
+    price / last
+    change
+    change_percent
+    volume
+    bid
+    ask
+    open
+    high
+    low
+    prev_close
+    source
+    is_realtime
+    is_stale
+    market_session
+    quote_timestamp / updated_at
+    staleness_seconds
+
+Do not force every field to exist.
+
+If FMP omits:
+
+    volume
+    bid
+    ask
+    average volume
+    etc.
+
+leave it null/unavailable according to the existing RealtimeQuote contract.
+
+Do NOT emit:
+
+    volume = 0
+    change = 0
+    change_percent = 0
+
+merely because a field was missing.
+
+Source for successful OTC FMP rows should clearly identify FMP/OTC using the
+existing source/provenance conventions.
+
+============================================================
+PART 7 — PROVIDER SEPARATION PROOF
+============================================================
+
+Use actual Primary Watchlist symbols.
+
+The canonical database currently contains 26 OTC securities, including:
+
+    OTC:BESIY
+    OTC:NLST
+    OTC:VLXGF
+    OTC:SESMF
+    OTC:SLOIY
+
+Validate at least:
+
+    OTC:BESIY
+    OTC:NLST
+    OTC:VLXGF
+
+plus normal-U.S. controls:
+
+    NVDA
+    AAPL or another normal U.S. name
+
+and one genuine foreign negative case:
+
+    TSX:FLT or another currently saved foreign symbol.
+
+Prove:
+
+OTC:BESIY:
+    router accepts it
+    realtime service recognizes OTC
+    FMP call receives BESIY
+    Tradier call count for BESIY = 0
+    Public call count = 0
+    Twelve Data call count = 0
+    returned symbol = OTC:BESIY
+    cache key = realtime_quote:live:OTC:BESIY
+    source = FMP OTC provenance
+
+NVDA:
+    continues through existing Tradier behavior
+    no OTC routing behavior applied
+    result remains unchanged from before task
+
+TSX:FLT:
+    remains rejected/ineligible
+    no FMP OTC call
+    no Tradier call
+
+============================================================
+PART 8 — RATE LIMIT PROOF
+============================================================
+
+The frontend normally sends the full Watchlist set repeatedly.
+
+There are currently 26 OTC symbols.
+
+With a 15-second regular-session backend live-cache TTL and a roughly 20-second
+frontend poll, a fully cold OTC cycle can require up to 26 individual FMP quote
+calls.
+
+Measure one actual cold cycle and one warm/cache-hit cycle.
+
+Report:
+
+    requested OTC count
+    FMP calls cold
+    FMP calls warm
+    elapsed time
+    governor admissions
+    governor denials, if any
+
+Confirm projected normal regular-session OTC quote traffic remains safely under
+the user's FMP 300 calls/minute plan limit.
+
+Also remember FMP is used elsewhere.
+
+Do not change existing fundamentals/earnings pacing in this correction.
+
+If you identify a combined-budget risk, REPORT IT; do not redesign unrelated
+existing FMP jobs.
+
+============================================================
+PART 9 — KEEP THE EXISTING 10-MINUTE OTC CACHE
+============================================================
+
+Do not remove the recently-added OTC support in:
+
+    watchlist_quote_cache
+    home_service
+
+during this correction unless there is a directly proven bug.
+
+Those paths provide base/LKG data for Watchlist/Home.
+
+This correction is specifically to add OTC to the separate LIVE
+/api/market/realtime-quotes overlay.
+
+Do not turn this into a quote-architecture refactor.
+
+============================================================
+VALIDATION
+============================================================
+
+Required actual runtime call:
+
+    /api/market/realtime-quotes?symbols=OTC:BESIY,NVDA
+
+or POST equivalent.
+
+Expected conceptual response:
+
+OTC:BESIY:
+    valid quote when FMP has data
+    source = FMP OTC
+    canonical symbol retained
+
+NVDA:
+    source = Tradier under normal healthy provider conditions
+
+Also call with:
+
+    TSX:FLT
+
+and confirm it remains invalid/unrouted.
+
+Verify second request inside live TTL makes:
+
+    0 new OTC FMP provider calls
+
+Verify no page-load latency regression.
+
+============================================================
+SCOPE
+============================================================
+
+Expected production scope:
+
+    routes/realtime_quotes.py
+    services/realtime_quotes_service.py
+
+Potentially reuse existing:
+
+    services/otc_service.py
+
+Do NOT edit frontend useRealtimeQuotes — its cadence is already correct.
+
+Do NOT touch Tradier provider/scheduler files.
+
+Do NOT touch fundamentals or earnings files.
+
+Do NOT touch Neon schema.
+
+Do NOT touch historical bars/technicals.
+
+============================================================
+FINAL REPORT
+============================================================
+
+Do not say Complete until the ACTUAL realtime endpoint returns OTC:BESIY.
+
+Report:
+
+1. Before response for OTC:BESIY.
+2. After response for OTC:BESIY.
+3. NVDA before/after provider behavior.
+4. Foreign negative case.
+5. Exact files changed.
+6. Router validation change.
+7. Provider partition logic.
+8. Canonical/bare mapping.
+9. Cache keys.
+10. Session TTL behavior.
+11. FMP governor call counts.
+12. Cold/warm request counts.
+13. No Tradier files changed.
+14. No fundamentals/earnings files changed.
+15. Runtime validation.
+16. Commit SHA.

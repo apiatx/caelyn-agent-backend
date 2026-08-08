@@ -34,6 +34,10 @@ router = APIRouter(
 )
 
 _SYMBOL_RE = re.compile(r"^[A-Z0-9.\-^]{1,12}$")
+# OTC canonical form: "OTC:" followed by a valid provider symbol (1–12 chars).
+# Only this exact prefix is allowed through; all other exchange prefixes
+# (TSX:, LSE:, ASX:, FRA:, AIM:, …) remain invalid.
+_OTC_SYMBOL_RE = re.compile(r"^OTC:[A-Z0-9.\-^]{1,12}$")
 
 
 def _validate_symbols(raw_symbols: list[str]) -> tuple[list[str], dict[str, str]]:
@@ -50,7 +54,7 @@ def _validate_symbols(raw_symbols: list[str]) -> tuple[list[str], dict[str, str]
         if cleaned in seen:
             continue
         seen.add(cleaned)
-        if not _SYMBOL_RE.match(cleaned):
+        if not (_SYMBOL_RE.match(cleaned) or _OTC_SYMBOL_RE.match(cleaned)):
             errors[cleaned] = "invalid_symbol"
             continue
         valid.append(cleaned)

@@ -57,6 +57,7 @@ except Exception:
 SOURCE_TRADIER = "tradier"
 SOURCE_PUBLIC = "public_fallback"
 SOURCE_FMP = "fmp_fallback"
+SOURCE_FMP_OTC = "fmp_otc"   # OTC-canonical symbols — FMP is the sole live provider
 SOURCE_TWELVE = "twelvedata_fallback"
 SOURCE_LKG = "lkg"
 SOURCE_NONE = "none"
@@ -179,7 +180,10 @@ def _normalize_symbols(symbols: list[str]) -> list[str]:
         cleaned = s.strip().upper()
         if not cleaned or cleaned in seen:
             continue
-        if len(cleaned) > 12:
+        # OTC canonical form (OTC: + up to 12 chars) reaches max 16 chars;
+        # all other symbols are capped at 12.
+        _max_len = 16 if cleaned.startswith("OTC:") else 12
+        if len(cleaned) > _max_len:
             continue
         seen.add(cleaned)
         out.append(cleaned)
@@ -311,11 +315,39 @@ class RealtimeQuotesService:
         if not remaining:
             return result
 
+        # ── Partition cache misses: OTC (FMP-only) vs. U.S. (Tradier chain) ──
+        # OTC:-prefixed symbols must never enter the Tradier / Public / Twelve
+        # path. split_otc_us returns ([OTC:…], [plain US]) and silently discards
+        # any other colon format — those were already rejected by the router.
+        try:
+            from services.otc_service import split_otc_us as _split_otc_us
+            _otc_remaining, _us_remaining = _split_otc_us(remaining)
+        except Exception as _otc_split_err:
+            print(f"[REALTIME_OTC] split error (fallback: treat all as US): {_otc_split_err}")
+            _otc_remaining, _us_remaining = [], list(remaining)
+
+        # ── OTC: FMP-only live quote branch ──────────────────────────────────
+        if _otc_remaining:
+            _otc_quotes = await self._fmp_otc_batch(_otc_remaining, session)
+            for _canonical in _otc_remaining:
+                _oq = _otc_quotes.get(_canonical)
+                if _oq and _oq.price is not None:
+                    self._cache_set_live(_canonical, _oq, cache_ttl)
+                    self._cache_set_lkg(_canonical, _oq)
+                    result[_canonical] = _oq
+                else:
+                    result[_canonical] = self._lkg_or_empty(
+                        _canonical, session, "fmp_otc_no_data"
+                    )
+
+        if not _us_remaining:
+            return result
+
         # 2. Tradier primary
         tradier_failures: list[str] = []
         if self.tradier:
-            t_quotes = await self._tradier_batch(remaining, session)
-            for sym in remaining:
+            t_quotes = await self._tradier_batch(_us_remaining, session)
+            for sym in _us_remaining:
                 q = t_quotes.get(sym)
                 if q and q.price is not None:
                     self._cache_set_live(sym, q, cache_ttl)
@@ -326,17 +358,17 @@ class RealtimeQuotesService:
             # ── Phase 4A: record refresh diagnostics ─────────────────────────
             try:
                 import data.quote_demand_registry as _qdr
-                _live = sum(1 for s in remaining if s in result)
+                _live = sum(1 for s in _us_remaining if s in result)
                 _qdr.record_refresh_stats(
-                    queue_depth=len(remaining),
-                    order_sample=remaining[:10],
+                    queue_depth=len(_us_remaining),
+                    order_sample=_us_remaining[:10],
                     cache_hits=served_from_cache,
                     live_fetches=_live,
                 )
             except Exception:
                 pass
         else:
-            tradier_failures = list(remaining)
+            tradier_failures = list(_us_remaining)
             print("[REALTIME] Tradier provider not configured")
 
         if not allow_fallback or not tradier_failures:
@@ -400,6 +432,102 @@ class RealtimeQuotesService:
             result[sym] = self._lkg_or_empty(sym, session, "all_vendors_failed")
 
         return result
+
+    # ── OTC FMP live-quote branch ────────────────────────────────────────────
+    # Each OTC symbol is fetched individually via fmp_governor-controlled calls.
+    # FMP Starter does not support batch quote; individual stable/quote is used.
+    # Canonical identity: application/cache/output → OTC:BESIY; FMP HTTP → BESIY.
+    # These symbols NEVER enter the Tradier / Public / Twelve path.
+
+    async def _fmp_otc_batch(
+        self,
+        otc_canonical: list[str],
+        session: str,
+    ) -> dict[str, "RealtimeQuote"]:
+        """Fetch live quotes for OTC:-prefixed symbols using FMP as the sole provider.
+
+        Returns a dict keyed by canonical OTC:BESIY symbols.
+        Symbols that FMP returns no price for are absent from the result (caller
+        falls back to LKG).  No Tradier / Public / Twelve calls are made here.
+        """
+        import time as _t
+        from services.fmp_governor import fmp_governor
+
+        try:
+            from services.otc_service import otc_to_fmp as _otc_to_fmp
+        except Exception:
+            def _otc_to_fmp(sym: str) -> str:  # type: ignore[misc]
+                return sym.split(":", 1)[-1] if ":" in sym else sym
+
+        out: dict[str, RealtimeQuote] = {}
+        if not self.fmp or not otc_canonical:
+            return out
+
+        print(f"[REALTIME_OTC] fetching {len(otc_canonical)} OTC symbols via FMP")
+
+        for canonical in otc_canonical:
+            bare = _otc_to_fmp(canonical)  # "BESIY" (the FMP HTTP parameter)
+
+            ok = await fmp_governor.acquire("realtime_otc_quotes")
+            if not ok:
+                print(f"[REALTIME_OTC] fmp_governor denied {canonical} — skipping")
+                continue
+
+            try:
+                q = await asyncio.wait_for(
+                    self.fmp.get_quote(bare), timeout=_TIMEOUT
+                )
+                fmp_governor.record_call()
+            except Exception as exc:
+                fmp_governor.record_call()
+                print(f"[REALTIME_OTC] FMP error for {canonical} ({bare}): {exc}")
+                continue
+
+            if not q:
+                continue
+
+            price = q.get("price")
+            if price is None:
+                continue
+
+            # Derive float/int or None — never synthesize 0 for missing fields.
+            price_f    = _safe_float(price)
+            change_f   = _safe_float(q.get("change"))
+            chg_pct_f  = _safe_float(q.get("changesPercentage"))
+            high_f     = _safe_float(q.get("dayHigh"))
+            low_f      = _safe_float(q.get("dayLow"))
+            prev_f     = _safe_float(q.get("previousClose"))
+            volume_i   = _safe_int(q.get("volume"))
+            now_ts     = int(_t.time())
+
+            out[canonical] = RealtimeQuote(
+                symbol=canonical,        # OTC:BESIY — canonical retained
+                price=price_f,
+                last=price_f,
+                bid=None,                # FMP stable/quote does not return bid/ask
+                ask=None,
+                open=None,
+                high=high_f,
+                low=low_f,
+                close=None,
+                prev_close=prev_f,
+                change=change_f,
+                change_percent=chg_pct_f,
+                volume=volume_i,
+                trade_timestamp=None,
+                quote_timestamp=now_ts,
+                source=SOURCE_FMP_OTC,
+                is_realtime=False,       # FMP Starter is delayed/non-realtime
+                is_live_backup=False,
+                is_stale=False,
+                staleness_seconds=0,
+                market_session=session,
+            )
+
+        hits = len(out)
+        misses = len(otc_canonical) - hits
+        print(f"[REALTIME_OTC] done — hits={hits} misses={misses}")
+        return out
 
     # ── Tradier batch ────────────────────────────────────────────────────────
 
