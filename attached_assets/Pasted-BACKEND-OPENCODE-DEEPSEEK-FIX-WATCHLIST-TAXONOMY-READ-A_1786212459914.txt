@@ -1,0 +1,524 @@
+BACKEND OPENCODE / DEEPSEEK — FIX WATCHLIST TAXONOMY READ-AFTER-WRITE COHERENCE END TO END
+
+Work only in the live CaelynAI BACKEND Replit workspace.
+
+Read and obey live AGENTS.md first.
+
+The live Replit workspace is the primary source of truth.
+GitHub is reference only.
+
+DO NOT touch frontend code in this task.
+
+This is NOT another taxonomy persistence rewrite.
+The atomic taxonomy transaction is already proven to persist correctly.
+
+The problem now is that the Watchlist read path can return stale or internally
+inconsistent taxonomy state immediately after a successful canonical taxonomy PUT.
+
+DO NOT create:
+- a new taxonomy endpoint
+- a new persistence store
+- a new cache
+- Redis/pubsub
+- a schema migration
+- a provider call
+- polling
+- retries
+- another taxonomy resolver
+
+Preserve:
+
+PUT /api/themes/admin/ticker-taxonomy/{ticker}
+
+as the one canonical hierarchical taxonomy mutation path.
+
+============================================================
+LIVE EVIDENCE ALREADY COLLECTED
+============================================================
+
+Neon proves recent real user assignments persisted correctly.
+
+AVAV:
+theme_ticker_overrides:
+  theme_id = drones
+  action = add
+  source = manual_admin
+  updated_at = 2026-08-08T17:54:22.498Z
+
+watchlist_category_overrides:
+  category = Drones & Autonomous Systems
+  source = themes_page_manual
+  reason = themes_page:drones
+  updated_at = exactly 2026-08-08T17:54:22.498Z
+
+The old AVAV defense membership was removed in the same transaction.
+
+AXTI:
+theme_ticker_overrides:
+  packaging_substrates = add / manual_admin
+  semicap_materials_node = add / manual_admin_additional
+  updated_at = 2026-08-08T17:57:32.553Z
+
+watchlist_category_overrides:
+  category = Packaging & Substrates
+  reason = themes_page:packaging_substrates
+  updated_at = exactly 2026-08-08T17:57:32.553Z
+
+The Primary watchlist containing both tickers is:
+
+id = 00a0e3ea-31dc-4223-97bc-470720dd3215
+name = Primary
+ticker_count = 459
+updated_at = 2026-08-08T17:51:11.693Z
+
+Notice:
+
+watchlist updated_at = 17:51
+taxonomy writes = 17:54 and 17:57
+
+The taxonomy writes do NOT alter watchlist membership, ticker_count, or
+watchlist.updated_at.
+
+Yet the Watchlist bulk LKG currently versions entries from roughly:
+
+  updated_at|ticker_count
+
+Therefore taxonomy writes leave the bulk LKG version looking valid even though
+taxonomy fields inside the cached payload are obsolete.
+
+============================================================
+FIRST: AUDIT, DO NOT EDIT YET
+============================================================
+
+Read the live implementations of at minimum:
+
+backend/routes/themes.py
+backend/services/watchlist_router.py
+backend/services/theme_resolver.py
+backend/services/category_overrides.py
+backend/data/pg_storage.py
+
+and the relevant existing tests.
+
+Trace this exact path:
+
+PUT /api/themes/admin/ticker-taxonomy/{ticker}
+→ atomic_taxonomy_write_db()
+→ successful Neon commit
+→ category_overrides cache invalidation
+→ theme/admin cache invalidation
+→ response
+→ immediate GET /api/watchlist/{watchlist_id}
+→ _BULK_LKG decision
+→ _build_watchlist_response()
+→ _enrich_store_with_quotes()
+→ _build_ticker_row()
+→ primary_theme_id/canonical_theme_id/theme_ids/subtheme_ids
+→ category_overrides.apply_to_sections()
+→ serialized Watchlist ticker row
+
+Do not assume the report below is correct until you prove it in the live files.
+
+============================================================
+PROBLEM 1 — WATCHLIST BULK LKG IS NOT TAXONOMY-AWARE
+============================================================
+
+The live Watchlist GET has an existing _BULK_LKG cache.
+
+Current version fingerprint is based on Watchlist structural data such as:
+
+  updated_at|ticker_count
+
+A taxonomy assignment does not mutate either field.
+
+Therefore this sequence is possible:
+
+1. GET Watchlist builds/caches row for AXTI with old taxonomy.
+2. Canonical taxonomy PUT commits AXTI → packaging_substrates.
+3. PUT succeeds.
+4. Browser immediately refetches GET /api/watchlist/{id}.
+5. _BULK_LKG version still matches.
+6. GET returns the OLD cached payload.
+7. Browser renders old/unassigned taxonomy.
+
+This must be fixed.
+
+There is already architectural precedent in watchlist_router.py:
+
+PATCH /{watchlist_id}/tickers/{symbol}/theme
+
+explicitly calls:
+
+  _bulk_lkg_invalidate(watchlist_id)
+
+after a theme mutation.
+
+DO NOT revive or switch the editor back to that obsolete mutation route.
+
+Instead, connect the CANONICAL taxonomy PUT to the existing Watchlist LKG
+invalidation lifecycle.
+
+Because PUT /ticker-taxonomy/{ticker} does not carry a watchlist_id, invalidate
+only existing Watchlist LKG entries affected by that ticker.
+
+Preferred architecture:
+
+- expose a small PUBLIC helper in watchlist_router.py around the EXISTING bulk
+  LKG mechanism
+- given a ticker/symbol, identify cached Watchlist payload(s) containing that
+  ticker and invalidate those entries
+- do not globally flush unrelated Watchlists if targeted invalidation is practical
+- do not query providers
+- do not add another cache/store
+
+IMPORTANT:
+Audit the existing _BULK_LKG_BUILDING/background rebuild behavior for an
+in-flight rebuild race.
+
+A taxonomy mutation must not:
+
+1. invalidate a stale LKG,
+2. then have an already-running pre-mutation rebuild finish,
+3. repopulate that same stale taxonomy payload.
+
+Prove the selected implementation is safe against this.
+
+Do not casually add a global generation/cache subsystem.
+
+If safely handling the in-flight rebuild requires architecture beyond the
+existing LKG mechanism, STOP and report the exact race and smallest proposed
+change before implementing it.
+
+The canonical taxonomy PUT must perform Watchlist LKG invalidation ONLY AFTER
+the atomic DB transaction succeeds.
+
+A failed transaction must not make a successful mutation appear to have happened.
+
+============================================================
+PROBLEM 2 — WATCHLIST ROW PRIMARY ID CAN PREFER STALE ANALYSIS
+============================================================
+
+Audit the hierarchy identity block inside _build_ticker_row().
+
+The pushed code has behavior equivalent to:
+
+  _id_raw = (
+      enriched.get("canonical_theme_id")
+      or enriched.get("primary_theme_id")
+  )
+
+This is backwards for manually assigned taxonomy.
+
+A stale canonical_theme_id embedded in old LLM/analysis data must NOT outrank
+the current manually persisted primary classification.
+
+The backend already has:
+
+backend/services/theme_resolver.py
+
+which explicitly states that it is the ONE canonical resolver for:
+
+  "what primary Theme is this ticker currently assigned to?"
+
+and its existing precedence ends with:
+
+  category_overrides manual override — always wins
+
+USE THAT EXISTING RESOLVER.
+
+Do not implement another precedence chain in watchlist_router.py.
+
+For the Watchlist response:
+
+- build the ThemeResolutionContext once per bulk Watchlist response/batch
+- do NOT rebuild it per ticker
+- use resolve_primary_theme_for_ticker() for current primary identity
+- preserve zero-provider-call behavior
+
+For every ticker row, the current canonical resolver result must drive:
+
+  primary_theme_id
+  canonical_theme_id
+  canonical_theme_name
+  theme_source
+
+Then construct membership arrays from the existing authoritative membership data:
+
+  theme_ids
+  subtheme_ids
+
+Preserve current Taxonomy v2 semantics:
+
+- primary Theme OR sub_theme is the first/current primary membership
+- additional memberships remain additional
+- no duplicates
+- only canonical assignable registry IDs
+- subtheme_ids is the subset whose classification == sub_theme
+- do not fabricate the parent Theme as an additional membership unless the
+  existing canonical contract already does so
+
+If the primary is a subtheme:
+
+  primary_theme_id = subtheme ID
+  canonical_theme_id = subtheme ID
+  canonical_theme_name = subtheme display name
+
+The frontend derives the parent Theme from the canonical hierarchy.
+
+============================================================
+PROBLEM 3 — CATEGORY OVERRIDE SECTION MOVE DOES NOT REPAIR IDENTITY
+============================================================
+
+Audit:
+
+services/category_overrides.py
+apply_to_sections()
+
+Current pushed implementation appears to move a manually overridden row and set:
+
+  canonical_theme_name
+  theme_source
+
+but it does not set/repair:
+
+  primary_theme_id
+  canonical_theme_id
+  theme_ids
+  subtheme_ids
+
+Do NOT blindly duplicate the resolver logic inside apply_to_sections().
+
+The preferred outcome is:
+
+By the time apply_to_sections() runs, the row's taxonomy identity fields have
+already been constructed from the canonical resolver + canonical membership
+data, so section routing cannot leave the row with a new name and old IDs.
+
+If apply_to_sections() itself must receive an additive behavior-preserving
+adjustment, keep it minimal and explain why.
+
+============================================================
+CLEAR / REASSIGN SEMANTICS
+============================================================
+
+Test:
+
+parent Theme A → parent Theme B
+parent Theme → child Subtheme
+Subtheme → another Theme
+Subtheme → another Subtheme
+additional membership add/remove
+clear manual primary
+
+Do not invent new semantics for "clear."
+
+If clearing the manual primary intentionally reveals an existing lower-priority
+canonical/industry assignment according to theme_resolver.py, preserve that
+behavior.
+
+If current API contract expects something different, STOP and report the
+semantic conflict rather than silently redefining it.
+
+============================================================
+CRITICAL REGRESSION TEST — THIS IS THE ONE PREVIOUS WORK MISSED
+============================================================
+
+The test must exercise:
+
+MUTATION → IMMEDIATE WATCHLIST READ
+
+not merely mutation persistence.
+
+Create a focused regression with a WARM Watchlist bulk LKG.
+
+Example:
+
+1. Build/cache Watchlist W containing ticker X with old/unassigned Theme A.
+2. Confirm GET /api/watchlist/W returns old state.
+3. Execute the canonical taxonomy mutation to Theme B, or invoke the exact same
+   post-commit lifecycle in an isolated route test.
+4. Confirm the atomic write succeeds.
+5. Immediately GET /api/watchlist/W.
+6. Assert the returned row ALREADY says Theme B.
+
+Required assertions on that GET row:
+
+  primary_theme_id == expected new ID
+  canonical_theme_id == expected new ID
+  canonical_theme_name == expected display name
+  theme_ids contains expected persisted memberships
+  subtheme_ids is correct
+  theme_source reflects the authoritative/manual source
+
+It must NOT return:
+
+  primary_theme_id = null
+  old primary ID
+  old canonical_theme_id
+  old canonical_theme_name
+
+Do not wait five minutes.
+Do not restart the process.
+Do not manually clear caches between steps.
+The mutation lifecycle itself must make the immediate GET correct.
+
+============================================================
+WARM-LKG STRESS TEST
+============================================================
+
+Run at least 20 deterministic sequential transitions with a warm bulk LKG.
+
+For each iteration:
+
+PUT new taxonomy
+→ immediate GET Watchlist
+→ verify exact row
+
+Result required:
+
+0 stale GETs
+0 old primary IDs
+0 null primaries after successful non-null assignment
+0 false "+ Assign"-equivalent states
+0 authoritative reread mismatches
+
+Include parent themes and subthemes.
+
+============================================================
+PERFORMANCE CONSTRAINT
+============================================================
+
+This Watchlist LKG exists because the Watchlist was recently suffering severe
+latency.
+
+DO NOT "fix" correctness by globally disabling the bulk LKG.
+
+DO NOT force provider refreshes.
+
+DO NOT rebuild every Watchlist on every taxonomy write unless live evidence
+proves that is the only safe existing architecture.
+
+The taxonomy write is rare; one targeted affected-Watchlist rebuild on the next
+GET may be acceptable, but measure it.
+
+Report:
+
+- warm GET latency before mutation
+- first GET immediately after taxonomy invalidation
+- subsequent warm GET latency
+- provider call count introduced by this change: MUST be zero
+
+Preserve the existing performance contract as closely as possible.
+
+============================================================
+LIVE VALIDATION
+============================================================
+
+After tests, use a controlled ticker.
+
+If touching a real user ticker:
+
+- read and record exact original primary + additional memberships first
+- use only the canonical PUT to mutate it
+- never manually update SQL
+- restore exact original taxonomy through canonical PUT when finished
+
+For one validation transition:
+
+1. warm GET /api/watchlist/{id}
+2. canonical PUT taxonomy
+3. inspect PUT response
+4. immediate GET /api/watchlist/{id}
+5. find ticker row
+6. print the exact taxonomy fields listed above
+7. GET again
+8. confirm same state
+
+The final report must include actual response evidence.
+
+============================================================
+EXPECTED PRODUCTION SCOPE
+============================================================
+
+Expected maximum:
+
+backend/services/watchlist_router.py
+backend/routes/themes.py
+
+plus focused tests.
+
+theme_resolver.py should preferably be reused without behavioral changes.
+
+If a third production file is actually required, STOP and explain why before
+editing it.
+
+============================================================
+DO NOT DO
+============================================================
+
+Do not modify frontend.
+
+Do not switch back to PATCH /watchlist/.../theme.
+
+Do not create duplicate taxonomy persistence.
+
+Do not change the atomic transaction.
+
+Do not manually edit Neon data.
+
+Do not add provider requests.
+
+Do not disable caching globally.
+
+Do not hide the bug with delays or retries.
+
+Do not add a sleep after Save.
+
+Do not accept "PUT returned 200" as validation.
+
+Do not accept "DB row exists" as full validation.
+
+The requirement is:
+
+successful PUT
+→ immediate canonical Watchlist GET
+→ correct taxonomy row.
+
+============================================================
+DEFINITION OF DONE
+============================================================
+
+Done means all of these are true:
+
+1. Canonical taxonomy PUT remains the sole editor mutation path.
+2. DB transaction remains atomic.
+3. Successful taxonomy mutation makes affected Watchlist bulk LKG obsolete.
+4. Failed transaction does not trigger mutation-success side effects.
+5. In-flight bulk rebuild cannot resurrect pre-mutation taxonomy state.
+6. Fresh Watchlist rows use the existing canonical Theme resolver for primary identity.
+7. Stored stale analysis canonical_theme_id cannot outrank manual assignment.
+8. primary_theme_id/canonical_theme_id/canonical_theme_name agree.
+9. theme_ids/additional memberships agree with persisted membership state.
+10. Subtheme assignment remains the specific primary ID.
+11. Immediate GET after PUT is correct with a previously warm LKG.
+12. Hard refresh would therefore be correct.
+13. 20 repeated write→GET transitions produce zero stale reads.
+14. No provider calls introduced.
+15. Existing Watchlist latency architecture remains intact.
+
+At the end report:
+
+- proven root cause(s)
+- exact files changed
+- old vs new LKG invalidation lifecycle
+- how in-flight rebuild race is handled
+- old vs new Watchlist row primary-resolution logic
+- exact mutation→GET test
+- 20-transition stress results
+- performance timings
+- provider-call impact
+- tests run/results
+- live validation response fields
+- any remaining risks
+- git diff summary
+- final git status
