@@ -271,6 +271,14 @@ class RealtimeQuotesService:
         self._fmp_sem = asyncio.Semaphore(_FMP_CONCURRENCY)
         self._twelve_sem = asyncio.Semaphore(_TWELVE_CONCURRENCY)
 
+        # Single-flight guard for background OTC FMP refresh.
+        # Only one asyncio.Task for OTC is active at a time so that frequent
+        # frontend polls (20 s cadence) cannot queue dozens of parallel FMP
+        # governor chains.  Callers get LKG/empty immediately; the task writes
+        # refreshed values to cache when complete.  New requests during an active
+        # task just return whatever is in LKG/live cache at that moment.
+        self._otc_refresh_task: asyncio.Task | None = None
+
         # Public.com equity quote support is gated behind explicit confirmation
         # — only enabled if PublicComProvider exposes a get_quotes method we can
         # use against EQUITY instruments. The existing provider exposes
@@ -328,26 +336,63 @@ class RealtimeQuotesService:
         # OTC:-prefixed symbols must never enter the Tradier / Public / Twelve
         # path. split_otc_us returns ([OTC:…], [plain US]) and silently discards
         # any other colon format — those were already rejected by the router.
+        #
+        # FAIL CLOSED: if otc_service is unavailable, we do not fall back to
+        # treating colon-prefixed symbols as US.  Plain (no-colon) symbols still
+        # route to Tradier; anything with a colon is excluded from the US path.
+        # OTC:* is routed to the OTC branch; other colon-prefixed (foreign)
+        # symbols drop out silently (already caught as invalid_symbol by router).
         try:
             from services.otc_service import split_otc_us as _split_otc_us
             _otc_remaining, _us_remaining = _split_otc_us(remaining)
         except Exception as _otc_split_err:
-            print(f"[REALTIME_OTC] split error (fallback: treat all as US): {_otc_split_err}")
-            _otc_remaining, _us_remaining = [], list(remaining)
+            print(
+                f"[REALTIME_OTC] split_otc_us unavailable (fail-closed): "
+                f"{_otc_split_err}"
+            )
+            # Safe fallback: OTC:* → OTC branch; no-colon → US; anything else → neither.
+            _otc_remaining = [s for s in remaining if s.upper().startswith("OTC:")]
+            _us_remaining  = [s for s in remaining if ":" not in s]
 
-        # ── OTC: FMP-only live quote branch ──────────────────────────────────
+        # ── OTC: stale-while-revalidate (non-blocking) ───────────────────────
+        # FMP OTC fetches are serial via the shared fmp_governor mutex
+        # (0.75 s spacing per call × N symbols = 45–180 s for a full cycle).
+        # We must NOT block the U.S. Tradier path — which is fast and live —
+        # behind slow OTC FMP governor work.
+        #
+        # Strategy:
+        #   • Return best available data immediately (LKG or empty).
+        #   • Fire a single background asyncio.Task to do the FMP work.
+        #   • Single-flight guard: check self._otc_refresh_task.done() before
+        #     spawning a new task so that frequent 20 s frontend polls never
+        #     stack parallel FMP chains.
+        #   • When the background task completes, it writes to live cache + LKG;
+        #     the next frontend poll naturally sees the refreshed values.
         if _otc_remaining:
-            _otc_quotes = await self._fmp_otc_batch(_otc_remaining, session)
+            # Return best available immediately (LKG-stale or empty).
             for _canonical in _otc_remaining:
-                _oq = _otc_quotes.get(_canonical)
-                if _oq and _oq.price is not None:
-                    self._cache_set_live(_canonical, _oq, cache_ttl)
-                    self._cache_set_lkg(_canonical, _oq)
-                    result[_canonical] = _oq
-                else:
-                    result[_canonical] = self._lkg_or_empty(
-                        _canonical, session, "fmp_otc_no_data"
-                    )
+                result[_canonical] = self._lkg_or_empty(
+                    _canonical, session, "otc_pending_refresh"
+                )
+
+            # Single-flight: only one OTC refresh cycle active at a time.
+            _otc_task_active = (
+                self._otc_refresh_task is not None
+                and not self._otc_refresh_task.done()
+            )
+            if not _otc_task_active:
+                self._otc_refresh_task = asyncio.create_task(
+                    self._otc_background_refresh(_otc_remaining)
+                )
+                print(
+                    f"[REALTIME_OTC] background refresh started for "
+                    f"{len(_otc_remaining)} symbols"
+                )
+            else:
+                print(
+                    f"[REALTIME_OTC] refresh already active — returning LKG/empty "
+                    f"for {len(_otc_remaining)} symbols; no new FMP task spawned"
+                )
 
         if not _us_remaining:
             return result
@@ -447,6 +492,30 @@ class RealtimeQuotesService:
     # FMP Starter does not support batch quote; individual stable/quote is used.
     # Canonical identity: application/cache/output → OTC:BESIY; FMP HTTP → BESIY.
     # These symbols NEVER enter the Tradier / Public / Twelve path.
+
+    async def _otc_background_refresh(self, otc_canonical: list[str]) -> None:
+        """Background coroutine: run _fmp_otc_batch and write results to cache.
+
+        Called via asyncio.create_task() so it never blocks the HTTP response.
+        Session and TTL are re-derived here because market state may have changed
+        between request time and when the governor finally grants each slot.
+        """
+        session   = _market_session_now()
+        cache_ttl = _ttl_for_session(session)
+        try:
+            quotes = await self._fmp_otc_batch(otc_canonical, session)
+            priced = 0
+            for canonical, q in quotes.items():
+                if q.price is not None:
+                    self._cache_set_live(canonical, q, cache_ttl)
+                    self._cache_set_lkg(canonical, q)
+                    priced += 1
+            print(
+                f"[REALTIME_OTC] background refresh done — "
+                f"priced={priced}/{len(otc_canonical)}"
+            )
+        except Exception as exc:
+            print(f"[REALTIME_OTC] background refresh error: {exc}")
 
     async def _fmp_otc_batch(
         self,
