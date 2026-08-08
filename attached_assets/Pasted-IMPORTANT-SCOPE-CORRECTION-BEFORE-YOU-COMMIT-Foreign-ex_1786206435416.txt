@@ -1,0 +1,287 @@
+IMPORTANT SCOPE CORRECTION BEFORE YOU COMMIT
+
+Foreign-exchange securities are NOT supported provider securities in this app.
+
+The user only has provider coverage for:
+
+1. normal U.S.-listed securities
+2. OTC securities through FMP
+
+True foreign-exchange listings must NOT participate in ANY market-data,
+fundamentals, financial, earnings, quote, refresh, scheduler, fallback, or
+provider-fetch path.
+
+Examples currently in the Watchlist include:
+
+AIM:ENSI
+ASX:AXE
+ASX:EQR
+CSE:FTEL
+CSE:MAXX
+EPA:ALRIB
+FRA:APR
+FRA:KLA
+KRX:000660
+SHA:603986
+SHA:688008
+STO:ACCON
+STO:GAPW.B
+STO:HTRO
+STO:SILEX
+STO:SIVE
+SWX:HUBN
+TPE:3661
+TPE:8271
+TPEX:6643
+TSX:FLT
+TSX:MOLY
+TSX:VNP
+TYO:6315
+WSE:VGO
+XSAT:SMOL
+
+These may remain canonical Watchlist MEMBERS so the frontend can display them
+when "Show Foreign" is enabled.
+
+But they must be DATA-INELIGIBLE.
+
+============================================================
+THE ONLY THREE SECURITY CLASSES
+============================================================
+
+CLASS A — NORMAL U.S.
+
+Example:
+    NVDA
+
+Allowed:
+
+    Tradier realtime quote path
+    existing U.S. FMP fundamentals path
+    existing U.S. earnings path
+    existing supported history/technical paths
+
+Do not change existing behavior.
+
+CLASS B — OTC
+
+Example:
+    OTC:BESIY
+
+Allowed:
+
+    FMP realtime quote
+    FMP weekly fundamentals / financials
+    FMP earnings monitoring
+    canonical Watchlist key remains OTC:BESIY
+
+Bare:
+
+    BESIY
+
+exists ONLY at the FMP provider boundary.
+
+Never send OTC to Tradier.
+
+CLASS C — TRUE FOREIGN
+
+Examples:
+
+    TSX:FLT
+    ASX:EQR
+    FRA:APR
+    TYO:6315
+
+Allowed:
+
+    Watchlist membership
+    frontend display when Show Foreign is enabled
+
+NOT allowed:
+
+    Tradier quotes
+    FMP quotes
+    Public fallback
+    Twelve Data fallback
+    weekly FMP fundamentals
+    earnings calendar
+    earnings monitor
+    earnings fallback lookup
+    realtime quote cache population
+    scheduled refresh
+    background refresh
+    provider fallback
+    normalization to bare ticker
+
+No provider call should ever result from these symbols.
+
+============================================================
+REALTIME QUOTE ENDPOINT
+============================================================
+
+For:
+
+    /api/market/realtime-quotes
+
+it is acceptable for a requested foreign symbol such as TSX:FLT to appear in
+the RESPONSE as an explicit unsupported/error row if that is the established
+endpoint contract.
+
+For example conceptually:
+
+    symbol: TSX:FLT
+    source: none
+    error: unsupported_foreign_listing
+    is_realtime: false
+    is_stale: true
+
+That is NOT the same as including it in the provider pipeline.
+
+The critical requirements are:
+
+    Tradier call count for TSX:FLT = 0
+    FMP call count for TSX:FLT = 0
+    Public call count for TSX:FLT = 0
+    TwelveData call count for TSX:FLT = 0
+
+Do NOT treat the presence of an explicit error object in the response as
+provider eligibility.
+
+However, if the endpoint currently reports generic "invalid_symbol", consider
+whether the existing contract can cleanly preserve that without changing
+response semantics.
+
+Do not broaden scope just to rename the error.
+
+============================================================
+ALL SCHEDULERS / REFRESH UNIVERSES
+============================================================
+
+Before commit, prove that true foreign listings are excluded from:
+
+1. weekly FMP fundamentals refresh universe
+2. earnings schedule/calendar refresh universe
+3. earnings-monitor targets
+4. Watchlist/Home quote refresh universe
+5. realtime quote service provider universe
+6. any newly-added OTC FMP quote work
+7. any existing U.S. provider fallback caused by this task
+
+OTC must be explicitly recognized BEFORE the generic colon exclusion.
+
+Conceptual shared rule:
+
+    OTC:*      -> OTC path
+    no colon   -> normal U.S. path
+    other *:*  -> unsupported foreign / NO DATA PATH
+
+Do not turn all colon symbols into bare provider symbols.
+
+============================================================
+NO FOREIGN FALLBACK
+============================================================
+
+Especially verify that the generic realtime fallback chain does NOT accidentally
+do something like:
+
+    TSX:FLT
+        ↓
+Tradier misses
+        ↓
+Public misses
+        ↓
+FMP receives FLT
+        ↓
+returns unrelated U.S. security
+
+That must be structurally impossible.
+
+Foreign symbols must be removed BEFORE normal-U.S. provider fallback logic.
+
+============================================================
+VALIDATE USING ACTUAL CURRENT WATCHLIST
+============================================================
+
+The Primary Watchlist currently has:
+
+    406 normal U.S.
+    26 OTC
+    26 foreign non-OTC
+
+Use real examples.
+
+NORMAL U.S.:
+
+    NVDA
+
+OTC:
+
+    OTC:BESIY
+    OTC:NLST
+    OTC:VLXGF
+
+FOREIGN:
+
+    TSX:FLT
+    ASX:EQR
+    FRA:APR
+
+For each foreign example prove:
+
+    canonical membership remains intact
+    realtime router marks unsupported/invalid
+    Tradier provider calls = 0
+    FMP provider calls = 0
+    Public provider calls = 0
+    Twelve Data calls = 0
+    fundamentals eligible = false
+    earnings eligible = false
+    no earnings target written
+    no fundamentals snapshot refreshed
+    no quote cache written
+
+============================================================
+DO NOT MODIFY
+============================================================
+
+Do not remove foreign securities from the Watchlist.
+
+Do not change Hide Foreign UI behavior.
+
+Do not create foreign-market support.
+
+Do not add another provider.
+
+Do not strip foreign prefixes.
+
+Do not change the existing Tradier scheduler/provider engine.
+
+Do not touch historical/technical foreign behavior.
+
+This correction is solely about ensuring:
+
+    FOREIGN MEMBERSHIP != DATA ELIGIBILITY
+
+============================================================
+FINAL REPORT ADDITION
+============================================================
+
+Before declaring the current OTC realtime task complete, add a matrix:
+
+                    US          OTC            FOREIGN
+Tradier quote       YES         NO             NO
+FMP realtime        fallback*   YES            NO
+FMP fundamentals    existing    YES            NO
+FMP earnings        existing    YES            NO
+Stored membership   YES         YES            YES
+
+*Whatever existing normal-US fallback behavior already exists must remain
+unchanged.
+
+Also report provider-call evidence for:
+
+    NVDA
+    OTC:BESIY
+    TSX:FLT
+
+Do not commit until TSX:FLT is proven to generate ZERO provider calls.
