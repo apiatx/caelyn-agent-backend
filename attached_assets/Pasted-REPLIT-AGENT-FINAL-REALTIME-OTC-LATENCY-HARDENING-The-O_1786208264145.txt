@@ -1,0 +1,287 @@
+REPLIT AGENT — FINAL REALTIME OTC LATENCY HARDENING
+
+The OTC provider routing is correct, the foreign exclusions are correct, and
+the negative/no-data cache is correct.
+
+Do NOT redesign those pieces.
+
+There are TWO remaining production issues in the actual current
+realtime_quotes_service implementation.
+
+============================================================
+ISSUE 1 — OTC CURRENTLY BLOCKS NORMAL U.S. TRADIER QUOTES
+============================================================
+
+The current get_realtime_quotes() order is effectively:
+
+    partition cache misses into OTC and US
+
+    await _fmp_otc_batch(OTC)
+
+    THEN
+
+    await _tradier_batch(US)
+
+This means a mixed Watchlist request containing:
+
+    NVDA
+    AAPL
+    ...
+    OTC:BESIY
+    OTC:NLST
+    ...
+
+cannot receive the U.S. Tradier results until the entire OTC FMP cycle has
+finished.
+
+The latest runtime audit proved:
+
+    26 OTC full cold cycle:
+        structural steady-state floor ≈ 45–58 seconds
+
+    startup contention:
+        97–183 seconds observed
+
+Normal U.S. Tradier quotes must NEVER wait behind OTC FMP governor traffic.
+
+This is a hard requirement.
+
+============================================================
+DESIRED REQUEST BEHAVIOR
+============================================================
+
+The realtime endpoint must preserve fast response behavior for existing U.S.
+quotes regardless of OTC provider latency.
+
+Normal U.S.:
+
+    existing Tradier path
+    existing Public/FMP/Twelve fallback chain
+    existing cache behavior
+
+must remain unchanged and responsive.
+
+OTC:
+
+    FMP only
+    canonical OTC:* identity
+    shared fmp_governor
+    existing live/LKG/no-data caches
+
+must not block the U.S. path.
+
+============================================================
+PREFERRED ARCHITECTURE
+============================================================
+
+Use the existing realtime cache as stale-while-revalidate for OTC.
+
+For an OTC cache miss/stale entry:
+
+1. If a valid OTC LKG/live value already exists:
+       return that value immediately with correct stale/fresh metadata.
+
+2. Trigger or join ONE background OTC refresh for the stale/missing symbols.
+
+3. Do not make the HTTP response wait tens of seconds for the full OTC FMP
+   governor queue.
+
+4. The next frontend poll naturally sees the refreshed OTC values.
+
+For an OTC symbol with no LKG yet:
+
+    return the normal null/unavailable RealtimeQuote immediately
+    while one background refresh is started.
+
+Do NOT fabricate values.
+
+Do NOT return a fake successful quote.
+
+This preserves the existing frontend polling cadence while preventing slow FMP
+work from blocking Tradier data.
+
+============================================================
+SINGLE-FLIGHT REQUIRED
+============================================================
+
+Because the frontend polls frequently, do not spawn another OTC refresh task
+every 20 seconds while the previous 26-symbol refresh is still running.
+
+Use the smallest possible existing-pattern single-flight guard.
+
+Requirements:
+
+    only one OTC realtime refresh cycle active at a time
+    subsequent requests read cache/LKG and do not duplicate provider work
+    once the active refresh finishes, later stale requests may schedule another
+    normal refresh
+
+Do NOT create a new worker architecture.
+
+Do NOT create another scheduler.
+
+Do NOT create a new cache backend.
+
+A small in-process task/lock/single-flight guard inside
+RealtimeQuotesService is appropriate.
+
+============================================================
+DO NOT CHANGE THE U.S. PATH
+============================================================
+
+Do NOT move Tradier into a new scheduler.
+
+Do NOT modify:
+
+    TradierProvider
+    Tradier limiter
+    Tradier budget lanes
+    Public fallback
+    normal-US FMP fallback
+    Twelve Data fallback
+    frontend polling intervals
+
+The existing U.S. quote chain must remain semantically identical.
+
+The only requirement is that it is no longer blocked by OTC FMP work.
+
+============================================================
+ISSUE 2 — FAIL-OPEN OTC ROUTING
+============================================================
+
+The current production code has logic conceptually equivalent to:
+
+    try:
+        split OTC / US
+    except:
+        OTC = []
+        US = all_remaining
+
+This violates the provider-separation contract.
+
+If otc_service import/splitting ever fails, an OTC symbol such as:
+
+    OTC:BESIY
+
+could enter the normal U.S. chain and be sent to:
+
+    Tradier
+    Public
+    generic FMP fallback
+    Twelve Data
+
+That must be structurally impossible.
+
+Change this behavior to FAIL CLOSED.
+
+If OTC classification cannot be performed:
+
+    do NOT treat unknown colon-prefixed symbols as US.
+
+At minimum:
+
+    plain no-colon symbols may remain US
+    OTC:* must remain excluded from Tradier
+    other colon-prefixed foreign symbols must remain excluded
+
+Do not add another broad symbol classifier if the existing helper can simply be
+made reliable.
+
+Likewise, the local fallback inside _fmp_otc_batch that manually strips the
+prefix should not create a provider-routing loophole.
+
+Canonical/provider conversion should remain centralized wherever practical.
+
+============================================================
+VALIDATION
+============================================================
+
+Use the actual mixed endpoint request, not isolated provider methods.
+
+Cold-cache mixed request:
+
+    /api/market/realtime-quotes?symbols=NVDA,OTC:BESIY,OTC:NLST,OTC:VLXGF
+
+Measure:
+
+    total endpoint elapsed time
+    NVDA provider
+    OTC returned state
+    number of background OTC tasks
+    FMP calls
+
+PASS requires:
+
+    NVDA returned through Tradier without waiting for the full OTC FMP cycle.
+
+A slow OTC governor queue must NOT turn this endpoint into a 45–180 second
+request.
+
+Then validate a second request while the OTC refresh is still running:
+
+    no second OTC refresh cycle spawned
+    U.S. quote response remains fast
+    available OTC LKG/cache returned immediately
+
+After OTC background refresh completes:
+
+    next request returns refreshed OTC:BESIY under canonical key
+    source remains fmp_otc
+
+Also validate:
+
+    TSX:FLT
+        zero provider calls
+
+    forced otc_service classification failure in a focused test
+        OTC:BESIY does NOT enter Tradier/Public/Twelve chain
+
+============================================================
+PERFORMANCE ACCEPTANCE
+============================================================
+
+The existence of 26 OTC securities must not materially increase the latency of
+a normal U.S. realtime quote request.
+
+Report before/after elapsed timing for the exact mixed request.
+
+Do not declare Complete based only on unit tests.
+
+============================================================
+SCOPE
+============================================================
+
+Expected production change:
+
+    backend/services/realtime_quotes_service.py
+
+Prefer one production file.
+
+Do not touch:
+
+    frontend
+    fundamentals
+    earnings
+    historical bars
+    Neon
+    Tradier files
+    other schedulers
+
+============================================================
+FINAL REPORT
+============================================================
+
+Report:
+
+1. Old mixed-request execution order.
+2. New execution order.
+3. Exact single-flight behavior.
+4. NVDA mixed-request elapsed time before/after.
+5. OTC:BESIY cache/LKG behavior while background refresh is active.
+6. OTC provider call count.
+7. Proof duplicate frontend polls do not duplicate OTC FMP work.
+8. Fail-closed classifier behavior.
+9. TSX:FLT zero-provider proof.
+10. Files changed.
+11. Runtime validation.
+12. Commit SHA.
