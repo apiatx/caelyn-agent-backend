@@ -140,7 +140,24 @@ def _validate_thematic_assignment(theme_id: str) -> None:
 
 
 def _invalidate_caches() -> None:
-    """Rebuild in-memory enriched universe + clear RS caches after an override write."""
+    """Rebuild in-memory enriched universe + clear RS caches after an override write.
+
+    IMPORTANT: must include category_overrides cache invalidation so that
+    atomic_taxonomy_write_db() writes to watchlist_category_overrides are visible
+    immediately on the next resolve_primary_theme_for_ticker() call.
+    Without this, the 5-minute in-process cache returns pre-commit state and the
+    authoritative reread fails on every warm-cache attempt.
+    """
+    # ── Category-override cache — must be first ──────────────────────────────
+    # atomic_taxonomy_write_db() writes watchlist_category_overrides below the
+    # category_overrides service layer, bypassing its upsert_override() and the
+    # _cache_invalidate() it calls.  We must explicitly drop the stale snapshot
+    # here so that the post-commit reread sees the new assignment from DB.
+    try:
+        from services.category_overrides import invalidate_overrides_cache
+        invalidate_overrides_cache("default")
+    except Exception as exc:
+        print(f"[THEMES_ADMIN] invalidate_overrides_cache error: {exc}")
     try:
         from services.theme_merge_layer import refresh_enriched_universe
         refresh_enriched_universe()

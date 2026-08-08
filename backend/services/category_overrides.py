@@ -46,6 +46,21 @@ def _cache_invalidate(user_id: str) -> None:
         _CACHE.pop(user_id, None)
 
 
+def invalidate_overrides_cache(user_id: str = "default") -> None:
+    """
+    Public invalidation entry-point.
+
+    Must be called by any code path that writes watchlist_category_overrides
+    below this service layer (e.g. atomic_taxonomy_write_db in pg_storage) so
+    that the next get_overrides() call re-reads from Neon rather than returning
+    a stale in-process snapshot.
+
+    Safe to call after a successful DB commit; silently does nothing when the
+    cache is already empty.
+    """
+    _cache_invalidate(user_id)
+
+
 # ── Public read API ────────────────────────────────────────────────────────────
 
 def get_overrides(user_id: str = "default") -> dict[str, str]:
