@@ -43,12 +43,24 @@ _VALID_ACTIONS         = {"add", "remove"}
 
 _SYM_RE = __import__("re").compile(r"^[A-Z0-9\.\-]{1,12}$")
 
-# Non-blocking lock for background refresh_enriched_universe().
-# At most one refresh runs at a time; concurrent rapid-fire PUT tasks skip
-# the expensive DB-backed rebuild and return immediately.  The already-running
-# refresh reads theme_ticker_overrides fresh from Neon on every call, so it
-# incorporates any queued mutations automatically.
-_BG_REFRESH_LOCK = threading.Lock()
+# Coalescing refresh-worker state for background refresh_enriched_universe().
+#
+# _REFRESH_LOCK:     single-worker gate — at most one expensive DB refresh
+#                    executes at a time.
+# _REFRESH_GEN:      monotone counter incremented by every successfully committed
+#                    taxonomy mutation.  The worker records gen before refreshing
+#                    and loops if gen advanced while the refresh was running.
+# _REFRESH_GEN_LOCK: serializes reads/writes of _REFRESH_GEN AND is held during
+#                    the worker's "clean check → lock release" step to prevent
+#                    the stranded-mutation race at the exit boundary.
+#
+# Invariant: a mutation that commits ALWAYS finds either:
+#   (a) a running worker that will loop to pick up the new gen, OR
+#   (b) no running worker, in which case the mutation's bg task acquires
+#       _REFRESH_LOCK and becomes the worker.
+_REFRESH_LOCK     = threading.Lock()
+_REFRESH_GEN      = 0
+_REFRESH_GEN_LOCK = threading.Lock()
 
 
 # ── Admin guard ────────────────────────────────────────────────────────────────
@@ -1379,57 +1391,109 @@ async def admin_put_ticker_taxonomy(
             detail=f"Taxonomy write transaction failed: {txn_result.get('error', 'unknown')}",
         )
 
-    # ── 10. Critical cache invalidation — synchronous, required for reread ────
+    # ── 9b. Advance coalescing refresh generation ──────────────────────────────
+    # Incremented before cache invalidation so the background worker always
+    # sees a generation that reflects this mutation, even if it starts before
+    # the bg task is scheduled.
+    global _REFRESH_GEN
+    with _REFRESH_GEN_LOCK:
+        _REFRESH_GEN += 1
+
+    # ── 10. Critical cache invalidation — synchronous, required for coherence ──
     #
-    # ONLY invalidate_overrides_cache is in the synchronous critical path.
-    # Proof: _get_ticker_theme_memberships() calls resolve_primary_theme_for_ticker()
-    # which calls get_overrides("default") — a 5-min in-process cache.
-    # Without this invalidation the authoritative reread sees the old primary.
+    # invalidate_overrides_cache: _get_ticker_theme_memberships() (reread, bg)
+    # calls resolve_primary_theme_for_ticker() → get_overrides("default"), which
+    # is a 5-min in-process cache.  Must be cleared before any reread.
     #
-    # refresh_enriched_universe() / invalidate_theme_rs_cache() / invalidate_sectors_cache()
-    # are downstream-propagation only (CLASS B).  _get_ticker_theme_memberships()
-    # uses ENRICHED_THEME_RS_UNIVERSE only for display_name; the assigned theme
-    # already exists in the static registry before this PUT runs.
-    # These are moved to background_tasks below.
+    # invalidate_bulk_lkg_for_ticker: ensures the next Watchlist GET after this
+    # PUT reads fresh DB state rather than a cached pre-mutation snapshot.
+    #
+    # Both are in-process O(1) operations; neither introduces provider calls.
+    # If either unexpectedly throws after a committed transaction: log loudly
+    # and continue — the DB write and cache coherence are separate facts.
     try:
         from services.category_overrides import invalidate_overrides_cache
         invalidate_overrides_cache("default")
     except Exception as _oc_err:
-        _log.warning("[taxonomy PUT] invalidate_overrides_cache error (non-fatal): %s", _oc_err)
+        _log.error(
+            "[taxonomy PUT] COMMITTED but invalidate_overrides_cache raised "
+            "(non-fatal — coherence may lag one cache TTL): %s", _oc_err
+        )
     _t_critical_inval = time.monotonic()
 
-    # ── 10b. Watchlist bulk LKG invalidation — taxonomy-aware (synchronous) ───
-    # Must run AFTER overrides cache is cleared so the inline GET that
-    # rebuilds the LKG reads the freshly committed DB state.
-    # Only reached when txn_result["ok"] is True — failed transactions raise above.
+    # ── 10b. Watchlist bulk LKG invalidation ──────────────────────────────────
+    # Must run AFTER overrides cache is cleared so any inline LKG rebuild
+    # reads the freshly committed DB state.
     try:
         from services.watchlist_router import invalidate_bulk_lkg_for_ticker as _wl_lkg_inv
         _wl_lkg_inv(ticker)
     except Exception as _lkg_err:
-        _log.warning("[taxonomy PUT] watchlist LKG invalidation failed (non-fatal): %s", _lkg_err)
+        _log.error(
+            "[taxonomy PUT] COMMITTED but watchlist LKG invalidation raised "
+            "(non-fatal — coherence may lag one LKG TTL): %s", _lkg_err
+        )
     _t_lkg_inval = time.monotonic()
 
-    # ── 11. Post-commit downstream propagation — non-blocking background ──────
+    # ── 11. Post-commit background propagation ────────────────────────────────
     #
-    # refresh_enriched_universe() is O(n_watchlist_tickers) synchronous DB work
-    # and is the primary source of pre-fix PUT latency.  It is CLASS B:
-    # not needed for the authoritative read-back; the ENRICHED_THEME_RS_UNIVERSE
-    # already contains display_name for the newly assigned theme.
+    # Everything below is CLASS B — downstream/diagnostic, never blocks response.
     #
-    # If this function fails after an already-verified commit, it is logged and
-    # recovers through the normal cache lifecycle.  It cannot convert a confirmed
-    # successful write into a client-visible failure.
-    _display_bg = _uni.get(body.primary_theme_id or "", {}).get("display_name") or body.primary_theme_id
-    _to_add_list = sorted(to_add)
-    _ticker_bg = ticker
-    _primary_bg = body.primary_theme_id
-    _cur_primary_bg = current_primary
+    # PRODUCT CONTRACT: transaction committed = save succeeded.
+    # Nothing after this point may raise HTTP 500 or otherwise convert a
+    # committed write into a client-visible failure.
+    #
+    # Coalescing refresh worker (Bug 2 fix):
+    #   - _REFRESH_GEN is incremented per committed mutation (step 9b).
+    #   - bg task acquires _REFRESH_LOCK to become the sole worker.
+    #   - Worker records gen_snapshot, refreshes, then checks gen again:
+    #     if gen advanced → loop (picks up all queued mutations);
+    #     if still clean → release lock atomically under _REFRESH_GEN_LOCK
+    #     (prevents stranded-mutation race at exit boundary).
+    #   - A bg task that finds the lock already held marks dirty (already done
+    #     via gen increment in step 9b) and returns; active worker loops.
+    _display_bg      = _uni.get(body.primary_theme_id or "", {}).get("display_name") or body.primary_theme_id
+    _to_add_list     = sorted(to_add)
+    _ticker_bg       = ticker
+    _primary_bg      = body.primary_theme_id
+    _cur_primary_bg  = current_primary
+    _desired_all_bg  = frozenset(desired_all)  # snapshot for diagnostic reread
 
     def _propagate_taxonomy_downstream() -> None:
         _bg_start = time.monotonic()
 
-        # ── Fast ops — O(1) in-memory, no DB contention ───────────────────────
-        # These always run regardless of whether a refresh is already in flight.
+        # ── Diagnostic reread — non-raising ───────────────────────────────────
+        # The transaction already committed; response was already returned.
+        # Mismatch here is logged as a consistency warning, never surfaced
+        # to the client as a failure.
+        try:
+            _diag = _get_ticker_theme_memberships(_ticker_bg)
+            _rp   = _diag["primary_theme"]["theme_id"]
+            _ra   = {m["theme_id"] for m in _diag["theme_memberships"]}
+            if _rp != _primary_bg:
+                _log.error(
+                    "[taxonomy PUT BG] COMMIT_CONFIRMED_READBACK_MISMATCH "
+                    "ticker=%s expected_primary=%r stored_primary=%r "
+                    "desired_all=%s reread_all=%s",
+                    _ticker_bg, _primary_bg, _rp,
+                    sorted(_desired_all_bg), sorted(_ra),
+                )
+            elif not _desired_all_bg.issubset(_ra):
+                _missing = sorted(_desired_all_bg - _ra)
+                _log.error(
+                    "[taxonomy PUT BG] COMMIT_CONFIRMED_READBACK_MISMATCH "
+                    "ticker=%s missing_memberships=%s reread_all=%s",
+                    _ticker_bg, _missing, sorted(_ra),
+                )
+            else:
+                _log.debug(
+                    "[taxonomy PUT BG] reread verified ticker=%s primary=%r memberships=%s",
+                    _ticker_bg, _rp, sorted(_ra),
+                )
+        except Exception as _re_err:
+            _log.warning("[taxonomy PUT BG] diagnostic reread failed (non-fatal): %s", _re_err)
+        _t_reread_bg = time.monotonic()
+
+        # ── Fast in-memory ops — always run ───────────────────────────────────
         try:
             from services.theme_rs_service import invalidate_theme_rs_cache as _irs
             _irs()
@@ -1464,75 +1528,89 @@ async def admin_put_ticker_taxonomy(
 
         _t_fast = time.monotonic()
 
-        # ── Expensive DB-backed refresh — non-blocking lock dedup ─────────────
-        # refresh_enriched_universe() reads from Neon (watchlist_read +
-        # theme_ticker_overrides) and iterates all watchlist tickers.
-        # BEFORE FIX this ran synchronously, contributing ~5-10s to every PUT.
-        # HERE: at most one refresh runs at a time.  Concurrent rapid-fire PUT
-        # background tasks skip this section — the already-running refresh reads
-        # theme_ticker_overrides fresh from DB on every invocation and
-        # automatically incorporates the latest committed taxonomy state.
-        if not _BG_REFRESH_LOCK.acquire(blocking=False):
+        # ── Coalescing expensive refresh worker ───────────────────────────────
+        # Acquire single-worker gate.  If another worker is already running it
+        # will detect the gen advance (step 9b already ran) and loop again.
+        if not _REFRESH_LOCK.acquire(blocking=False):
             print(
-                f"[taxonomy PUT BG] {_ticker_bg} | refresh_universe SKIPPED"
-                f" (already running) | fast_ops={(_t_fast - _bg_start)*1000:.0f}ms"
+                f"[taxonomy PUT BG] {_ticker_bg} | reread={(_t_reread_bg - _bg_start)*1000:.0f}ms"
+                f" fast_ops={(_t_fast - _t_reread_bg)*1000:.0f}ms"
+                f" refresh_universe=COALESCED (active worker will loop)"
             )
             return
+
+        # We are the worker. Loop until the universe is current with all
+        # mutations that were committed before our latest refresh completes.
+        # Exit boundary is atomic: gen check + lock release while holding
+        # _REFRESH_GEN_LOCK prevents a new mutation from slipping between
+        # "appears clean" and "lock released" without starting a new worker.
         try:
-            _t_lock = time.monotonic()
             from services.theme_merge_layer import refresh_enriched_universe as _reu
-            _reu()
-            _t_reu = time.monotonic()
-            print(
-                f"[taxonomy PUT BG] {_ticker_bg} | fast_ops={(_t_fast - _bg_start)*1000:.0f}ms"
-                f" refresh_universe={(_t_reu - _t_lock)*1000:.0f}ms"
-                f" bg_total={(_t_reu - _bg_start)*1000:.0f}ms"
-            )
-        except Exception as exc:
-            _log.warning("[taxonomy PUT BG] refresh_enriched_universe error: %s", exc)
-        finally:
-            _BG_REFRESH_LOCK.release()
+            _loop = 0
+            while True:
+                _loop += 1
+                with _REFRESH_GEN_LOCK:
+                    _gen_before = _REFRESH_GEN
+                _t_loop = time.monotonic()
+                try:
+                    _reu()
+                except Exception as exc:
+                    _log.warning("[taxonomy PUT BG] refresh_enriched_universe error: %s", exc)
+                _t_after = time.monotonic()
+                print(
+                    f"[taxonomy PUT BG] {_ticker_bg} | loop={_loop}"
+                    f" gen_before={_gen_before}"
+                    f" refresh_universe={(_t_after - _t_loop)*1000:.0f}ms"
+                )
+                # Atomically check generation and release lock if clean.
+                with _REFRESH_GEN_LOCK:
+                    if _REFRESH_GEN == _gen_before:
+                        # No new mutations arrived during our refresh.
+                        # Release lock while GEN_LOCK is held: any concurrent
+                        # mutation that tries to increment gen will block here
+                        # until after lock is released, then it can acquire lock
+                        # itself and become the new worker.
+                        _REFRESH_LOCK.release()
+                        print(
+                            f"[taxonomy PUT BG] {_ticker_bg} | worker done"
+                            f" loops={_loop} gen={_REFRESH_GEN}"
+                            f" reread={(_t_reread_bg - _bg_start)*1000:.0f}ms"
+                            f" fast_ops={(_t_fast - _t_reread_bg)*1000:.0f}ms"
+                            f" bg_total={(_t_after - _bg_start)*1000:.0f}ms"
+                        )
+                        return
+                    # Gen advanced — mutations arrived during our refresh.
+                    # Loop again to pick them up.
+        except Exception:
+            # Unexpected error outside the refresh call itself; release lock
+            # so the next mutation's bg task can start a new worker.
+            try:
+                _REFRESH_LOCK.release()
+            except RuntimeError:
+                pass
+            raise
 
     background_tasks.add_task(_propagate_taxonomy_downstream)
 
-    # ── 12. Reread authoritative state ────────────────────────────────────────
-    final = _get_ticker_theme_memberships(ticker)
-    _t_reread = time.monotonic()
-    reread_primary: Optional[str] = final["primary_theme"]["theme_id"]
-    reread_all: set[str] = {m["theme_id"] for m in final["theme_memberships"]}
-
-    # Validate reread matches the requested normalized state
-    expected_primary = body.primary_theme_id
-    if reread_primary != expected_primary:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                f"Authoritative reread mismatch after commit: "
-                f"expected primary={expected_primary!r}, stored primary={reread_primary!r}. "
-                f"Transaction committed but state verification failed. "
-                f"Diagnostics: desired_all={sorted(desired_all)}, reread_all={sorted(reread_all)}."
-            ),
-        )
-    if not desired_all.issubset(reread_all):
-        missing = sorted(desired_all - reread_all)
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                f"Authoritative reread mismatch after commit: "
-                f"requested memberships {missing} not found in stored state. "
-                f"Transaction committed but state verification failed."
-            ),
-        )
-
-    # ── 13. Build response with primary first in theme_ids ────────────────────
-    reread_sorted = sorted(reread_all)
-    if reread_primary and reread_primary in reread_all:
-        ordered: list[str] = [reread_primary] + [t for t in reread_sorted if t != reread_primary]
-    else:
-        ordered = reread_sorted
-
-    subtheme_ids = [
-        t for t in ordered
+    # ── 12. Build response from normalized committed state ────────────────────
+    #
+    # PRODUCT CONTRACT: the transaction committed → the save succeeded.
+    # The response is constructed from the backend-normalized state that was
+    # actually passed into atomic_taxonomy_write_db(): body.primary_theme_id
+    # and desired_all (computed in steps 4-6, never from frontend draft).
+    #
+    # The diagnostic reread runs in background (_propagate_taxonomy_downstream).
+    # A mismatch there is logged as an error but NEVER converts a committed
+    # write into HTTP 500 or any other client-visible failure.
+    _committed_primary = body.primary_theme_id
+    _committed_sorted  = sorted(desired_all)
+    _committed_theme_ids: list[str] = (
+        [_committed_primary] + [t for t in _committed_sorted if t != _committed_primary]
+        if _committed_primary else _committed_sorted
+    )
+    _committed_additionals = [t for t in _committed_sorted if t != _committed_primary]
+    _committed_subthemes   = [
+        t for t in _committed_theme_ids
         if _base_uni.get(t, {}).get("classification") == "sub_theme"
     ]
 
@@ -1540,18 +1618,17 @@ async def admin_put_ticker_taxonomy(
         f"[taxonomy PUT] {ticker} | txn={(_t_txn - _t_start)*1000:.0f}ms"
         f" critical_inval={(_t_critical_inval - _t_txn)*1000:.0f}ms"
         f" lkg_inval={(_t_lkg_inval - _t_critical_inval)*1000:.0f}ms"
-        f" reread={(_t_reread - _t_lkg_inval)*1000:.0f}ms"
-        f" sync_total={(_t_reread - _t_start)*1000:.0f}ms"
-        f" | downstream propagation offloaded to bg"
+        f" sync_total={(_t_lkg_inval - _t_start)*1000:.0f}ms"
+        f" | response=committed_state bg=propagating"
     )
 
     return {
         "ok":                   True,
         "ticker":               ticker,
-        "primary_theme_id":     reread_primary,
-        "additional_theme_ids": [t for t in ordered if t != reread_primary],
-        "theme_ids":            ordered,
-        "subtheme_ids":         subtheme_ids,
+        "primary_theme_id":     _committed_primary,
+        "additional_theme_ids": _committed_additionals,
+        "theme_ids":            _committed_theme_ids,
+        "subtheme_ids":         _committed_subthemes,
         "sector_id":            None,
         "memberships_removed":  sorted(to_remove),
         "memberships_added":    sorted(to_add),
