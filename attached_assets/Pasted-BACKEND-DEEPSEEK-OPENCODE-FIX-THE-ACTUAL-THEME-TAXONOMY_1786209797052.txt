@@ -1,0 +1,404 @@
+BACKEND DEEPSEEK / OPENCODE — FIX THE ACTUAL THEME TAXONOMY PERSISTENCE RELIABILITY BUG
+
+Work only in the live CaelynAI BACKEND Replit workspace.
+
+This is a narrowly scoped reliability bug in the EXISTING canonical taxonomy assignment path.
+
+Do NOT redesign taxonomy.
+Do NOT add another endpoint.
+Do NOT add another persistence store.
+Do NOT add another cache.
+Do NOT create a replacement assignment pipeline.
+Do NOT change the frontend.
+Do NOT run a broad taxonomy migration or backfill.
+Do NOT manually repair production rows with SQL.
+
+The current architecture must remain:
+
+PUT /api/themes/admin/ticker-taxonomy/{ticker}
+→ one atomic Neon transaction
+→ theme_ticker_overrides
+→ watchlist_category_overrides
+→ dependent-cache refresh
+→ authoritative reread
+→ verified response
+
+The existing atomic PUT is the path we want.
+
+## USER-OBSERVED BUG
+
+When assigning a Primary Theme or Subtheme from the Watchlist taxonomy editor, it appears to work only around 1/10 attempts.
+
+The user requires:
+
+* theme assignments permanently persisted in the backend
+* one reliable canonical source of truth
+* immediate read-after-write consistency
+* Primary Theme and Subtheme changes to survive hard refreshes/restarts
+* no UI-only fake success
+
+A previous frontend fix added the missing Express proxy and an optimistic React Query update.
+
+That did NOT solve the reliability issue.
+
+Do not repeat that solution.
+
+## IMPORTANT EVIDENCE ALREADY COLLECTED
+
+Git is reference only. The LIVE REPLIT WORKSPACE is your primary source of truth, so verify everything below against the live files before editing.
+
+A read-only inspection of the live Neon database showed recent successful assignments for:
+
+NVDA
+AAPL
+AMD
+AMPG
+AMPX
+
+For those writes:
+
+public.theme_ticker_overrides
+
+and
+
+public.watchlist_category_overrides
+
+contain matching assignment rows with the exact same updated_at timestamps.
+
+Examples included:
+
+NVDA → semiconductors
+AAPL → semiconductors
+AMD → semiconductors
+AMPG → satellite_comms
+AMPX → battery_tech_storage
+
+This proves the atomic database transaction can successfully persist both canonical records.
+
+The suspected/probable root cause is a stale process cache AFTER commit.
+
+## SPECIFIC PATH TO AUDIT
+
+Read live AGENTS.md completely first and obey it.
+
+Then trace these exact live paths before touching code:
+
+1. backend/routes/themes.py
+
+   * PUT /api/themes/admin/ticker-taxonomy/{ticker}
+   * _get_ticker_theme_memberships()
+   * _invalidate_caches()
+
+2. backend/data/pg_storage.py
+
+   * atomic_taxonomy_write_db()
+   * get_theme_ticker_overrides()
+
+3. backend/services/category_overrides.py
+
+   * _CACHE
+   * _CACHE_TTL
+   * _cache_get()
+   * _cache_set()
+   * _cache_invalidate()
+   * get_overrides()
+   * upsert_override()
+   * bulk_upsert()
+   * delete_override()
+
+4. backend/services/theme_resolver.py
+
+   * build_theme_resolution_context()
+   * resolve_primary_theme_for_ticker()
+
+5. Existing taxonomy tests.
+
+Do not edit until you can prove or disprove the following sequence in the LIVE code:
+
+A. PUT calls atomic_taxonomy_write_db().
+B. atomic_taxonomy_write_db() directly modifies watchlist_category_overrides.
+C. Because that write occurs below the category_overrides service layer, its successful transaction does NOT call category_overrides._cache_invalidate("default").
+D. PUT then performs its authoritative reread through _get_ticker_theme_memberships().
+E. That calls resolve_primary_theme_for_ticker().
+F. The resolver builds context using category_overrides.get_overrides("default").
+G. If that process cache was populated before the transaction, get_overrides() can return the pre-write ticker→category state for up to the current cache TTL.
+H. The endpoint can therefore commit correct state to Neon and then immediately compare against stale application state.
+I. Watchlist/backend consumers using the same cached override can continue showing the old Theme or "+ Assign" despite Neon already containing the new assignment.
+
+If that sequence is confirmed, state it explicitly as the proven root cause.
+
+## REQUIRED FIX IF CONFIRMED
+
+Preserve atomic_taxonomy_write_db().
+
+Do NOT replace it with multiple service-layer writes.
+
+The required lifecycle should be:
+
+1. Validate desired taxonomy.
+2. Execute atomic_taxonomy_write_db().
+3. If transaction fails:
+
+   * return failure
+   * do NOT invalidate caches as though a change occurred
+4. If and only if transaction commits successfully:
+
+   * invalidate the category override cache for user_id="default"
+   * then refresh the existing dependent theme caches
+5. Only after those invalidations:
+
+   * perform authoritative reread
+   * validate persisted Primary Theme
+   * validate memberships
+6. Return authoritative persisted state.
+
+Use the existing category-overrides cache mechanism.
+
+If category_overrides.py already exposes a public invalidation function in the live workspace, use it.
+
+If it only has the existing private:
+
+_cache_invalidate(user_id)
+
+then make the SMALLEST clean change needed to expose a public service-level cache invalidator, for example an intentionally named wrapper around the existing function, and call that from the taxonomy route.
+
+Do not reach into `_CACHE` directly from routes/themes.py.
+
+Do not create a second cache implementation.
+
+Expected production scope should remain approximately:
+
+* backend/services/category_overrides.py
+* backend/routes/themes.py
+
+Tests may be changed/added separately.
+
+If solving this genuinely requires a broader architecture change or more than two production files, STOP and report why before doing it.
+
+## CRITICAL MULTI-PROCESS CHECK
+
+Before declaring this solved, inspect the actual backend runtime configuration and determine whether the deployed backend runs:
+
+* one Python process/worker
+
+or
+
+* multiple workers/processes/instances that independently hold category_overrides._CACHE.
+
+This matters because the cache is process-local.
+
+If there is only one live worker/process, a local cache invalidation after commit should solve this path.
+
+If multiple backend workers can independently serve these requests while each holds its own 5-minute cache, DO NOT invent Redis, pub/sub, a new cache, or other architecture.
+
+Instead stop and report:
+
+* exact worker configuration
+* why process-local invalidation would not guarantee cross-worker read-after-write consistency
+* the smallest architecture-safe options
+
+That would require user approval before expanding scope.
+
+## DO NOT CONFUSE EMPTY DATA WITH STORAGE FAILURE
+
+While tracing this, inspect:
+
+get_theme_ticker_overrides()
+
+It currently may return [] both when there are genuinely no rows and when a DB read fails.
+
+Likewise inspect the category override read path for any similar fail-soft behavior.
+
+Do NOT broaden the task automatically.
+
+But during validation, distinguish:
+
+* genuine no membership
+* stale cache
+* DB unavailable
+* transaction failure
+* post-commit verification mismatch
+
+If a transient DB-read failure is independently contributing to the observed 1/10 behavior, prove it with logs/tests and report it separately before expanding scope.
+
+Do not guess.
+
+## IMPORTANT: DO NOT CHASE THE WRONG THEORY
+
+Do not assume the problem is missing display-name → theme-ID aliases unless current live evidence proves that.
+
+The current resolver should be inspected because manual category overrides can resolve against the canonical registry's display_name.
+
+Verify this rather than blindly editing alias maps.
+
+## TEST THAT WOULD HAVE CAUGHT THIS BUG
+
+Add a regression test that explicitly reproduces a WARM CACHE.
+
+The test should conceptually do this:
+
+1. Establish ticker with Primary Theme A.
+2. Populate/warm category_overrides cache so Theme A is cached.
+3. Execute the same taxonomy PUT/service path changing the ticker to Primary Theme B.
+4. Confirm transaction succeeds.
+5. Immediately — without waiting for cache TTL — call the same authoritative resolver/reread used by the endpoint.
+6. Assert Primary Theme B is returned.
+7. Assert no stale Theme A response occurs.
+
+This test MUST fail on the pre-fix implementation if the suspected bug is correct.
+
+Also cover:
+
+### Change
+
+Primary A → Primary B
+
+### Subtheme
+
+Parent Theme → specific Subtheme
+
+The stored primary must be the Subtheme ID when appropriate.
+
+### Clear
+
+Primary Theme → null
+
+The old manual category override must disappear and immediate reread must not resurrect it from cache.
+
+### Additional-only membership
+
+Changing additional memberships without changing Primary must leave Primary untouched.
+
+### Failed DB transaction
+
+If the atomic transaction fails:
+
+* no success response
+* no fake persisted state
+* cache behavior remains sane
+
+## RELIABILITY STRESS TEST
+
+After focused unit/integration tests pass, run a deterministic repeated test of the code path.
+
+At minimum:
+
+20 consecutive assignment transitions
+
+alternating between valid Primary Themes/Subthemes while ensuring every successful write is immediately reread.
+
+For every iteration verify:
+
+# requested normalized primary
+
+authoritative immediate reread primary
+
+and:
+
+# requested normalized memberships
+
+authoritative immediate reread memberships
+
+There must be:
+
+0 stale rereads
+0 false-success responses
+0 silent failures
+
+Use isolated tests/mocks where practical.
+
+Do NOT pollute production taxonomy assignments merely to achieve a test count.
+
+If a live endpoint validation is necessary, first read one designated ticker's complete before-state using the existing app/API path, make narrowly scoped reversible changes, and restore the exact before-state through the SAME canonical API path when finished.
+
+No manual SQL mutations.
+
+## LIVE DATABASE VERIFICATION
+
+Read-only Neon inspection is allowed if available.
+
+After the code-level tests, confirm that the canonical tables and runtime interpretation agree.
+
+For a successfully assigned ticker:
+
+theme_ticker_overrides:
+
+* requested primary membership row is action=add
+* any removed explicit membership is correctly represented according to current canonical design
+
+watchlist_category_overrides:
+
+* category corresponds to requested canonical Primary Theme/Subtheme
+* reason/source are correct
+
+Then ensure the APPLICATION resolver returns the same canonical theme ID immediately.
+
+Database correctness alone is not sufficient.
+Cache correctness alone is not sufficient.
+The entire path must agree.
+
+## PRESERVE EVERYTHING ELSE
+
+Do not modify:
+
+* taxonomy hierarchy
+* canonical IDs
+* theme/subtheme registry
+* parent_theme_id semantics
+* additional membership rules
+* sector taxonomy
+* Theme RS calculations
+* Options Flow behavior
+* Watchlist membership
+* provider calls
+* background schedules
+* frontend contracts unless absolutely required by this bug
+* database schema
+
+No migrations.
+No new tables.
+No new columns.
+No new API providers.
+No new endpoint.
+No new polling.
+No new retry subsystem.
+
+## FINAL SUCCESS CRITERIA
+
+This task is not complete because “the PUT returns 200 once.”
+
+It is complete only when you can demonstrate:
+
+1. Assignment transaction is durable in Neon.
+2. Category override cache is made coherent immediately after a successful atomic transaction.
+3. Immediate authoritative reread returns the newly persisted assignment.
+4. Primary → Primary changes work.
+5. Primary → Subtheme changes work.
+6. Clear works.
+7. Additional memberships remain correct.
+8. A warm-cache regression test passes.
+9. Repeated immediate read-after-write validation produces zero mismatches.
+10. No architecture was replaced or duplicated.
+11. No unrelated functionality changed.
+
+At the end, report:
+
+* proven root cause
+* exact files changed
+* exact cache lifecycle before vs after
+* whether backend is single-worker or multi-worker
+* tests added
+* exact validation commands/results
+* repeated-write test results
+* whether any transaction failures occurred
+* whether any post-commit reread mismatches occurred
+* DB effects
+* cache effects
+* provider effects
+* remaining risks
+* git diff summary
+* final git status
+
+Do not tell me this is fixed merely because one curl returns HTTP 200.
+
+Prove read-after-write consistency with a warm category-overrides cache.
