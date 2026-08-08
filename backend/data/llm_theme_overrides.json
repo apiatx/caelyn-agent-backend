@@ -100,8 +100,8 @@
     "confidence": "fmp_industry"
   },
   "BAND": {
-    "display_name": "Data Center Infrastructure",
-    "theme_id": "datacenter_infra",
+    "display_name": "Cloud Software",
+    "theme_id": "cloud_software",
     "confidence": "fmp_industry"
   },
   "BB": {
@@ -327,11 +327,6 @@
   "HYLN": {
     "display_name": "Industrials",
     "theme_id": "industrials",
-    "confidence": "fmp_industry"
-  },
-  "IMSR": {
-    "display_name": "Nuclear / Grid",
-    "theme_id": "uranium_nuclear",
     "confidence": "fmp_industry"
   },
   "INDI": {

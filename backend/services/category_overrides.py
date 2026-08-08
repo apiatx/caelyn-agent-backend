@@ -255,9 +255,9 @@ _SEED_OVERRIDES: list[tuple[str, str]] = [
     ("AMBA", "Robotics & Automation"),
     ("OUST", "Robotics & Automation"),
     ("AEVA", "Robotics & Automation"),
-    # Nuclear / Grid → Uranium & Nuclear Energy
-    ("ASPI", "Uranium & Nuclear Energy"),
-    ("IMSR", "Uranium & Nuclear Energy"),
+    # Nuclear fuel / SMRs (corrected from old deprecated "Uranium & Nuclear Energy" label)
+    ("ASPI", "Uranium Mining & Nuclear Fuel"),
+    ("IMSR", "SMRs & Advanced Reactors"),
     # Previously Unknown Theme → Data Center Infrastructure
     ("IREN", "Data Center Infrastructure"),
     ("SLNH", "Data Center Infrastructure"),

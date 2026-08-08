@@ -63,16 +63,16 @@ _FOREIGN_ALIAS_MAP: dict[str, tuple[str, str]] = {
     "IPX":        ("Defense",                       "defense"),              # IperionX — low-carbon titanium powders for aerospace/defense/space (DoD-linked)
     "AIR":        ("Defense",                       "defense"),              # AAR Corp — aviation MRO for USAF/USN (~50% revenue from US government defense)
 
-    # Nuclear / Grid
-    "ASPI":       ("Nuclear / Grid",                "uranium_nuclear"),       # ASP Isotopes — laser isotope enrichment for enriched uranium / nuclear fuel
+    # Uranium Mining & Nuclear Fuel
+    "ASPI":       ("Uranium Mining & Nuclear Fuel", "uranium_nuclear_fuel"),  # ASP Isotopes — laser isotope enrichment for enriched uranium / nuclear fuel
 
     # Cybersecurity
     "LAES":       ("Cybersecurity",                 "cybersecurity"),        # SEALSQ Corp — post-quantum secure RISC-V microchips for IoT/automotive (WISeKey spinoff)
     "AKAM":       ("Cybersecurity",                 "cybersecurity"),        # Akamai — CDN / edge security / bot protection (classified as "Software-Infrastructure" in screeners but core business is cybersecurity)
 
-    # Semiconductor Equipment & Materials  (display_name updated; theme_id "semicap_equipment" frozen)
-    "TRT":        ("Semi Equipment & Materials",    "semicap_equipment"),    # Trio-Tech International — semiconductor burn-in/test services for memory & logic
-    "AIM:TRT":    ("Semi Equipment & Materials",    "semicap_equipment"),    # Trio-Tech International (AIM listing) — same company, overrides wrong "Auto Parts" CSV industry
+    # Test & Measurement (corrected from deprecated semicap_equipment)
+    "TRT":        ("Test & Measurement",            "test_measurement"),     # Trio-Tech International — semiconductor burn-in/test services for memory & logic
+    "AIM:TRT":    ("Test & Measurement",            "test_measurement"),     # Trio-Tech International (AIM listing) — same company, overrides wrong "Auto Parts" CSV industry
 
     # Power / Cooling
     "SEI":        ("Power / Cooling",               "power_cooling"),      # Solaris Energy Infrastructure — mobile power generation for AI data centers & industrial
