@@ -21,9 +21,12 @@ DELETE /api/themes/admin/leaders/{theme_id}                 clear a theme leader
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Optional
 
-from fastapi import APIRouter, Query, HTTPException, Request, Header
+import time
+
+from fastapi import APIRouter, BackgroundTasks, Query, HTTPException, Request, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
@@ -39,6 +42,13 @@ _VALID_CLASSIFICATIONS = {"all", "sector", "theme", "sub_theme"}
 _VALID_ACTIONS         = {"add", "remove"}
 
 _SYM_RE = __import__("re").compile(r"^[A-Z0-9\.\-]{1,12}$")
+
+# Non-blocking lock for background refresh_enriched_universe().
+# At most one refresh runs at a time; concurrent rapid-fire PUT tasks skip
+# the expensive DB-backed rebuild and return immediately.  The already-running
+# refresh reads theme_ticker_overrides fresh from Neon on every call, so it
+# incorporates any queued mutations automatically.
+_BG_REFRESH_LOCK = threading.Lock()
 
 
 # ── Admin guard ────────────────────────────────────────────────────────────────
@@ -1197,10 +1207,11 @@ class TickerTaxonomyBody(BaseModel):
 
 @router.put("/admin/ticker-taxonomy/{ticker}")
 async def admin_put_ticker_taxonomy(
-    ticker:      str,
-    request:     Request,
-    body:        TickerTaxonomyBody,
-    x_api_key:   Optional[str] = Header(None, alias="X-API-Key"),
+    ticker:           str,
+    request:          Request,
+    body:             TickerTaxonomyBody,
+    background_tasks: BackgroundTasks,
+    x_api_key:        Optional[str] = Header(None, alias="X-API-Key"),
 ):
     """
     [Admin] Atomically assign primary + additional theme memberships for one ticker.
@@ -1353,11 +1364,13 @@ async def admin_put_ticker_taxonomy(
         }
 
     # ── 8. One atomic transaction — all or nothing ────────────────────────────
+    _t_start = time.monotonic()
     from data.pg_storage import atomic_taxonomy_write_db
     txn_result = atomic_taxonomy_write_db(
         ticker_overrides=membership_edits,
         primary_operation=primary_op,
     )
+    _t_txn = time.monotonic()
 
     # ── 9. Raise immediately on failure; no compensating writes ───────────────
     if not txn_result["ok"]:
@@ -1366,56 +1379,125 @@ async def admin_put_ticker_taxonomy(
             detail=f"Taxonomy write transaction failed: {txn_result.get('error', 'unknown')}",
         )
 
-    # ── 10. Single cache invalidation after successful commit ─────────────────
-    _invalidate_caches()
+    # ── 10. Critical cache invalidation — synchronous, required for reread ────
+    #
+    # ONLY invalidate_overrides_cache is in the synchronous critical path.
+    # Proof: _get_ticker_theme_memberships() calls resolve_primary_theme_for_ticker()
+    # which calls get_overrides("default") — a 5-min in-process cache.
+    # Without this invalidation the authoritative reread sees the old primary.
+    #
+    # refresh_enriched_universe() / invalidate_theme_rs_cache() / invalidate_sectors_cache()
+    # are downstream-propagation only (CLASS B).  _get_ticker_theme_memberships()
+    # uses ENRICHED_THEME_RS_UNIVERSE only for display_name; the assigned theme
+    # already exists in the static registry before this PUT runs.
+    # These are moved to background_tasks below.
+    try:
+        from services.category_overrides import invalidate_overrides_cache
+        invalidate_overrides_cache("default")
+    except Exception as _oc_err:
+        _log.warning("[taxonomy PUT] invalidate_overrides_cache error (non-fatal): %s", _oc_err)
+    _t_critical_inval = time.monotonic()
 
-    # ── 10b. Watchlist bulk LKG invalidation — taxonomy-aware ─────────────────
-    # The watchlist bulk LKG version fingerprint is based on updated_at|ticker_count,
-    # neither of which changes on a taxonomy write.  Without this call, any GET
-    # within the next 5–20 min would return the stale cached row (old canonical_theme_id,
-    # old section membership, old theme_ids).
-    #
-    # invalidate_bulk_lkg_for_ticker() scans the in-process LKG for all watchlist
-    # payloads that contain this ticker and pops those entries.  It also bumps
-    # the per-watchlist _TAXONOMY_GEN counter so any background rebuild already
-    # in flight discards its pre-mutation result instead of overwriting the correct
-    # fresh payload from the immediate POST-mutation inline GET.
-    #
-    # Must run AFTER _invalidate_caches() (which clears category_overrides cache)
-    # so the inline GET that rebuilds the LKG reads the freshly committed DB state.
+    # ── 10b. Watchlist bulk LKG invalidation — taxonomy-aware (synchronous) ───
+    # Must run AFTER overrides cache is cleared so the inline GET that
+    # rebuilds the LKG reads the freshly committed DB state.
     # Only reached when txn_result["ok"] is True — failed transactions raise above.
     try:
         from services.watchlist_router import invalidate_bulk_lkg_for_ticker as _wl_lkg_inv
         _wl_lkg_inv(ticker)
     except Exception as _lkg_err:
-        _log.warning(
-            "[taxonomy PUT] watchlist LKG invalidation failed (non-fatal): %s", _lkg_err
-        )
+        _log.warning("[taxonomy PUT] watchlist LKG invalidation failed (non-fatal): %s", _lkg_err)
+    _t_lkg_inval = time.monotonic()
 
-    # ── 11. Post-commit optional downstream hints (non-authoritative) ─────────
-    if to_add:
-        try:
-            from data.options_theme_supplement import add_high_priority_symbols as _add_hi
-            _add_hi([ticker])
-        except Exception as _hpe:
-            _log.warning("[taxonomy PUT] options high-priority hint failed (non-fatal): %s", _hpe)
+    # ── 11. Post-commit downstream propagation — non-blocking background ──────
+    #
+    # refresh_enriched_universe() is O(n_watchlist_tickers) synchronous DB work
+    # and is the primary source of pre-fix PUT latency.  It is CLASS B:
+    # not needed for the authoritative read-back; the ENRICHED_THEME_RS_UNIVERSE
+    # already contains display_name for the newly assigned theme.
+    #
+    # If this function fails after an already-verified commit, it is logged and
+    # recovers through the normal cache lifecycle.  It cannot convert a confirmed
+    # successful write into a client-visible failure.
+    _display_bg = _uni.get(body.primary_theme_id or "", {}).get("display_name") or body.primary_theme_id
+    _to_add_list = sorted(to_add)
+    _ticker_bg = ticker
+    _primary_bg = body.primary_theme_id
+    _cur_primary_bg = current_primary
 
-    if body.primary_theme_id:
+    def _propagate_taxonomy_downstream() -> None:
+        _bg_start = time.monotonic()
+
+        # ── Fast ops — O(1) in-memory, no DB contention ───────────────────────
+        # These always run regardless of whether a refresh is already in flight.
         try:
-            _display_sync = _uni.get(body.primary_theme_id, {}).get("display_name") or body.primary_theme_id
-            from services.theme_ticker_mapper import register_llm_classified_tickers as _xsync
-            _xsync([{"ticker": ticker, "theme": _display_sync, "confidence": "manual"}])
-        except Exception as _xse:
-            _log.warning("[taxonomy PUT] theme mapper sync failed (non-fatal): %s", _xse)
-    elif current_primary:
+            from services.theme_rs_service import invalidate_theme_rs_cache as _irs
+            _irs()
+        except Exception as exc:
+            _log.warning("[taxonomy PUT BG] invalidate_theme_rs_cache error: %s", exc)
+
         try:
-            from services.theme_ticker_mapper import remove_llm_theme_override as _del_llm
-            _del_llm(ticker, only_if_theme_id=current_primary)
-        except Exception as _xle:
-            _log.warning("[taxonomy PUT] theme mapper clear failed (non-fatal): %s", _xle)
+            from data.options_flow_sectors import invalidate_sectors_cache as _isc
+            _isc()
+        except Exception as exc:
+            _log.warning("[taxonomy PUT BG] invalidate_sectors_cache error: %s", exc)
+
+        if _to_add_list:
+            try:
+                from data.options_theme_supplement import add_high_priority_symbols as _add_hi
+                _add_hi([_ticker_bg])
+            except Exception as _hpe:
+                _log.warning("[taxonomy PUT BG] options high-priority hint failed: %s", _hpe)
+
+        if _primary_bg and _display_bg:
+            try:
+                from services.theme_ticker_mapper import register_llm_classified_tickers as _xsync
+                _xsync([{"ticker": _ticker_bg, "theme": _display_bg, "confidence": "manual"}])
+            except Exception as _xse:
+                _log.warning("[taxonomy PUT BG] theme mapper sync failed: %s", _xse)
+        elif _cur_primary_bg:
+            try:
+                from services.theme_ticker_mapper import remove_llm_theme_override as _del_llm
+                _del_llm(_ticker_bg, only_if_theme_id=_cur_primary_bg)
+            except Exception as _xle:
+                _log.warning("[taxonomy PUT BG] theme mapper clear failed: %s", _xle)
+
+        _t_fast = time.monotonic()
+
+        # ── Expensive DB-backed refresh — non-blocking lock dedup ─────────────
+        # refresh_enriched_universe() reads from Neon (watchlist_read +
+        # theme_ticker_overrides) and iterates all watchlist tickers.
+        # BEFORE FIX this ran synchronously, contributing ~5-10s to every PUT.
+        # HERE: at most one refresh runs at a time.  Concurrent rapid-fire PUT
+        # background tasks skip this section — the already-running refresh reads
+        # theme_ticker_overrides fresh from DB on every invocation and
+        # automatically incorporates the latest committed taxonomy state.
+        if not _BG_REFRESH_LOCK.acquire(blocking=False):
+            print(
+                f"[taxonomy PUT BG] {_ticker_bg} | refresh_universe SKIPPED"
+                f" (already running) | fast_ops={(_t_fast - _bg_start)*1000:.0f}ms"
+            )
+            return
+        try:
+            _t_lock = time.monotonic()
+            from services.theme_merge_layer import refresh_enriched_universe as _reu
+            _reu()
+            _t_reu = time.monotonic()
+            print(
+                f"[taxonomy PUT BG] {_ticker_bg} | fast_ops={(_t_fast - _bg_start)*1000:.0f}ms"
+                f" refresh_universe={(_t_reu - _t_lock)*1000:.0f}ms"
+                f" bg_total={(_t_reu - _bg_start)*1000:.0f}ms"
+            )
+        except Exception as exc:
+            _log.warning("[taxonomy PUT BG] refresh_enriched_universe error: %s", exc)
+        finally:
+            _BG_REFRESH_LOCK.release()
+
+    background_tasks.add_task(_propagate_taxonomy_downstream)
 
     # ── 12. Reread authoritative state ────────────────────────────────────────
     final = _get_ticker_theme_memberships(ticker)
+    _t_reread = time.monotonic()
     reread_primary: Optional[str] = final["primary_theme"]["theme_id"]
     reread_all: set[str] = {m["theme_id"] for m in final["theme_memberships"]}
 
@@ -1453,6 +1535,15 @@ async def admin_put_ticker_taxonomy(
         t for t in ordered
         if _base_uni.get(t, {}).get("classification") == "sub_theme"
     ]
+
+    print(
+        f"[taxonomy PUT] {ticker} | txn={(_t_txn - _t_start)*1000:.0f}ms"
+        f" critical_inval={(_t_critical_inval - _t_txn)*1000:.0f}ms"
+        f" lkg_inval={(_t_lkg_inval - _t_critical_inval)*1000:.0f}ms"
+        f" reread={(_t_reread - _t_lkg_inval)*1000:.0f}ms"
+        f" sync_total={(_t_reread - _t_start)*1000:.0f}ms"
+        f" | downstream propagation offloaded to bg"
+    )
 
     return {
         "ok":                   True,
