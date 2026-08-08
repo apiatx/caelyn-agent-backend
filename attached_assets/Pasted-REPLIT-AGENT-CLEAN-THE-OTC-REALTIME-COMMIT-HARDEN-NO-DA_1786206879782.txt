@@ -1,0 +1,101 @@
+REPLIT AGENT — CLEAN THE OTC REALTIME COMMIT + HARDEN NO-DATA RETRIES
+
+The OTC routing behavior in commit b8f66d55 is functionally correct.
+
+Do NOT redesign it.
+
+There are two cleanup requirements.
+
+1. GIT HYGIENE
+
+Commit b8f66d55 incorrectly included unrelated runtime/generated files despite
+the report claiming only two production files changed.
+
+The actual commit contains:
+
+- attached_assets/Pasted-REPLIT-AGENT-...
+- backend/data/bittensor_dashboard_cache.json
+- backend/data/canonical_history/SKYT.json.gz
+- backend/data/canonical_history/_index.json
+- backend/data/catalyst_alignment_lkg.json
+- backend/data/entry_state_lkg.json
+- backend/data/hyperliquid_hip3_cache.json
+- backend/data/hyperliquid_signal_snapshots.json
+- backend/data/options_supplement_lkg_v1.json
+- backend/data/portfolio_opts_lkg_v1.json
+- backend/data/predict_odds_live_lkg.json
+- backend/data/thematic_context_snapshot.json
+- backend/data/theme_rs_refresh_ts.json
+- backend/data/watchlist_stage2_lkg.json
+
+These were NOT part of the OTC realtime task.
+
+The intended source changes are only:
+
+- backend/routes/realtime_quotes.py
+- backend/services/realtime_quotes_service.py
+
+Do NOT rewrite history, reset, rebase, or force-push.
+
+Create a normal corrective commit on main that restores every unrelated
+runtime/generated file above to its exact pre-b8f66d55 version.
+
+Do not revert the two intended OTC production files.
+
+Also remove the accidentally committed pasted-prompt asset if it did not exist
+before b8f66d55.
+
+The resulting tree should preserve the OTC code while undoing only unrelated
+task pollution.
+
+2. OTC NO-DATA NEGATIVE CACHE
+
+The current realtime path retries an FMP no-match OTC security such as
+OTC:FLTCF on every frontend poll because no successful live-cache entry exists.
+
+Do not manufacture a quote.
+
+Add the smallest possible short-lived negative/no-data cache using the existing
+realtime cache architecture.
+
+Requirements:
+
+- canonical key remains OTC:FLTCF
+- FMP returns no quote → remember no-data result briefly
+- regular frontend polls inside that negative TTL make 0 new FMP calls
+- use a modest TTL such as 5 minutes unless an existing project convention
+  provides a better one
+- successful quotes continue using existing 15/30/300 second live TTLs
+- genuine provider errors should not be confused with permanent no-data if the
+  existing error semantics distinguish them
+- no synthetic price/change/volume values
+- no new cache system
+- no frontend changes
+
+3. COLD-LATENCY AUDIT
+
+Do not redesign the governor.
+
+Explain why the prior 26-symbol cold OTC cycle took 183 seconds.
+
+Determine whether realtime_otc_quotes is waiting behind lower-priority FMP
+background jobs.
+
+If this is only an artifact of startup congestion and normal live-market cold
+cycles are materially faster, prove it with runtime timing.
+
+If realtime requests can routinely wait minutes behind background FMP work,
+STOP and report the exact contention mechanism rather than redesigning the
+governor without approval.
+
+VALIDATE
+
+- OTC:BESIY → FMP quote still works
+- NVDA → Tradier unchanged
+- TSX:FLT → zero provider calls
+- OTC:FLTCF first no-data request → one FMP attempt
+- OTC:FLTCF repeated request within negative TTL → zero new FMP calls
+- generated/runtime files are restored to pre-b8f66d55 content
+- final corrective commit contains only intentional cleanup/source changes
+
+Report the exact final file list before committing.
