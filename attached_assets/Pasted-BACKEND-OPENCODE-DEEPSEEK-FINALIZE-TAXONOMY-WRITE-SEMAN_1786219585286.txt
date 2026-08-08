@@ -1,0 +1,454 @@
+BACKEND OPENCODE / DEEPSEEK — FINALIZE TAXONOMY WRITE SEMANTICS: COMMIT = SUCCESS + FIX LOST BACKGROUND REFRESH RACE
+
+Work only in the live CaelynAI BACKEND Replit workspace.
+
+Read and obey live AGENTS.md first.
+
+The live Replit workspace is the primary source of truth.
+GitHub is reference/backup only.
+
+This is a CORRECTION to commit 4da60993.
+
+Do NOT redesign taxonomy.
+Do NOT undo the latency work.
+Do NOT restore synchronous refresh_enriched_universe().
+Do NOT modify frontend.
+Do NOT add an endpoint.
+Do NOT add a provider.
+Do NOT add retries of the database write.
+Do NOT alter the atomic transaction itself unless live evidence proves its
+success contract is incorrect.
+
+Expected production scope:
+
+backend/routes/themes.py
+
+plus focused adjustments to the existing taxonomy latency lifecycle tests.
+
+============================================================
+PRODUCT CONTRACT — NON-NEGOTIABLE
+=================================
+
+For a VALID taxonomy request:
+
+BEFORE COMMIT:
+
+* invalid request may fail
+* database transaction may fail
+* if atomic_taxonomy_write_db() reports that the transaction did not commit,
+  return failure
+
+AFTER COMMIT:
+
+* the save SUCCEEDED
+* the API MUST return success
+* no cache refresh
+* no reread mismatch
+* no derived-state propagation
+* no downstream hint
+* no diagnostics failure
+
+may convert that committed save into HTTP 500 or another client-visible failure.
+
+The atomic committed transaction is the save.
+
+Everything after that is coherence, propagation, or diagnostics.
+
+============================================================
+CURRENT BUG 1 — POST-COMMIT REREAD CAN STILL RETURN HTTP 500
+============================================================
+
+The current canonical PUT still does behavior equivalent to:
+
+```
+txn_result = atomic_taxonomy_write_db(...)
+
+if not txn_result["ok"]:
+    raise HTTPException(...)
+
+...
+
+final = _get_ticker_theme_memberships(ticker)
+
+if reread_primary != expected_primary:
+    raise HTTPException(status_code=500, ...)
+
+if not desired_all.issubset(reread_all):
+    raise HTTPException(status_code=500, ...)
+```
+
+This explicitly violates the new mutation contract.
+
+The transaction has ALREADY COMMITTED.
+
+Do not tell the client the save failed after that point.
+
+============================================================
+REQUIRED COMMIT SEMANTICS
+=========================
+
+Audit atomic_taxonomy_write_db() first.
+
+Prove exactly what txn_result["ok"] means.
+
+Required:
+
+txn_result["ok"] == True must mean the transaction committed successfully.
+
+If that is true, then after it returns True the route is committed-success state.
+
+Construct the successful response from the SERVER-NORMALIZED desired state that
+was actually passed into the atomic transaction.
+
+The server already has:
+
+```
+body.primary_theme_id
+desired_all
+to_add
+to_remove
+```
+
+and all hierarchy/ancestor normalization has already occurred before the
+transaction.
+
+Therefore after committed success the route can deterministically return:
+
+```
+ok: true
+ticker
+primary_theme_id: normalized committed primary
+additional_theme_ids: normalized committed additionals
+theme_ids: normalized committed memberships, primary first
+subtheme_ids: canonical subset
+memberships_added
+memberships_removed
+```
+
+Do NOT use unvalidated frontend draft state.
+
+Use the backend-normalized state that was actually committed.
+
+============================================================
+AUTHORITATIVE REREAD
+====================
+
+Keep a post-commit reread if it is useful for diagnostics.
+
+But it must NOT redefine a committed write as failure.
+
+Preferred:
+
+* perform the lightweight reread synchronously only if its measured cost remains
+  acceptable, OR move it to post-response diagnostics if unnecessary to response
+  construction
+* compare it to expected committed state
+* on match: log verified
+* on mismatch: log ERROR / consistency warning with full diagnostics
+* NEVER raise HTTP 500 after txn_result["ok"] == True
+
+A response may include an additive diagnostic field if useful, e.g.:
+
+```
+verification_status: "verified"
+```
+
+or
+
+```
+verification_status: "commit_confirmed_readback_mismatch"
+```
+
+but:
+
+```
+ok MUST remain true
+```
+
+because the transaction committed.
+
+Do not force the frontend to interpret this diagnostic field for normal success.
+
+============================================================
+CURRENT BUG 2 — BACKGROUND REFRESH LOCK CAN LOSE A MUTATION
+===========================================================
+
+Current code uses roughly:
+
+```
+if not _BG_REFRESH_LOCK.acquire(blocking=False):
+    return
+```
+
+The comment claims the running refresh automatically incorporates all newer
+commits.
+
+That is NOT guaranteed.
+
+Race:
+
+1. Save A commits.
+2. Refresh A starts and reads Neon.
+3. Save B commits after Refresh A's DB read.
+4. Background task B sees the lock.
+5. Task B returns / skips.
+6. Refresh A writes an enriched universe that contains A but not B.
+7. No refresh remains queued for B.
+
+Fix this without restoring concurrent refreshes.
+
+============================================================
+REQUIRED COALESCING SEMANTICS
+=============================
+
+Maintain exactly one expensive refresh worker at a time, but NEVER drop the fact
+that another mutation occurred.
+
+Use the smallest robust generation/dirty mechanism.
+
+Preferred shape:
+
+* module-level monotonically increasing refresh generation or dirty counter
+* every successfully committed taxonomy mutation increments/marks it
+* background worker acquires single-worker lock
+* records generation being refreshed
+* performs refresh_enriched_universe()
+* after refresh:
+  if generation advanced while refresh was running:
+  refresh again
+  else:
+  exit
+* a background task that finds the worker already running should mark the
+  generation/dirty state and return; the active worker is responsible for
+  catching up before exiting
+
+Important race:
+
+Before the worker finally exits, the "is dirty?" check and release/worker-exit
+must be coordinated so a mutation cannot arrive between:
+
+```
+check clean
+→
+worker exits
+```
+
+and become stranded without a future refresh.
+
+Use a lock/generation pattern that makes this atomic.
+
+Do not create Redis, a queue service, another scheduler, or DB table.
+
+This is a tiny in-process coalescing worker for the CURRENT single-worker Uvicorn
+architecture.
+
+============================================================
+PRESERVE LATENCY FIX
+====================
+
+Do not put expensive derived work back into the HTTP critical path.
+
+Successful request path should remain approximately:
+
+validate
+→ atomic DB transaction
+→ invalidate category override process cache
+→ invalidate affected Watchlist LKG
+→ construct committed-success response
+→ return
+
+Target normal response remains:
+
+< 3 seconds
+preferably < 1 second server-side critical work
+
+Downstream:
+
+refresh_enriched_universe
+theme RS cache work
+sector cache work
+options hint
+mapper synchronization
+
+remains post-response/best-effort.
+
+============================================================
+POST-COMMIT LOCAL INVALIDATION ERRORS
+=====================================
+
+Audit:
+
+invalidate_overrides_cache()
+invalidate_bulk_lkg_for_ticker()
+
+These are local in-process operations.
+
+They should be deterministic and effectively non-failing for a valid ticker.
+
+Test them accordingly.
+
+However:
+
+IF one unexpectedly throws AFTER transaction commit:
+
+* log loudly
+* preserve ok:true
+* do not lie that the DB write failed
+
+The DB write and cache coherence are separate facts.
+
+Do not intentionally simulate success before transaction commit.
+
+============================================================
+TEST CHANGES
+============
+
+The existing tests that assert:
+
+```
+authoritative reread mismatch → HTTP 500
+```
+
+are now WRONG.
+
+Replace them with tests for the actual product contract.
+
+Required tests:
+
+1. invalid request before transaction
+   → failure
+
+2. atomic transaction failure
+   → failure
+   → ok is not true
+
+3. atomic transaction success + reread match
+   → ok:true
+   → normalized committed state returned
+
+4. atomic transaction success + primary reread mismatch
+   → HTTP SUCCESS
+   → ok:true
+   → response contains normalized committed state
+   → mismatch logged/diagnosed
+   → never 500
+
+5. atomic transaction success + membership reread mismatch
+   → HTTP SUCCESS
+   → ok:true
+   → never 500
+
+6. post-commit category-cache invalidation unexpected exception
+   → save still returns ok:true
+   → exception logged
+
+7. post-commit Watchlist-LKG invalidation unexpected exception
+   → save still returns ok:true
+   → exception logged
+
+8. downstream propagation exception
+   → no effect on response success
+
+9. background coalescing:
+   Mutation A starts refresh.
+   Refresh reads A state.
+   Mutation B occurs while refresh A is running.
+   B's task does not start a concurrent DB refresh.
+   After A completes, worker performs another refresh.
+   Final enriched universe contains B.
+
+10. three or more burst mutations during one refresh
+    → at most one refresh executes concurrently
+    → final generation is fully caught up
+    → no mutation is lost
+
+11. mutation arriving at the worker's clean/exit boundary
+    → either current worker runs again OR a new worker starts
+    → mutation cannot be stranded
+
+12. existing 20-transition write→immediate-Watchlist-GET test stays green
+
+============================================================
+LIVE VALIDATION
+===============
+
+Use a controlled ticker, not ACMR.
+
+Record exact original state.
+
+Run 20 sequential valid canonical assignments.
+
+For each:
+
+* PUT returns ok:true
+* no HTTP 500 after commit
+* response normalized primary is requested normalized primary
+* immediate Watchlist GET agrees
+* no timeout
+
+Then run a short burst specifically to exercise downstream coalescing.
+
+Prove:
+
+* no concurrent expensive refreshes
+* final downstream enriched state contains the LAST committed taxonomy mutation
+* no skipped final state
+
+Restore the controlled ticker exactly.
+
+============================================================
+IMPORTANT LANGUAGE / SEMANTICS
+==============================
+
+After transaction commit, do not emit messages such as:
+
+```
+"Taxonomy write failed"
+"Save failed"
+HTTP 500
+```
+
+for a readback/cache/downstream issue.
+
+The correct semantics are:
+
+```
+write committed
+secondary verification/propagation encountered a problem
+```
+
+These are different states.
+
+============================================================
+DEFINITION OF DONE
+==================
+
+Done means:
+
+* valid request + healthy DB → commit → success
+* transaction failure is the only persistence failure
+* committed transaction can never become HTTP failure afterward
+* response comes from normalized committed server state
+* reread mismatch is diagnostic, not mutation failure
+* expensive downstream work remains off request path
+* refresh coalescing cannot lose the last mutation
+* only one expensive refresh executes concurrently
+* Watchlist immediate-read coherence remains intact
+* no providers introduced
+* no new persistence architecture
+
+At end report:
+
+* proof of atomic_taxonomy_write_db ok semantics
+* exact post-commit failure behavior before/after
+* reread mismatch behavior before/after
+* exact coalescing algorithm
+* race tests
+* full tests/results
+* 20-save results
+* burst/coalescing results
+* server latency
+* files changed
+* git diff/stat
+* commit SHA
+* final git status
