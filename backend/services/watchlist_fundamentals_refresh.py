@@ -3125,6 +3125,15 @@ class FmpFundamentalsRefresher:
         eligible  = [s for s in symbols if is_fmp_symbol_eligible(s)]
         snapshots = get_snapshots_bulk(eligible)
 
+        # OTC: build a provider-symbol map so API calls use the bare FMP symbol
+        # (BESIY) while every store operation keeps the canonical key (OTC:BESIY).
+        # Non-OTC symbols map to themselves — this is a no-op for US tickers.
+        from services.otc_service import is_otc_symbol as _is_otc, otc_to_fmp as _otc_to_fmp
+        _fmp_sym_map: dict[str, str] = {
+            s.upper(): (_otc_to_fmp(s) if _is_otc(s) else s)
+            for s in eligible
+        }
+
         started_at = datetime.now(timezone.utc)
         refreshed: list[str]             = []
         skipped:   list[str]             = []
@@ -3146,7 +3155,10 @@ class FmpFundamentalsRefresher:
                     pass
 
             try:
-                result = await self.normalize_symbol(sym)
+                # Use the bare FMP provider symbol for all API calls;
+                # the canonical sym (e.g. OTC:BESIY) is kept for store writes.
+                _fmp_call_sym = _fmp_sym_map.get(sym.upper(), sym)
+                result = await self.normalize_symbol(_fmp_call_sym)
 
                 # Extract per-endpoint outcomes + not_meaningful set
                 _not_meaningful = result.pop("_not_meaningful_active", set())
@@ -3264,7 +3276,8 @@ class FmpFundamentalsRefresher:
                     log.debug("[FMP_FUND] %s: earnings_intelligence skipped (%s)", sym, _ei_skip_reason)
                 else:
                     try:
-                        _ei_data = await self._fetch_earnings_intelligence(sym)
+                        # Use bare FMP symbol for API call; canonical sym for logs/storage
+                        _ei_data = await self._fetch_earnings_intelligence(_fmp_call_sym)
                         if _ei_data:
                             _ei_call_count = _ei_data.pop("_call_count", 0)
                             result["fields"]["earnings_intelligence"] = _ei_data

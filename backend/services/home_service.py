@@ -741,7 +741,10 @@ async def _batch_quotes(tickers: list[str], data_service) -> dict[str, dict]:
     _LKG_PFX = "home:wl_tradier_lkg:"
 
     us_tickers = [t for t in tickers if ":" not in t]
-    if not us_tickers:
+    # OTC tickers are handled via FMP below; split them out now.
+    from services.otc_service import split_otc_us as _split_otc_h
+    otc_tickers_h, _ = _split_otc_h(tickers)
+    if not us_tickers and not otc_tickers_h:
         return {}
 
     out: dict[str, dict] = {}
@@ -858,6 +861,74 @@ async def _batch_quotes(tickers: list[str], data_service) -> dict[str, dict]:
                         }
             except Exception as exc:
                 print(f"[HOME] batch_quotes FMP fallback error (non-fatal): {exc}")
+
+    # ── Step 4: OTC symbols via FMP ──────────────────────────────────────────
+    # OTC:BESIY is never routed through Tradier.  Individual stable/quote calls
+    # are made via the shared fmp_governor so OTC traffic coexists with weekly
+    # fundamentals and earnings workloads within the 300 calls/min plan limit.
+    # Results are stored under the canonical key (OTC:BESIY) in both the return
+    # dict and the shared LKG cache.  Fields absent from the FMP response remain
+    # absent — no zeros are synthesised for missing values.
+    if otc_tickers_h:
+        import os as _os_otc
+        _otc_fmp_key = _os_otc.getenv("FMP_API_KEY", "")
+        if _otc_fmp_key:
+            from services.otc_service import otc_to_fmp as _otc_to_fmp_h
+            from services.fmp_governor import fmp_governor as _fmp_gov_h
+            import asyncio as _aio_otc
+            for _otc_can in otc_tickers_h:
+                _otc_bare = _otc_to_fmp_h(_otc_can)
+                if not _otc_bare:
+                    continue
+                _ok_h = await _fmp_gov_h.acquire(job_name="otc_quotes_home")
+                if not _ok_h:
+                    print(f"[HOME] batch_quotes OTC: governor budget hit")
+                    break
+                try:
+                    async with _httpx.AsyncClient(timeout=8.0) as _c_otc:
+                        _resp_otc = await _c_otc.get(
+                            "https://financialmodelingprep.com/stable/quote",
+                            params={"symbol": _otc_bare, "apikey": _otc_fmp_key},
+                        )
+                    _fmp_gov_h.record_call()
+                    if _resp_otc.status_code == 200:
+                        _data_otc = _resp_otc.json()
+                        if _data_otc and isinstance(_data_otc, list):
+                            _item_otc = _data_otc[0]
+                            _price_otc = _item_otc.get("price")
+                            if _price_otc is not None:
+                                _canon_upper = _otc_can.upper()
+                                _chg_otc  = _item_otc.get("change")
+                                _pct_otc  = _item_otc.get("changePercentage")
+                                _vol_otc  = _item_otc.get("volume")
+                                _avg_otc  = _item_otc.get("avgVolume")
+                                _prev_otc = _item_otc.get("previousClose")
+                                if _prev_otc is None and _price_otc is not None and _chg_otc is not None:
+                                    try:
+                                        _prev_otc = round(float(_price_otc) - float(_chg_otc), 4)
+                                    except (TypeError, ValueError):
+                                        _prev_otc = None
+                                _row_otc = {
+                                    "symbol":            _canon_upper,
+                                    "last":              _price_otc,
+                                    "change":            _chg_otc,
+                                    "change_percentage": _pct_otc,
+                                    "volume":            _vol_otc,
+                                    "average_volume":    _avg_otc,
+                                    "high":              _item_otc.get("dayHigh"),
+                                    "low":               _item_otc.get("dayLow"),
+                                    "description":       _item_otc.get("name") or "",
+                                    "previous_close":    _prev_otc,
+                                    "quote_source":      "fmp_otc",
+                                    "quote_cached_at":   _now_ts,
+                                    "quote_is_stale":    False,
+                                    "quote_fallback_reason": None,
+                                }
+                                out[_canon_upper] = _row_otc
+                                # Write to shared canonical LKG under canonical key
+                                cache.set(f"quote:lkg:{_canon_upper}", _row_otc, _LKG_TTL)
+                except Exception as _exc_otc:
+                    print(f"[HOME] batch_quotes OTC FMP error for {_otc_bare}: {_exc_otc}")
 
     return out
 

@@ -76,7 +76,14 @@ _ETF_KEYWORDS     = ("etf","fund","trust","etn","index","ishares","spdr","vangua
 
 def _is_eligible(symbol: str) -> bool:
     sym = symbol.upper().strip()
-    if not sym or ":" in sym:
+    if not sym:
+        return False
+    # OTC watchlist listings (OTC:BESIY) are eligible for earnings tracking.
+    # The bare FMP symbol (BESIY) is derived only at the provider call boundary.
+    if sym.startswith("OTC:"):
+        return True
+    # All other colon-prefixed exchange symbols are excluded.
+    if ":" in sym:
         return False
     if any(sym.startswith(p) for p in _FOREIGN_PREFIXES):
         return False
@@ -522,6 +529,22 @@ async def _refresh_schedule(symbols: list[str], now_et: datetime) -> None:
 
     # Build universe set for O(1) lookup
     sym_set = {s.upper().strip() for s in symbols if s}
+
+    # OTC: build bidirectional maps and add bare FMP symbols to sym_set.
+    # FMP calendar responses use bare symbols (BESIY), not canonical ones
+    # (OTC:BESIY).  Adding bare symbols to sym_set lets the calendar
+    # client-side filter match them; we remap back to canonical before any
+    # store write so the canonical key (OTC:BESIY) is always preserved.
+    from services.otc_service import is_otc_symbol as _is_otc_e, otc_to_fmp as _otc_to_fmp_e
+    _otc_bare_to_canonical: dict[str, str] = {}   # "BESIY"    → "OTC:BESIY"
+    _otc_canonical_to_bare: dict[str, str] = {}   # "OTC:BESIY"→ "BESIY"
+    for _s in list(sym_set):
+        if _is_otc_e(_s):
+            _bare = _otc_to_fmp_e(_s).upper()
+            _otc_bare_to_canonical[_bare]    = _s
+            _otc_canonical_to_bare[_s]       = _bare
+            sym_set.add(_bare)   # so calendar client-side filter matches BESIY
+
     now_utc = datetime.now(timezone.utc)
     run_ts  = now_utc.isoformat()
 
@@ -594,6 +617,14 @@ async def _refresh_schedule(symbols: list[str], now_et: datetime) -> None:
             }
             reg_matches += 1
 
+    # Remap bare OTC calendar entries to canonical keys before the main loop.
+    # e.g. cal_by_sym["BESIY"] → cal_by_sym["OTC:BESIY"].
+    # The bare entry is removed so cal_by_sym.get("OTC:BESIY") finds the row
+    # directly, and upsert_target is always called with the canonical symbol.
+    for _bare_otc, _canon_otc in _otc_bare_to_canonical.items():
+        if _bare_otc in cal_by_sym and _canon_otc not in cal_by_sym:
+            cal_by_sym[_canon_otc] = cal_by_sym.pop(_bare_otc)
+
     cal_matches = len(cal_by_sym)
     processed   = 0
     fallback_calls = 0
@@ -622,7 +653,9 @@ async def _refresh_schedule(symbols: list[str], now_et: datetime) -> None:
             try:
                 daily_budget.spend("fmp")
                 fallback_calls += 1
-                records = await fmp.get_earnings_history(sym, limit=4)
+                # Use bare FMP symbol for OTC (BESIY not OTC:BESIY); US tickers unchanged
+                _fallback_fmp_sym = _otc_canonical_to_bare.get(sym, sym)
+                records = await fmp.get_earnings_history(_fallback_fmp_sym, limit=4)
                 await asyncio.sleep(0.05)
             except Exception as exc:
                 print(f"[EarnMon] fallback history error {sym}: {exc}")

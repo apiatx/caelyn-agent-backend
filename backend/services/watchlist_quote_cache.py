@@ -67,10 +67,11 @@ _is_tradier_eligible = is_tradier_quote_eligible
 def is_fmp_symbol_eligible(symbol: str) -> bool:
     """Return True if symbol should be sent to FMP for fundamentals / quotes.
 
-    Same rule as is_tradier_quote_eligible:
+    Rules (in order):
       1. Empty / blank → False
-      2. Contains ":" → False  (AIM:FTC, LSE:VOD, TSX:XYZ, FRA:APR, …)
-      3. Otherwise → True
+      2. OTC: prefix  → True   (OTC:BESIY is eligible; bare BESIY sent at call site)
+      3. Any other ":" → False  (AIM:FTC, LON:VOD, TSX:XYZ, FRA:APR, …)
+      4. Otherwise    → True
 
     Keeping a dedicated name makes call sites self-documenting and allows
     the FMP and Tradier eligibility rules to diverge in the future without
@@ -78,6 +79,9 @@ def is_fmp_symbol_eligible(symbol: str) -> bool:
     """
     if not symbol or not symbol.strip():
         return False
+    from services.otc_service import is_otc_symbol
+    if is_otc_symbol(symbol):
+        return True   # OTC listing — eligible; caller strips prefix before the HTTP call
     return ":" not in symbol
 
 
@@ -451,6 +455,103 @@ async def _fetch_direct(symbols: list[str]) -> dict[str, dict]:
 
 # ── Refresh orchestration ──────────────────────────────────────────────────
 
+async def _fetch_otc_quotes_fmp(otc_canonical: list[str]) -> dict[str, dict]:
+    """Fetch FMP quotes for OTC watchlist symbols.
+
+    Calls ``stable/quote`` individually for each OTC symbol (Starter plan has
+    no batch endpoint).  Rate-limiting is delegated to the process-wide
+    ``fmp_governor`` so OTC quote traffic coexists correctly with the weekly
+    fundamentals and earnings refresh workloads.
+
+    Results are keyed by the *canonical* symbol (e.g. ``OTC:BESIY``), never
+    by the bare FMP symbol.  Fields that FMP does not return are absent from
+    the dict — callers must not fabricate zeros for missing values.
+    """
+    import os as _os
+    import httpx as _httpx
+    from services.otc_service import otc_to_fmp
+    from services.fmp_governor import fmp_governor
+
+    fmp_key = _os.getenv("FMP_API_KEY", "")
+    if not fmp_key or not otc_canonical:
+        return {}
+
+    now_ts = time.time()
+    out: dict[str, dict] = {}
+
+    for canonical in otc_canonical:
+        bare = otc_to_fmp(canonical)
+        if not bare:
+            continue
+
+        # Use the shared process-wide governor so OTC quote calls count
+        # alongside fundamentals/earnings traffic (300 calls/min paid plan).
+        ok = await fmp_governor.acquire(job_name="otc_quotes")
+        if not ok:
+            print(f"[WQ_CACHE_OTC] governor budget hit — stopping OTC quote loop")
+            break
+
+        try:
+            async with _httpx.AsyncClient(timeout=8.0) as _c:
+                resp = await _c.get(
+                    "https://financialmodelingprep.com/stable/quote",
+                    params={"symbol": bare, "apikey": fmp_key},
+                )
+            fmp_governor.record_call()
+
+            if resp.status_code != 200:
+                print(f"[WQ_CACHE_OTC] HTTP {resp.status_code} for {bare}")
+                continue
+
+            data = resp.json()
+            if not data or not isinstance(data, list):
+                continue
+
+            item = data[0]
+            price = item.get("price")
+            if price is None:
+                # FMP has no price for this OTC symbol — do not write a fake record
+                print(f"[WQ_CACHE_OTC] no price from FMP for {bare} ({canonical})")
+                continue
+
+            change     = item.get("change")
+            change_pct = item.get("changePercentage")   # stable/quote field name
+            volume     = item.get("volume")              # None stays None — not 0
+            avg_vol    = item.get("avgVolume")           # None stays None — not 0
+
+            # previous_close: prefer explicit field; derive only when both inputs exist
+            prev_close = item.get("previousClose")
+            if prev_close is None and price is not None and change is not None:
+                try:
+                    prev_close = round(float(price) - float(change), 4)
+                except (TypeError, ValueError):
+                    prev_close = None
+
+            row: dict = {
+                "symbol":            canonical.upper(),   # canonical key always
+                "last":              price,
+                "change":            change,
+                "change_percentage": change_pct,          # None if FMP omits it
+                "volume":            volume,               # None if FMP omits it
+                "average_volume":    avg_vol,             # None if FMP omits it
+                "high":              item.get("dayHigh"),
+                "low":              item.get("dayLow"),
+                "description":       item.get("name") or "",
+                "previous_close":    prev_close,
+                "quote_source":      "fmp_otc",
+                "quote_cached_at":   now_ts,
+                "quote_is_stale":    False,
+                "quote_fallback_reason": None,
+            }
+            out[canonical.upper()] = row
+
+        except Exception as exc:
+            print(f"[WQ_CACHE_OTC] FMP quote error for {bare}: {exc}")
+
+    print(f"[WQ_CACHE_OTC] FMP OTC quotes: {len(out)}/{len(otc_canonical)} resolved")
+    return out
+
+
 async def _do_refresh(symbols: list[str]) -> None:
     """Refresh via shared home_service path; direct Tradier as cold-cache fallback.
 
@@ -459,12 +560,19 @@ async def _do_refresh(symbols: list[str]) -> None:
     during the post-restart THEME_RS warmup that consumes all 110 req/min slots)
     AND the in-memory per-symbol LKG is also empty (cold restart).
 
-    Cold-cache fallback: when the primary path returns nothing AND _quote_cache is
+    Cold-cache fallback: when the primary path returned nothing AND _quote_cache is
     still empty, a single direct Tradier batch is fired using TRADIER_API_KEY
     (bypasses the shared rate limiter).  This fires at most once per cold restart —
     subsequent requests hit the 10-minute module cache.
+
+    OTC path: symbols with the OTC: prefix are fetched via FMP using the shared
+    fmp_governor, in addition to the Tradier path for US symbols.  OTC results
+    are merged into _quote_cache under their canonical key (OTC:BESIY).
     """
     global _quote_cache, _cache_ts
+
+    from services.otc_service import split_otc_us
+    otc_syms, _ = split_otc_us(symbols)
 
     merged: dict[str, dict] = {}
     fetch_source = "shared(home_service)"
@@ -479,6 +587,16 @@ async def _do_refresh(symbols: list[str]) -> None:
         print(f"[WQ_CACHE] shared-path error, falling back: {exc}")
         merged = await _fetch_direct(symbols)
         fetch_source = "direct(tradier)"
+
+    # ── OTC path: FMP quotes for OTC:-prefixed symbols ────────────────────────
+    # Runs regardless of whether the US/Tradier path above succeeded or failed.
+    # OTC symbols are never routed through Tradier; results go into the same
+    # _quote_cache dict under canonical keys so the Watchlist consumer is unaware
+    # of any provider difference.
+    if otc_syms:
+        otc_quotes = await _fetch_otc_quotes_fmp(otc_syms)
+        if otc_quotes:
+            merged.update(otc_quotes)
 
     if merged:
         # Field-level merge: incoming sparse quote never erases valid existing fields
