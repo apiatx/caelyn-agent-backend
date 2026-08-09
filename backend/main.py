@@ -561,6 +561,11 @@ async def lifespan(app):
             _rss_ensure_table_d()
         except Exception as _rss_tbl_err:
             print(f"[STARTUP] RSS archive table init error (deferred, non-fatal): {_rss_tbl_err}")
+        try:
+            from services.playbook.strategy_screener.screener_storage import init_screener_tables as _init_screener_tbls
+            _init_screener_tbls()
+        except Exception as _screener_tbl_err:
+            print(f"[STARTUP] screener tables init error (deferred, non-fatal): {_screener_tbl_err}")
         print("[STARTUP] _deferred_sync_startup complete")
 
     import threading
@@ -668,6 +673,7 @@ async def lifespan(app):
     # /api/sectors/page-data endpoints still work lazily (populated on first request via sr:dashboard:v1).
     # asyncio.create_task(_sector_rotation_precompute_loop())
     async def _canon_maint_deferred():
+        await asyncio.sleep(0)   # yield to event loop before import so GET / can respond first
         try:
             from services.canonical_history_backfill import start_maintenance_scheduler as _fn
             _fn()
@@ -676,6 +682,7 @@ async def lifespan(app):
     asyncio.create_task(_canon_maint_deferred())
     asyncio.create_task(_hl_boot_and_run(_hl_state))
     async def _bittensor_deferred():
+        await asyncio.sleep(0)   # yield to event loop before import so GET / can respond first
         try:
             from services.bittensor.router import _dashboard_refresh_loop as _bittensor_refresh_loop
             asyncio.create_task(_bittensor_refresh_loop())
@@ -975,6 +982,7 @@ async def lifespan(app):
     # Runs after a 5s delay so sector rotation loop has a head start.
     # No LLM calls, no API calls — pure cache/disk reads + static registry.
     async def _thematic_warmup_deferred():
+        await asyncio.sleep(0)   # yield to event loop before import so GET / can respond first
         try:
             from services.thematic_context_provider import warmup_thematic_context as _thematic_warmup
             asyncio.create_task(_thematic_warmup())
@@ -985,6 +993,7 @@ async def lifespan(app):
     asyncio.create_task(_dynamic_thematic_universe_loop())
     # Themes by Relative Strength warmup: non-blocking loop registration.
     async def _theme_rs_warmup_deferred():
+        await asyncio.sleep(0)   # yield to event loop before import so GET / can respond first
         try:
             from services.theme_rs_service import warmup_theme_rs as _theme_rs_warmup
             asyncio.create_task(_theme_rs_warmup())
@@ -1228,6 +1237,7 @@ async def lifespan(app):
     # Also runs a startup staleness check (45s delay) so restarts mid-week
     # immediately refresh stale snapshots without waiting for Sunday.
     async def _calendar_snap_deferred():
+        await asyncio.sleep(0)   # yield to event loop before import so GET / can respond first
         try:
             from services.calendar_snapshot_service import (
                 weekly_scheduler_loop as _calendar_snap_loop,
@@ -1248,6 +1258,7 @@ async def lifespan(app):
     #   Sun-Fri 11:45 ET  social fundamentals warm
     #   Fri 02:00 ET  watchlist+portfolio fundamentals warm
     async def _screener_hub_deferred():
+        await asyncio.sleep(0)   # yield to event loop before import so GET / can respond first
         try:
             from services.screener_hub_scheduler import scheduler_loop as _screener_hub_loop
             asyncio.create_task(_screener_hub_loop())
@@ -1294,6 +1305,7 @@ async def lifespan(app):
     # cold Neon was adding 5-8s here.  The sweeper loop starts at ≥ 120s delay
     # so the table is guaranteed to exist before the first write.
     async def _rss_sweeper_deferred():
+        await asyncio.sleep(0)   # yield to event loop before import so GET / can respond first
         try:
             from services.watchlist_rss_sweeper import rss_sweeper_loop as _rss_sweeper_loop
             asyncio.create_task(_rss_sweeper_loop())

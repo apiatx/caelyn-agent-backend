@@ -75,11 +75,8 @@ from services.playbook.strategy_screener.screener_filters import (
 
 router = APIRouter(prefix="/api/strategy-screener", tags=["strategy-screener"])
 
-# Ensure tables exist on module load
-try:
-    init_screener_tables()
-except Exception as _e:
-    print(f"[SCREENER] Table init deferred (DB may not be ready): {_e}")
+# Table initialization is performed in _deferred_sync_startup() inside main.py
+# so that importing this router never touches Neon or performs DDL.
 
 _FILTER_PARAMS_DOC = (
     "Optional filters (applied to stored snapshot, no regeneration): "
