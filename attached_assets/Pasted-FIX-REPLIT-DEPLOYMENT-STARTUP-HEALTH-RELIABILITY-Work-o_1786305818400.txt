@@ -1,0 +1,344 @@
+FIX REPLIT DEPLOYMENT STARTUP HEALTH RELIABILITY
+
+Work only in the live FastAPI backend Replit workspace.
+
+Read and obey AGENTS.md first.
+
+This task is based on the completed read-only startup diagnosis.
+
+Do NOT re-diagnose from scratch.
+Do NOT blame Neon generically.
+Do NOT republish until tests pass.
+Do NOT touch frontend.
+Do NOT change API contracts.
+Do NOT remove required startup jobs.
+Do NOT disable health checks.
+
+PRODUCT REQUIREMENT
+
+GET / must become responsive independently of:
+
+- Neon cold wake
+- DB table initialization
+- cache hydration
+- Theme RS
+- screeners
+- news
+- options
+- Hyperliquid
+- provider APIs
+- large disk/cache loads
+
+The server should bind and answer health immediately, then perform nonessential
+startup work afterward.
+
+============================================================
+PROVEN ROOT CAUSE 1 — IMPORT-TIME DATABASE WORK
+============================================================
+
+Current import chain includes:
+
+main.py
+→ strategy screener router
+→ init_screener_tables()
+→ Neon connection
+→ DDL
+→ commit
+
+This occurs during module import before the application becomes reliably
+servable.
+
+REMOVE this import-time side effect.
+
+Do NOT remove the table initialization capability.
+
+Move it into the existing deferred/lazy initialization lifecycle.
+
+Requirements:
+
+- importing screener_router performs ZERO DB calls
+- importing screener_router performs ZERO DDL
+- importing screener_router does not require Neon
+- first health response does not depend on screener table creation
+
+Find the existing deferred startup/database initialization mechanism and register
+init_screener_tables() there exactly once.
+
+If table initialization is already performed elsewhere, do NOT duplicate it.
+
+============================================================
+PROVEN ROOT CAUSE 2 — POST-YIELD EVENT LOOP STARVATION
+============================================================
+
+Current lifespan yields quickly, but several immediate startup tasks execute
+synchronous work before their first await.
+
+Audit the already-identified startup wrappers including:
+
+- thematic context warmup
+- Theme RS warmup
+- calendar snapshot startup
+- screener hub startup
+- RSS/news startup
+- canonical maintenance
+- bittensor startup
+- earnings warmup
+- other immediate post-yield wrappers
+
+The requirement is NOT merely:
+
+    asyncio.create_task(...)
+
+The task itself must yield control before performing meaningful synchronous work.
+
+A background task that immediately imports a heavy module or parses large files
+can still block GET /.
+
+============================================================
+REQUIRED STARTUP GATE
+============================================================
+
+Introduce one very small readiness-safe startup barrier.
+
+After lifespan yields, give the event loop an opportunity to serve health before
+nonessential startup fan-out begins.
+
+Preferred architecture:
+
+- lifespan performs only essential app setup
+- yield
+- nonessential startup coordinator waits for a short readiness handoff
+- then starts background initialization
+
+Do NOT use a long arbitrary sleep as the solution.
+
+A single `await asyncio.sleep(0)` by itself may not be sufficient if many child
+tasks all wake simultaneously.
+
+Use a small coordinated post-yield bootstrap so startup tasks are launched in
+controlled waves rather than all at once.
+
+============================================================
+CONTROLLED STARTUP WAVES
+============================================================
+
+Classify post-yield work into:
+
+WAVE 1 — lightweight, nonblocking registration
+- loop/task registration
+- in-memory state only
+
+WAVE 2 — disk/cache hydration
+- thematic LKG
+- Theme RS LKG
+- earnings cache
+- other file-backed caches
+
+WAVE 3 — DB initialization/recovery
+- table ensure/init
+- Neon seed/recovery
+- snapshot recovery
+
+WAVE 4 — provider/network/background refresh
+- RSS
+- screeners
+- Hyperliquid
+- external refreshes
+
+Do not require one wave to fully finish before the next unless dependencies
+actually require it.
+
+The point is to prevent one giant synchronous startup burst.
+
+============================================================
+BLOCKING SYNC WORK
+============================================================
+
+Any startup function that performs:
+
+- psycopg2
+- filesystem reads/parsing
+- CPU-heavy cache builds
+- large JSON/gzip loads
+- synchronous network I/O
+
+must not execute directly on the asyncio event loop.
+
+Use the existing thread/executor pattern for genuinely blocking sync work.
+
+BUT:
+
+do not wrap arbitrary event-loop-owning functions in to_thread().
+
+If a function internally calls asyncio.create_task(), get_event_loop(), or
+expects the main event loop, split it:
+
+- blocking sync preparation → thread
+- asyncio task registration → main event loop
+
+Do not repeat the prior CANON_MAINT mistake where moving the whole function into
+a worker thread broke its event-loop access.
+
+============================================================
+HEALTH ROUTE CONTRACT
+============================================================
+
+GET / remains trivial and unchanged unless absolutely necessary.
+
+Do NOT make health depend on:
+
+- DB connected
+- startup jobs complete
+- cache warm
+- providers reachable
+
+Health means:
+
+    process is alive
+    FastAPI router is available
+    event loop can respond
+
+If a separate deeper readiness/status endpoint already exists, preserve it for
+dependency diagnostics.
+
+============================================================
+TESTS
+============================================================
+
+Add focused startup regression tests.
+
+1. Import screener_router with DB mocked unavailable.
+   - import succeeds
+   - zero DB connection attempts
+   - zero init_screener_tables calls
+
+2. Import main application with Neon unavailable.
+   - app construction succeeds
+
+3. Lifespan reaches yield without awaiting database startup.
+
+4. Immediately after yield, GET / can be serviced while a mocked 30-second Neon
+   initialization remains blocked.
+
+THIS IS CRITICAL.
+
+5. Mock Theme RS warmup doing 10 seconds of blocking work.
+   - GET / remains responsive
+
+6. Mock thematic context warmup doing 10 seconds of blocking work.
+   - GET / remains responsive
+
+7. Mock RSS/news startup doing 10 seconds of blocking work.
+   - GET / remains responsive
+
+8. Ensure deferred DB initialization still eventually executes once.
+
+9. Ensure startup background jobs are not duplicated.
+
+10. Ensure shutdown still cancels/cleans existing task lifecycle correctly.
+
+============================================================
+COLD-START MEASUREMENT
+============================================================
+
+Perform ONE clean local cold start after implementation.
+
+No repeated rapid restart loops.
+
+Record:
+
+T0 process command
+T1 first Python/application log
+T2 lifespan entered
+T3 lifespan yielded
+T4 port accepts connections
+T5 first GET / returns 200
+
+Targets:
+
+T3 - T2:
+    < 100ms
+
+T5 - T4:
+    < 500ms preferred
+    < 1s maximum
+
+Most importantly:
+
+A deliberately slow mocked Neon dependency must NOT increase T5.
+
+Report import duration separately.
+
+============================================================
+IMPORT-TIME AUDIT AFTER FIX
+============================================================
+
+Re-run the recursive import-side-effect audit.
+
+There must be:
+
+ZERO import-time DB queries
+ZERO import-time DDL
+ZERO import-time provider HTTP requests
+
+If another application router performs import-time database setup, fix that same
+class of issue if it is directly on the main startup import path.
+
+Do not broaden into unrelated modules not imported during startup.
+
+============================================================
+DO NOT PUBLISH YET
+============================================================
+
+After local tests and cold-start measurement:
+
+STOP.
+
+Report results.
+
+Do not publish automatically.
+
+We will review the diff first.
+
+============================================================
+EXPECTED PRODUCTION SCOPE
+============================================================
+
+Expected:
+
+backend/services/playbook/strategy_screener/screener_router.py
+backend/main.py
+
+Possibly a tiny startup helper if one already exists.
+
+If this requires broad service rewrites, STOP and report why.
+
+============================================================
+DEFINITION OF DONE
+============================================================
+
+- importing routers cannot block on Neon
+- lifespan yields immediately
+- port can answer GET / immediately after binding
+- startup background work cannot starve the event loop
+- Neon cold wake cannot fail deployment health
+- provider outage cannot fail deployment health
+- caches may warm afterward
+- all existing jobs still eventually start
+- no duplicate schedulers
+- no API behavior changes
+
+Final report:
+
+- exact files changed
+- import-time DB call before/after
+- post-yield scheduling before/after
+- cold-start timings
+- GET / latency
+- 30-second mocked Neon test
+- blocking warmup tests
+- full test results
+- diff/stat
+- git status
+- commit SHA
+- DO NOT PUBLISH
