@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-08-09T14:54:30.340210+00:00",
+  "updated_at": "2026-08-09T17:58:08.742836+00:00",
   "symbols": {
     "TEST_MARA": {
       "symbol": "TEST_MARA",
@@ -80169,8 +80169,8 @@
       "oldest_bar_date": "2021-04-21",
       "newest_bar_date": "2026-07-30",
       "years_available": 5.2,
-      "fetched_at": "2026-08-09T14:37:27.766092+00:00",
-      "stale_after": "2026-08-13T14:37:27.766102+00:00",
+      "fetched_at": "2026-08-09T15:27:42.142093+00:00",
+      "stale_after": "2026-08-13T15:27:42.142104+00:00",
       "history_status": "available_lifetime_under_10y",
       "base_history_status": "available_lifetime_under_10y",
       "error_reason": null,
@@ -80180,8 +80180,8 @@
       "is_provider_cap": false,
       "depth_confidence": 0.85,
       "fib_scope": "multi_year",
-      "last_attempt_at": "2026-08-09T14:37:27.766092+00:00",
-      "next_retry_at": "2026-08-13T14:37:27.766102+00:00",
+      "last_attempt_at": "2026-08-09T15:27:42.142093+00:00",
+      "next_retry_at": "2026-08-13T15:27:42.142104+00:00",
       "cache_usable": true,
       "is_10y_complete": true,
       "volume_change_1d_pct": 9.898024,
@@ -83405,7 +83405,7 @@
       "years_available": 0.2,
       "fetched_at": "2026-08-09T14:30:58.971652+00:00",
       "stale_after": "2026-08-13T14:30:58.971665+00:00",
-      "history_status": "actual_ticker_history_limit",
+      "history_status": "cache_corrupt_needs_rebuild",
       "base_history_status": "actual_ticker_history_limit",
       "error_reason": null,
       "source_priority": 1,
@@ -115939,7 +115939,7 @@
       "years_available": 0.1,
       "fetched_at": "2026-08-09T14:30:52.543845+00:00",
       "stale_after": "2026-08-13T14:30:52.543857+00:00",
-      "history_status": "actual_ticker_history_limit",
+      "history_status": "cache_corrupt_needs_rebuild",
       "base_history_status": "actual_ticker_history_limit",
       "error_reason": null,
       "source_priority": 1,
@@ -119883,7 +119883,7 @@
       "years_available": 0.0,
       "fetched_at": "2026-08-09T14:30:46.190782+00:00",
       "stale_after": "2026-08-13T14:30:46.190794+00:00",
-      "history_status": "actual_ticker_history_limit",
+      "history_status": "cache_corrupt_needs_rebuild",
       "base_history_status": "actual_ticker_history_limit",
       "error_reason": null,
       "source_priority": 1,
@@ -135836,8 +135836,8 @@
     "SOIL": {
       "history_status": "fetch_failed",
       "error_reason": "no_bars_from_providers",
-      "last_attempt_at": "2026-08-09T14:34:23.816990+00:00",
-      "next_retry_at": "2026-08-09T18:34:23.817004+00:00",
+      "last_attempt_at": "2026-08-09T15:26:51.118640+00:00",
+      "next_retry_at": "2026-08-09T19:26:51.118650+00:00",
       "provider": "tradier"
     },
     "URA": {
@@ -139591,8 +139591,8 @@
     "AMETEK": {
       "history_status": "fetch_failed",
       "error_reason": "no_bars_from_providers",
-      "last_attempt_at": "2026-08-09T14:34:07.375668+00:00",
-      "next_retry_at": "2026-08-09T18:34:07.375683+00:00",
+      "last_attempt_at": "2026-08-09T15:26:20.694515+00:00",
+      "next_retry_at": "2026-08-09T19:26:20.694526+00:00",
       "provider": "tradier"
     },
     "AZZ": {
