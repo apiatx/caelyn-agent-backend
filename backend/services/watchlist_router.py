@@ -242,6 +242,12 @@ _news_lkg: dict[str, dict] = {}    # watchlist_id -> {"data": dict, "ts": float}
 _news_bg_building: set[str] = set()
 _NEWS_LKG_SERVE_TTL = 20 * 60      # 20 min — after this, serve stale + bg-refresh
 
+# Single-flight guard for Neon-archive cold builds.
+# Prevents concurrent cold GETs from each triggering an expensive archive
+# reconstruction for the same watchlist.  Also used by _prewarm_news_lkg so
+# that a concurrent first request defers rather than running a parallel build.
+_news_archive_building: set[str] = set()
+
 # ── Hyperscaler article cache (module-level — NOT rebuilt on every GET /news) ──
 #
 # Architecture: the 72-hour archive query + score_article loop runs at most once
@@ -293,8 +299,16 @@ def _news_response(
     ts: float,
     is_building: bool = False,
     debug_reason: str | None = None,
+    cache_source: str = "live_refresh",
 ) -> dict:
-    """Build the standardised Live News response."""
+    """Build the standardised Live News response.
+
+    cache_source values:
+      "live_refresh"  — built from live Yahoo/Google RSS provider calls
+      "neon_archive"  — reconstructed from the durable Neon RSS archive (cold start)
+      "memory_lkg"    — served from the in-process LKG dict without any I/O
+      "building"      — no data yet; background build in progress
+    """
     age = round(_time.time() - ts)
     cached_at = datetime.utcfromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%SZ")
     top_articles = major_summary.get("major_developments", [])
@@ -310,6 +324,8 @@ def _news_response(
         "cached_at":        cached_at,
         "cache_age_s":      age,
         "is_building":      is_building,
+        # Additive diagnostic: provenance of this payload (does not break existing consumers)
+        "cache_source":     cache_source,
     }
     if debug_reason:
         resp["debug_reason"] = debug_reason
@@ -331,7 +347,7 @@ async def _bg_refresh_news(watchlist_id: str, tickers: list[str]) -> None:
             print(f"[NEWS_LKG] major build error (non-fatal): {_e}")
             enriched_map, major_summary = raw_map, {}
         ts   = _time.time()
-        data = _news_response(enriched_map, major_summary, ts)
+        data = _news_response(enriched_map, major_summary, ts, cache_source="live_refresh")
         _news_lkg[watchlist_id] = {"data": data, "ts": ts}
         top_ct = len(data.get("top_articles") or [])
         art_ct = sum(len(v) for v in enriched_map.values())
@@ -361,6 +377,7 @@ async def _get_news_for_watchlist(watchlist_id: str, tickers: list[str]) -> dict
         age  = now - lkg["ts"]
         data = dict(lkg["data"])
         data["cache_age_s"] = round(age)
+        data["cache_source"] = "memory_lkg"   # always overwrite — serving from process memory
         data["is_building"] = watchlist_id in _news_bg_building
         if age > _NEWS_LKG_SERVE_TTL and watchlist_id not in _news_bg_building:
             asyncio.create_task(_bg_refresh_news(watchlist_id, tickers))
@@ -368,26 +385,63 @@ async def _get_news_for_watchlist(watchlist_id: str, tickers: list[str]) -> dict
         await _attach_live_fields(data, tickers)
         return data
 
-    # Cold start — build synchronously (only happens once per process restart)
-    print(f"[NEWS_LKG] cold build  wl={watchlist_id}  tickers={len(tickers)}")
-    cold_error: str | None = None
+    # ── Cold path: Neon-archive reconstruction (NEVER live RSS on request path) ─
+    #
+    # Priority:
+    #   1. Neon archive reconstruction  → instant usable payload, background live refresh
+    #   2. Archive unavailable / empty  → structured building response, background live refresh
+    #
+    # fetch_news_for_tickers() (461×2 RSS HTTP calls, 12-90s) is NEVER called
+    # synchronously here.  It runs only inside _bg_refresh_news (background task).
+    #
+    # Single-flight: if _news_archive_building already contains this watchlist_id
+    # (concurrent cold GET or prewarm still in progress), coalesce: return an
+    # immediate building response and let the in-flight build win.
+
+    if watchlist_id in _news_archive_building:
+        print(f"[NEWS_LKG] cold coalesced wl={watchlist_id} — archive build already in flight")
+        coalesced = _news_response(
+            {}, {}, now,
+            is_building=True,
+            cache_source="building",
+            debug_reason="archive_build_in_progress",
+        )
+        if watchlist_id not in _news_bg_building:
+            asyncio.create_task(_bg_refresh_news(watchlist_id, tickers))
+        await _attach_live_fields(coalesced, tickers)
+        return coalesced
+
+    # Attempt Neon archive reconstruction — zero provider calls
+    _news_archive_building.add(watchlist_id)
     try:
-        raw_map = await fetch_news_for_tickers(tickers)
-        try:
-            enriched_map, major_summary = _build_major(raw_map)
-        except Exception as _e:
-            print(f"[NEWS_LKG] major build error (non-fatal): {_e}")
-            enriched_map, major_summary = raw_map, {}
-    except Exception as exc:
-        print(f"[NEWS_LKG] cold build fetch error wl={watchlist_id}: {exc}")
-        enriched_map, major_summary = {}, {}
-        cold_error = f"fetch_error: {type(exc).__name__}"
-    ts   = _time.time()
-    data = _news_response(enriched_map, major_summary, ts,
-                          debug_reason=cold_error)
-    _news_lkg[watchlist_id] = {"data": data, "ts": ts}
-    await _attach_live_fields(data, tickers)
-    return data
+        data = await _build_news_from_archive(watchlist_id, tickers)
+    finally:
+        _news_archive_building.discard(watchlist_id)
+
+    if data is not None:
+        ts_stored = _time.time()
+        _news_lkg[watchlist_id] = {"data": data, "ts": ts_stored}
+        # Background live RSS refresh — will update LKG when done (~30-60s)
+        if watchlist_id not in _news_bg_building:
+            asyncio.create_task(_bg_refresh_news(watchlist_id, tickers))
+        data = dict(data)
+        data["cache_age_s"] = 0
+        await _attach_live_fields(data, tickers)
+        return data
+
+    # Archive unavailable or empty — return structured building response immediately.
+    # Never fall back to synchronous fetch_news_for_tickers.
+    print(f"[NEWS_LKG] archive unavailable wl={watchlist_id} — returning building response")
+    building = _news_response(
+        {}, {}, now,
+        is_building=True,
+        cache_source="building",
+        debug_reason="archive_unavailable",
+    )
+    if watchlist_id not in _news_bg_building:
+        asyncio.create_task(_bg_refresh_news(watchlist_id, tickers))
+    await _attach_live_fields(building, tickers)
+    return building
 
 
 # ── Live-field helpers (ticker_activity, hyperscaler_articles, rss_activity_meta) ──
@@ -665,8 +719,12 @@ async def _attach_live_fields(data: dict, tickers: list[str]) -> None:
     try:
         cache_age_hyp = now_ts - _HYP_CACHE["built_at"]
         if _HYP_CACHE["built_at"] == 0.0:
-            # Cold start: build once and await so the first response has real data
-            await _rebuild_hyperscaler_cache(tickers)
+            # Cold start: fire rebuild in background — do NOT await synchronously.
+            # _prewarm_news_lkg() schedules this before any request arrives.
+            # On the rare first-request-wins race the cache starts empty (hyperscaler_articles=[])
+            # and fills within ~5s without blocking the /news response.
+            if not _HYP_CACHE_BUILDING:
+                asyncio.create_task(_rebuild_hyperscaler_cache(tickers))
         elif cache_age_hyp > _HYP_CACHE_TTL_S and not _HYP_CACHE_BUILDING:
             # Stale: rebuild in background; serve the current (slightly stale) cache
             asyncio.create_task(_rebuild_hyperscaler_cache(tickers))
@@ -699,6 +757,174 @@ async def _attach_live_fields(data: dict, tickers: list[str]) -> None:
             "last_sweep_duration_ms":  None,
             "ticker_count":            len(tickers),
         }
+
+
+# ── Neon-archive news reconstruction ─────────────────────────────────────────
+#
+# _build_news_from_archive  — reconstruct a full LKG payload from the durable
+#     Neon RSS archive for a single watchlist.  Zero provider calls.  Used by
+#     both the cold-path of _get_news_for_watchlist and the startup prewarm.
+#
+# _prewarm_news_lkg  — post-yield bootstrap task.  Walks all active watchlists
+#     and hydrates _news_lkg from Neon before any user request arrives so that
+#     the first GET /news always returns a real payload without a live RSS fanout.
+
+async def _build_news_from_archive(
+    watchlist_id: str,
+    tickers: list[str],
+) -> dict | None:
+    """
+    Reconstruct a news LKG payload from the durable Neon RSS article archive.
+
+    Flow:
+      1. query_recent_articles_for_scoring(tickers, hours=48) — single bulk Neon read
+      2. score_article() on each row (deterministic, no I/O) — same scorer used by
+         the live fetch path so scoring semantics are identical
+      3. _build_major() — existing dedup/ranking pipeline
+      4. _news_response() — existing response builder
+
+    Returns the response dict on success, or None if the archive is empty /
+    temporarily unavailable (caller decides what to do in that case).
+
+    Zero live provider calls.  Marked is_building=True because a background live
+    refresh will follow to incorporate articles published since the last sweep.
+    """
+    loop = asyncio.get_event_loop()
+    t0   = _time.time()
+
+    # ── Step 1: Bulk Neon read ──────────────────────────────────────────────
+    try:
+        from data.rss_article_archive import query_recent_articles_for_scoring as _qras
+        raw_map: dict[str, list[dict]] = await loop.run_in_executor(
+            None, _qras, list(tickers), 48
+        )
+    except Exception as _e:
+        print(f"[NEWS_ARCHIVE] Neon query error wl={watchlist_id}: {_e}")
+        return None
+
+    if not raw_map:
+        print(f"[NEWS_ARCHIVE] archive empty wl={watchlist_id} — no 48h articles")
+        return None
+
+    # ── Step 2: Score each archive article (CPU only, no I/O) ──────────────
+    try:
+        from services.news_signal_scorer import score_article as _score_arc
+        scored_map: dict[str, list[dict]] = {}
+        total_raw = 0
+        for _ticker, _articles in raw_map.items():
+            scored_map[_ticker] = [_score_arc(_a, _ticker) for _a in _articles]
+            total_raw += len(_articles)
+    except Exception as _e:
+        print(f"[NEWS_ARCHIVE] scoring error wl={watchlist_id} (non-fatal): {_e}")
+        scored_map = raw_map
+        total_raw  = sum(len(v) for v in raw_map.values())
+
+    # ── Step 3: Major developments ranking ─────────────────────────────────
+    try:
+        enriched_map, major_summary = _build_major(scored_map)
+    except Exception as _e:
+        print(f"[NEWS_ARCHIVE] _build_major error wl={watchlist_id} (non-fatal): {_e}")
+        enriched_map, major_summary = scored_map, {}
+
+    ts         = _time.time()
+    elapsed_ms = round((ts - t0) * 1000)
+    top_ct     = len(major_summary.get("major_developments") or [])
+    print(
+        f"[NEWS_ARCHIVE] built wl={watchlist_id} tickers_with_data={len(raw_map)} "
+        f"raw_articles={total_raw} top={top_ct} elapsed={elapsed_ms}ms"
+    )
+
+    # ── Step 4: Build response — is_building=True so UI knows live data follows ─
+    data = _news_response(
+        enriched_map, major_summary, ts,
+        is_building=True,
+        cache_source="neon_archive",
+    )
+    return data
+
+
+async def _prewarm_news_lkg() -> None:
+    """
+    Post-yield startup prewarm: populate _news_lkg from the Neon RSS archive
+    for every active watchlist before any user request arrives.
+
+    Called as asyncio.create_task() from _post_yield_bootstrap() in main.py.
+
+    Guarantees:
+      • Non-blocking  — runs as a background coroutine; does not delay app readiness
+      • Single-flight — respects _news_archive_building so a concurrent cold request
+                         does not double-build the same watchlist
+      • Best-effort   — any per-watchlist failure is logged and skipped
+      • No providers  — only reads from the durable Neon archive; no Yahoo/Google RSS
+      • No duplicates — skips watchlists already warm in _news_lkg
+      • No sweeper    — does not interfere with the RSS sweeper loop
+
+    Also fires _rebuild_hyperscaler_cache as a background task after warming the
+    news LKG so that hyperscaler_articles is ready before the first GET /news request.
+    """
+    t0 = _time.time()
+    print("[NEWS_PREWARM] starting archive-based LKG prewarm")
+    try:
+        from services.watchlist_service import (
+            list_watchlists as _list_wl,
+            load_watchlist  as _load_wl,
+        )
+        loop = asyncio.get_event_loop()
+
+        watchlists = await loop.run_in_executor(None, _list_wl)
+        if not watchlists:
+            print("[NEWS_PREWARM] no watchlists found — prewarm skipped")
+            return
+
+        warmed = 0
+        all_tickers: list[str] = []
+
+        for wl_meta in watchlists:
+            wl_id = wl_meta.get("id")
+            if not wl_id:
+                continue
+
+            # Skip if already populated (e.g. a concurrent request beat us here)
+            if wl_id in _news_lkg:
+                print(f"[NEWS_PREWARM] wl={wl_id} already warm — skipping")
+                continue
+
+            # Skip if another build is already in progress for this watchlist
+            if wl_id in _news_archive_building:
+                print(f"[NEWS_PREWARM] wl={wl_id} archive build in progress — skipping")
+                continue
+
+            store = await loop.run_in_executor(None, _load_wl, wl_id)
+            if store is None:
+                continue
+            tickers = store.get("tickers", [])
+            if not tickers:
+                continue
+
+            all_tickers.extend(tickers)
+
+            _news_archive_building.add(wl_id)
+            try:
+                data = await _build_news_from_archive(wl_id, tickers)
+                if data is not None and wl_id not in _news_lkg:
+                    _news_lkg[wl_id] = {"data": data, "ts": _time.time()}
+                    warmed += 1
+                    print(f"[NEWS_PREWARM] wl={wl_id} LKG hydrated from archive")
+            except Exception as _wl_err:
+                print(f"[NEWS_PREWARM] wl={wl_id} error (non-fatal): {_wl_err}")
+            finally:
+                _news_archive_building.discard(wl_id)
+
+        # Kick hyperscaler cache rebuild in background so it's ready for first GET.
+        # Uses union of all watchlist tickers collected above.
+        if all_tickers and not _HYP_CACHE_BUILDING:
+            asyncio.create_task(_rebuild_hyperscaler_cache(list(set(all_tickers))))
+
+        elapsed_ms = round((_time.time() - t0) * 1000)
+        print(f"[NEWS_PREWARM] complete: warmed={warmed}/{len(watchlists)} elapsed={elapsed_ms}ms")
+
+    except Exception as exc:
+        print(f"[NEWS_PREWARM] error (non-fatal): {exc}")
 
 
 # ── Market-cap string parser ─────────────────────────────────────────────────

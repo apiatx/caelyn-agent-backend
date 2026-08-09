@@ -1192,6 +1192,23 @@ async def lifespan(app):
             print(f"[BOOTSTRAP] Neon snapshot recovery error (non-fatal): {_e}")
             _BOOTSTRAP_STATE["steps"]["neon_recovery"] = {"ok": False, "error": str(_e)}
 
+        # 8. Watchlist news LKG prewarm — hydrate _news_lkg from Neon archive for
+        #    all active watchlists before any user request arrives.
+        #    Non-blocking: registered as a background task.  No provider calls.
+        #    Ensures GET /api/watchlist/{id}/news returns real content immediately
+        #    after restart without triggering a synchronous 461-ticker RSS fanout.
+        _t = _bst.monotonic()
+        try:
+            from services.watchlist_router import _prewarm_news_lkg as _news_prewarm_fn
+            asyncio.create_task(_news_prewarm_fn())
+            _BOOTSTRAP_STATE["steps"]["news_lkg_prewarm"] = {
+                "ok": True, "ms": round((_bst.monotonic() - _t) * 1000),
+            }
+            print("[BOOTSTRAP] Watchlist news LKG prewarm task registered")
+        except Exception as _e:
+            print(f"[BOOTSTRAP] News LKG prewarm registration error (non-fatal): {_e}")
+            _BOOTSTRAP_STATE["steps"]["news_lkg_prewarm"] = {"ok": False, "error": str(_e)}
+
         _elapsed = _bst.monotonic() - _bt0
         _BOOTSTRAP_STATE["done"] = True
         _BOOTSTRAP_STATE["elapsed_ms"] = round(_elapsed * 1000)

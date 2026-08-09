@@ -1,0 +1,509 @@
+MAKE WATCHLIST LIVE NEWS INSTANT AND DURABLE ACROSS PROCESS RESTARTS
+
+Work only in the live CaelynAI BACKEND Replit workspace.
+
+Read and obey live AGENTS.md first.
+
+LIVE REPLIT FILES ARE SOURCE OF TRUTH.
+GitHub is reference/audit only.
+
+This task is specifically Watchlist LIVE NEWS cold-start durability.
+
+DO NOT modify frontend.
+DO NOT redesign the RSS sweeper.
+DO NOT remove Yahoo RSS or Google News RSS.
+DO NOT add another external provider.
+DO NOT add provider calls to the request hot path.
+DO NOT introduce Redis.
+DO NOT create an alternate news endpoint.
+DO NOT change response shape unless additive diagnostics are genuinely useful.
+
+After the production backend restarted on 2026-08-09:
+
+Watchlist itself recovered correctly.
+
+But:
+
+GET /api/watchlist/{id}/news
+
+became extremely slow again.
+
+Current live architecture explains why.
+
+File:
+
+backend/services/watchlist_router.py
+
+Current:
+
+_news_lkg: dict[str, dict] = {}
+
+is PROCESS MEMORY ONLY.
+
+It is described as LKG/stale-while-revalidate, but it does NOT survive:
+
+process restart
+autoscale container restart
+deployment restart
+crash
+
+On restart:
+
+_news_lkg == {}
+
+Current cold path in:
+
+_get_news_for_watchlist()
+
+does:
+
+raw_map = await fetch_news_for_tickers(tickers)
+
+For the Primary watchlist:
+
+461 tickers
+
+Each ticker fetches:
+
+Yahoo RSS
+Google News RSS
+
+So first request can involve roughly:
+
+461 × 2 = 922 external RSS HTTP operations
+
+The current source explicitly labels this:
+
+"Cold start — build synchronously"
+
+This is unacceptable for a UI request.
+
+Measured current cold behavior:
+
+~12–20+ seconds
+potentially much longer under network/provider degradation
+
+The Express proxy allows up to 90 seconds, meaning this can hold the Live News UI
+open for an absurd amount of time.
+
+File:
+
+backend/data/rss_article_archive.py
+
+Neon table:
+
+public.watchlist_rss_article_archive
+
+This archive survives restarts.
+
+It already stores:
+
+ticker
+article_key
+title
+source
+url
+published_at
+rss_providers
+summary
+first_seen_at
+last_seen_at
+
+It has ticker/publication indexes.
+
+Existing helpers include:
+
+query_ticker_activity(...)
+query_recent_articles_for_scoring(...)
+
+The latter already returns recent archive articles needed for scoring/rebuilding
+news-derived state.
+
+The RSS sweeper continuously persists recent RSS discoveries into this archive.
+
+THEREFORE:
+
+the browser request should NEVER need to refetch hundreds of RSS feeds just to
+render existing recent news.
+
+GET /api/watchlist/{id}/news must be stale-while-revalidate across PROCESS
+RESTARTS, not merely within one Python process.
+
+Request path priority:
+
+process-memory fresh LKG
+process-memory stale LKG
+durable Neon archive reconstruction
+structured empty/building response only if absolutely no durable data exists
+
+LIVE RSS PROVIDER FANOUT IS NEVER ALLOWED TO BLOCK THE HTTP RESPONSE.
+
+Yahoo/Google RSS refresh happens in background.
+
+Before editing, instrument/measure:
+
+memory LKG hit
+Neon archive query
+_build_major()
+query_ticker_activity()
+hyperscaler attachment
+fetch_news_for_tickers() cold provider fanout
+total HTTP response duration
+
+Use the real 461-ticker Primary watchlist.
+
+Record baseline.
+
+Do NOT perform repeated provider fanouts unnecessarily.
+
+Add/reuse the smallest helper to construct the current news response from the
+existing Neon RSS archive.
+
+Do NOT duplicate scoring rules.
+
+Preferred flow:
+
+query_recent_articles_for_scoring(tickers, hours=48)
+
+→ group rows into the exact per-ticker article-map structure expected by the
+existing scoring pipeline
+
+→ use existing:
+_build_major(...)
+
+→ use existing:
+_news_response(...)
+
+→ populate:
+_news_lkg[watchlist_id]
+
+This is a READ-ONLY durable hydration.
+
+Do not write another copy of the article archive.
+
+Do not call providers.
+
+Preserve canonical ticker normalization/dedup semantics.
+
+Current cold branch:
+
+await fetch_news_for_tickers(tickers)
+
+must no longer execute synchronously in the HTTP request path.
+
+New cold behavior:
+
+IF Neon archive has usable recent articles:
+
+build process-memory LKG from Neon
+return it immediately
+set is_building=true if live provider refresh is being scheduled
+schedule _bg_refresh_news(...)
+
+IF Neon archive is temporarily unavailable or empty:
+
+return a valid structured response immediately
+with is_building=true / debug provenance as appropriate
+schedule _bg_refresh_news(...)
+
+Do NOT make the user wait for 461 live RSS calls.
+
+Provider failure must not prevent serving existing archive data.
+
+Audit:
+
+_attach_live_fields()
+_HYP_CACHE
+_rebuild_hyperscaler_cache()
+
+Current code can synchronously await hyperscaler cache construction when
+_HYP_CACHE is empty.
+
+That archive rebuild has itself measured in multi-second territory.
+
+After fixing the main _news_lkg cold path, do NOT leave a second multi-second cold
+wait here.
+
+Choose the smallest safe solution.
+
+Preferred possibilities, in order:
+
+A. Reuse the same archive read/hydration work to initialize hyperscaler-derived
+data during startup/prewarm.
+
+OR
+
+B. On request:
+serve currently available hyperscaler data (possibly empty on the first few
+milliseconds of a brand-new process)
+and kick the archive-based hyperscaler rebuild into background.
+
+The main Activity/All News payload must not wait several seconds for hyperscaler
+re-scoring.
+
+Do not create another provider call.
+
+The application already performs background/post-yield startup warmups.
+
+Add a NON-BLOCKING Watchlist news LKG hydrate to the appropriate existing
+post-yield bootstrap pattern.
+
+It should:
+
+load canonical Watchlist metadata/tickers
+query recent RSS archive data from Neon
+construct _news_lkg using existing scoring functions
+initialize activity/hyperscaler derived caches where safe
+finish without blocking app readiness
+
+No Yahoo/Google fanout is required for this prewarm.
+
+The normal RSS sweeper/live background refresh will update it afterward.
+
+Startup prewarm must be:
+
+single-flight
+best-effort
+non-fatal
+no duplicate sweeper
+no provider flood
+
+Preserve response API shape.
+
+If useful, additive diagnostics may identify:
+
+cache_source:
+    "memory_lkg"
+    "neon_archive"
+    "live_refresh"
+
+and:
+
+is_building
+
+But do not break current frontend fields:
+
+articles
+top_articles
+high_signal_count
+by_catalyst_type
+news_signal_meta
+ticker_activity
+hyperscaler_articles
+rss_activity_meta
+cache_age_s
+cached_at
+is_building
+
+When serving archive hydration, cached_at should reflect a meaningful archive
+freshness timestamp rather than pretending the process just fetched all articles
+live.
+
+Audit the best timestamp source before implementing.
+
+The target is NOT:
+
+"cold request is only 12 seconds instead of 20."
+
+The target is:
+
+NO LIVE PROVIDER FANOUT ON REQUEST.
+
+Acceptance:
+
+warm memory LKG:
+ideally <500ms backend-side
+
+process restart + Neon archive available:
+target <2s
+preferably <1s after optimization
+
+If archive reconstruction exceeds 2 seconds:
+
+profile it.
+
+Do not fall back to provider fanout.
+
+Optimize the single bulk Neon read / grouping / scoring path instead.
+
+Scenario A:
+memory LKG available, Neon temporarily down
+
+→ serve memory LKG
+→ no blank response
+
+Scenario B:
+process restarted, Neon archive available, providers down
+
+→ serve Neon archive news
+→ background refresh may fail
+→ user still sees news
+
+Scenario C:
+process restarted, Neon temporarily down, no memory LKG
+
+→ return structured non-blocking building/temporarily unavailable payload
+→ DO NOT spend 90 seconds calling 922 feeds synchronously
+
+Scenario D:
+Neon archive available but old
+
+→ serve it immediately
+→ mark stale/building
+→ background live refresh
+
+The existing archive is not just ticker counts.
+
+It contains article content.
+
+Use it to hydrate:
+
+articles
+top_articles
+major scoring
+
+not merely:
+
+ticker_activity
+
+Do not leave All News blank while Activity loads.
+
+Preserve:
+
+_news_bg_building
+
+or improve it minimally so only one live refresh per watchlist runs.
+
+Multiple simultaneous first requests after restart must NOT:
+
+each execute their own archive reconstruction unnecessarily
+each fire 922 RSS operations
+create duplicate live refreshes
+
+Use single-flight/coalescing.
+
+Do not invent distributed coordination.
+
+Add focused tests.
+
+warm memory LKG:
+→ immediate response
+→ no archive query if unnecessary
+→ no live provider call
+cold process + Neon archive populated:
+→ response constructed from archive
+→ no synchronous fetch_news_for_tickers
+→ background live refresh scheduled
+→ current response shape intact
+archive contains multiple tickers/articles:
+→ grouping into per-ticker map correct
+major scoring:
+→ top_articles/by_catalyst_type built using existing pipeline
+provider outage:
+→ archive payload still returned
+archive unavailable:
+→ endpoint returns promptly
+→ live build scheduled
+→ no blocking provider fanout
+concurrent cold GETs:
+→ no duplicate expensive cold builds
+→ no duplicate live provider fanouts
+restart simulation:
+clear:
+_news_lkg
+_HYP_CACHE
+keep mocked Neon archive populated
+→ first GET returns real news without provider fetch
+
+THIS IS THE CRITICAL REGRESSION TEST.
+
+hyperscaler cold state:
+→ must not hold the main news response for multi-second rebuild
+ticker_activity remains sourced correctly from durable archive
+response fields remain backward compatible
+no provider calls on request path
+
+This cannot be validated only on a warm process.
+
+Record baseline state.
+
+Then perform a controlled restart or simulate the same process-memory reset.
+
+Before any live RSS sweep completes:
+
+call:
+
+GET /api/watchlist/{Primary-ID}/news
+
+Required:
+
+HTTP 200
+Activity data present from Neon
+All News article data present from Neon
+no synchronous 461-ticker RSS fanout
+background refresh indicated/scheduled
+response comfortably under target SLA
+
+Then wait for live refresh.
+
+Call again.
+
+Required:
+
+still HTTP 200
+fresher data
+no UI-breaking shape change
+
+Expected production scope:
+
+backend/services/watchlist_router.py
+
+Possibly:
+
+backend/main.py
+
+for the existing post-yield prewarm hook.
+
+Potentially import/reuse only from:
+
+backend/data/rss_article_archive.py
+
+Do NOT rewrite rss_article_archive.py unless a proven helper deficiency requires a
+tiny addition.
+
+Do NOT touch taxonomy.
+Do NOT touch earnings.
+Do NOT touch options.
+Do NOT touch Watchlist price/history paths.
+
+This is done when:
+
+process restart does NOT make Live News cold/blank for 12–90 seconds
+_news_lkg can be reconstructed from durable Neon data
+first user request never performs live RSS fanout synchronously
+Activity loads from durable archive
+All News loads from durable archive
+hyperscaler work cannot block the whole card
+live providers refresh in background only
+stale data beats no data
+provider outage does not blank recent news
+restart test proves it
+no new external provider
+no duplicate storage architecture
+
+Final report MUST include:
+
+measured old cold path
+exact old provider-call count
+Neon archive timing
+new first-request timing after simulated/restarted process
+warm request timing
+provider calls on request path: MUST BE ZERO
+startup prewarm timing
+Activity/All News/Hyperscaler availability before first sweep
+concurrency proof
+tests/results
+files changed
+git diff/stat
+commit SHA
+final git status
