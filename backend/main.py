@@ -667,17 +667,21 @@ async def lifespan(app):
     # The function is preserved below for reference.  Old /api/sector-rotation/dashboard and
     # /api/sectors/page-data endpoints still work lazily (populated on first request via sr:dashboard:v1).
     # asyncio.create_task(_sector_rotation_precompute_loop())
-    try:
-        from services.canonical_history_backfill import start_maintenance_scheduler as _canon_maint_start
-        _canon_maint_start()
-    except Exception as _canon_maint_err:
-        print(f"[STARTUP] canonical history maintenance scheduler failed to start: {_canon_maint_err}")
+    async def _canon_maint_deferred():
+        try:
+            from services.canonical_history_backfill import start_maintenance_scheduler as _fn
+            _fn()
+        except Exception as _e:
+            print(f"[STARTUP] canonical history maintenance scheduler failed to start: {_e}")
+    asyncio.create_task(_canon_maint_deferred())
     asyncio.create_task(_hl_boot_and_run(_hl_state))
-    try:
-        from services.bittensor.router import _dashboard_refresh_loop as _bittensor_refresh_loop
-        asyncio.create_task(_bittensor_refresh_loop())
-    except Exception as _e:
-        print(f"[STARTUP] Bittensor refresh task error: {_e}")
+    async def _bittensor_deferred():
+        try:
+            from services.bittensor.router import _dashboard_refresh_loop as _bittensor_refresh_loop
+            asyncio.create_task(_bittensor_refresh_loop())
+        except Exception as _e:
+            print(f"[STARTUP] Bittensor refresh task error: {_e}")
+    asyncio.create_task(_bittensor_deferred())
     asyncio.create_task(_x_consensus_loop())
     # Alert Signal Bus: periodic retention cleanup (every 12 h)
     async def _alert_bus_retention_loop():
@@ -970,19 +974,23 @@ async def lifespan(app):
     # Thematic context warmup: load LKG from disk immediately, then rebuild from caches.
     # Runs after a 5s delay so sector rotation loop has a head start.
     # No LLM calls, no API calls — pure cache/disk reads + static registry.
-    try:
-        from services.thematic_context_provider import warmup_thematic_context as _thematic_warmup
-        asyncio.create_task(_thematic_warmup())
-    except Exception as _e:
-        print(f"[STARTUP] Thematic context warmup task error: {_e}")
+    async def _thematic_warmup_deferred():
+        try:
+            from services.thematic_context_provider import warmup_thematic_context as _thematic_warmup
+            asyncio.create_task(_thematic_warmup())
+        except Exception as _e:
+            print(f"[STARTUP] Thematic context warmup task error: {_e}")
+    asyncio.create_task(_thematic_warmup_deferred())
     # Dynamic thematic universe: build and refresh every 15 min.
     asyncio.create_task(_dynamic_thematic_universe_loop())
     # Themes by Relative Strength warmup: non-blocking loop registration.
-    try:
-        from services.theme_rs_service import warmup_theme_rs as _theme_rs_warmup
-        asyncio.create_task(_theme_rs_warmup())
-    except Exception as _e:
-        print(f"[STARTUP] Theme RS warmup error: {_e}")
+    async def _theme_rs_warmup_deferred():
+        try:
+            from services.theme_rs_service import warmup_theme_rs as _theme_rs_warmup
+            asyncio.create_task(_theme_rs_warmup())
+        except Exception as _e:
+            print(f"[STARTUP] Theme RS warmup error: {_e}")
+    asyncio.create_task(_theme_rs_warmup_deferred())
     asyncio.create_task(_earnings_calendar_warmup())
 
     # ── Post-yield deferred bootstrap ────────────────────────────────────────
@@ -1219,16 +1227,18 @@ async def lifespan(app):
     # Reads only from disk on request; refreshes Sunday in ET per per-tab hour.
     # Also runs a startup staleness check (45s delay) so restarts mid-week
     # immediately refresh stale snapshots without waiting for Sunday.
-    try:
-        from services.calendar_snapshot_service import (
-            weekly_scheduler_loop as _calendar_snap_loop,
-            check_and_refresh_stale as _cal_stale_check,
-        )
-        from config import FMP_API_KEY as _fmp_key_for_snap
-        asyncio.create_task(_calendar_snap_loop(lambda: _fmp_key_for_snap))
-        asyncio.create_task(_cal_stale_check(_fmp_key_for_snap or ""))
-    except Exception as _e:
-        print(f"[STARTUP] calendar snapshot scheduler init error: {_e}")
+    async def _calendar_snap_deferred():
+        try:
+            from services.calendar_snapshot_service import (
+                weekly_scheduler_loop as _calendar_snap_loop,
+                check_and_refresh_stale as _cal_stale_check,
+            )
+            from config import FMP_API_KEY as _fmp_key_for_snap
+            asyncio.create_task(_calendar_snap_loop(lambda: _fmp_key_for_snap))
+            asyncio.create_task(_cal_stale_check(_fmp_key_for_snap or ""))
+        except Exception as _e:
+            print(f"[STARTUP] calendar snapshot scheduler init error: {_e}")
+    asyncio.create_task(_calendar_snap_deferred())
     # ── Screener Hub scheduler ──────────────────────────────────────────────
     # Eastern-time recurring jobs (>= 30 min spacing):
     #   Sun 00:30 ET  thematic universe rebuild
@@ -1237,12 +1247,14 @@ async def lifespan(app):
     #   Sun-Fri 11:10 ET  social universe rebuild (10 min after Grok fires at 10:00 AM CT)
     #   Sun-Fri 11:45 ET  social fundamentals warm
     #   Fri 02:00 ET  watchlist+portfolio fundamentals warm
-    try:
-        from services.screener_hub_scheduler import scheduler_loop as _screener_hub_loop
-        asyncio.create_task(_screener_hub_loop())
-        print("[SCREENER_HUB] Scheduler task registered")
-    except Exception as _e:
-        print(f"[STARTUP] Screener Hub scheduler init error: {_e}")
+    async def _screener_hub_deferred():
+        try:
+            from services.screener_hub_scheduler import scheduler_loop as _screener_hub_loop
+            asyncio.create_task(_screener_hub_loop())
+            print("[SCREENER_HUB] Scheduler task registered")
+        except Exception as _e:
+            print(f"[STARTUP] Screener Hub scheduler init error: {_e}")
+    asyncio.create_task(_screener_hub_deferred())
     # Tracked Odds Registry: fetch → match → persist → delta → cache, every 30 min.
     # Runs at 90 s so it beats the intelligence loop (120 s) on first cycle.
     asyncio.create_task(_odds_scanner_loop())
@@ -1281,12 +1293,14 @@ async def lifespan(app):
     # Table creation (_rss_ensure_table) moved to _deferred_sync_startup() —
     # cold Neon was adding 5-8s here.  The sweeper loop starts at ≥ 120s delay
     # so the table is guaranteed to exist before the first write.
-    try:
-        from services.watchlist_rss_sweeper import rss_sweeper_loop as _rss_sweeper_loop
-        asyncio.create_task(_rss_sweeper_loop())
-        print("[STARTUP] Watchlist RSS sweeper loop registered")
-    except Exception as _rss_err:
-        print(f"[STARTUP] RSS sweeper loop registration error: {_rss_err}")
+    async def _rss_sweeper_deferred():
+        try:
+            from services.watchlist_rss_sweeper import rss_sweeper_loop as _rss_sweeper_loop
+            asyncio.create_task(_rss_sweeper_loop())
+            print("[STARTUP] Watchlist RSS sweeper loop registered")
+        except Exception as _rss_err:
+            print(f"[STARTUP] RSS sweeper loop registration error: {_rss_err}")
+    asyncio.create_task(_rss_sweeper_deferred())
 
     _lifespan_elapsed = time.monotonic() - _lifespan_t0
     print(f"[STARTUP] lifespan yield reached in {_lifespan_elapsed:.2f}s — healthcheck now active")
@@ -13183,9 +13197,10 @@ async def _master_screener_loop():
     """
     global _TRADIER_GLOBAL_SEM
 
-    from data.unified_options_engine import UnifiedOptionsEngine
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _init_event.wait, 90)
+
+    from data.unified_options_engine import UnifiedOptionsEngine
 
     if data_service is None or not data_service.tradier:
         print("[MASTER_SCREENER] Tradier provider not available, skipping loop")
