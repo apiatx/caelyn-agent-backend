@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-08-08T20:12:28.288024+00:00",
+  "updated_at": "2026-08-09T13:31:04.313556+00:00",
   "symbols": {
     "TEST_MARA": {
       "symbol": "TEST_MARA",
@@ -80169,8 +80169,8 @@
       "oldest_bar_date": "2021-04-21",
       "newest_bar_date": "2026-07-30",
       "years_available": 5.2,
-      "fetched_at": "2026-08-08T19:07:09.091546+00:00",
-      "stale_after": "2026-08-12T19:07:09.091557+00:00",
+      "fetched_at": "2026-08-08T20:45:32.576507+00:00",
+      "stale_after": "2026-08-12T20:45:32.576522+00:00",
       "history_status": "available_lifetime_under_10y",
       "base_history_status": "available_lifetime_under_10y",
       "error_reason": null,
@@ -80180,8 +80180,8 @@
       "is_provider_cap": false,
       "depth_confidence": 0.85,
       "fib_scope": "multi_year",
-      "last_attempt_at": "2026-08-08T19:07:09.091546+00:00",
-      "next_retry_at": "2026-08-12T19:07:09.091557+00:00",
+      "last_attempt_at": "2026-08-08T20:45:32.576507+00:00",
+      "next_retry_at": "2026-08-12T20:45:32.576522+00:00",
       "cache_usable": true,
       "is_10y_complete": true,
       "volume_change_1d_pct": 9.898024,
@@ -135824,8 +135824,8 @@
     "SOIL": {
       "history_status": "fetch_failed",
       "error_reason": "no_bars_from_providers",
-      "last_attempt_at": "2026-08-08T19:06:39.724332+00:00",
-      "next_retry_at": "2026-08-08T23:06:39.724345+00:00",
+      "last_attempt_at": "2026-08-08T20:45:01.768114+00:00",
+      "next_retry_at": "2026-08-09T00:45:01.768142+00:00",
       "provider": "tradier"
     },
     "URA": {
@@ -139059,6 +139059,821 @@
         [
           "2026-08-07",
           47.79
+        ]
+      ]
+    },
+    "OTC:FLTCF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:IQEPF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:EOSC": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:LPKFF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:AAGFF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:TPZEF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:XBOTF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:MALJF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:HMDPF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:VLXGF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:BESIY": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:SLOIY": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:CBLNF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:XFABF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:JNPKF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:SESMF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:SSLLF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:TPLKF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:AIXXF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:SMOPF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:NPTSF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:SSNLF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "ADI": {
+      "symbol": "ADI",
+      "provider": "tradier",
+      "canonical_history_provider": "tradier",
+      "canonical_history_provider_rank": 1,
+      "canonical_history_quality": "full_10y_tradier_verified",
+      "canonical_history_adjusted_status": "unknown",
+      "canonical_history_refresh_mode": "missing_symbols_catchup",
+      "bar_count": 2512,
+      "oldest_bar_date": "2016-08-10",
+      "newest_bar_date": "2026-08-07",
+      "years_available": 10.0,
+      "fetched_at": "2026-08-08T20:42:01.718965+00:00",
+      "stale_after": "2026-08-10T20:42:01.718975+00:00",
+      "history_status": "available_10y_fresh",
+      "base_history_status": "available_10y",
+      "error_reason": null,
+      "source_priority": 1,
+      "is_actual_limit": false,
+      "is_lifetime_under_10y": false,
+      "is_provider_cap": false,
+      "depth_confidence": 1.0,
+      "fib_scope": "full_10y",
+      "last_attempt_at": "2026-08-08T20:42:01.718965+00:00",
+      "next_retry_at": "2026-08-10T20:42:01.718975+00:00",
+      "cache_usable": true,
+      "is_10y_complete": true,
+      "volume_change_1d_pct": -20.771316,
+      "volume_change_7d_pct": -10.050384,
+      "volume_change_30d_pct": -16.262205,
+      "volume_acceleration_pp": 6.211821,
+      "volume_metrics_as_of": "2026-08-07",
+      "volume_metrics_status": "ok",
+      "change_7d": 6.129392,
+      "change_30d": 1.175402,
+      "comparison_close_tail": [
+        [
+          "2026-05-07",
+          408.52
+        ],
+        [
+          "2026-05-08",
+          416.52
+        ],
+        [
+          "2026-05-11",
+          422.73
+        ],
+        [
+          "2026-05-12",
+          419.65
+        ],
+        [
+          "2026-05-13",
+          432.39
+        ],
+        [
+          "2026-05-14",
+          426.79
+        ],
+        [
+          "2026-05-15",
+          417.49
+        ],
+        [
+          "2026-05-18",
+          418.58
+        ],
+        [
+          "2026-05-19",
+          414.31
+        ],
+        [
+          "2026-05-20",
+          398.05
+        ],
+        [
+          "2026-05-21",
+          384.21
+        ],
+        [
+          "2026-05-22",
+          397.07
+        ],
+        [
+          "2026-05-26",
+          419.94
+        ],
+        [
+          "2026-05-27",
+          416.88
+        ],
+        [
+          "2026-05-28",
+          419.01
+        ],
+        [
+          "2026-05-29",
+          413.85
+        ],
+        [
+          "2026-06-01",
+          402.69
+        ],
+        [
+          "2026-06-02",
+          423.2
+        ],
+        [
+          "2026-06-03",
+          437.67
+        ],
+        [
+          "2026-06-04",
+          428.76
+        ],
+        [
+          "2026-06-05",
+          401.39
+        ],
+        [
+          "2026-06-08",
+          403.89
+        ],
+        [
+          "2026-06-09",
+          404.62
+        ],
+        [
+          "2026-06-10",
+          392.67
+        ],
+        [
+          "2026-06-11",
+          412.13
+        ],
+        [
+          "2026-06-12",
+          417.79
+        ],
+        [
+          "2026-06-15",
+          427.58
+        ],
+        [
+          "2026-06-16",
+          416.0
+        ],
+        [
+          "2026-06-17",
+          414.45
+        ],
+        [
+          "2026-06-18",
+          434.46
+        ],
+        [
+          "2026-06-22",
+          445.48
+        ],
+        [
+          "2026-06-23",
+          407.26
+        ],
+        [
+          "2026-06-24",
+          413.16
+        ],
+        [
+          "2026-06-25",
+          417.93
+        ],
+        [
+          "2026-06-26",
+          386.91
+        ],
+        [
+          "2026-06-29",
+          391.78
+        ],
+        [
+          "2026-06-30",
+          397.17
+        ],
+        [
+          "2026-07-01",
+          388.98
+        ],
+        [
+          "2026-07-02",
+          377.16
+        ],
+        [
+          "2026-07-06",
+          388.83
+        ],
+        [
+          "2026-07-07",
+          379.03
+        ],
+        [
+          "2026-07-08",
+          385.4
+        ],
+        [
+          "2026-07-09",
+          393.64
+        ],
+        [
+          "2026-07-10",
+          395.65
+        ],
+        [
+          "2026-07-13",
+          386.01
+        ],
+        [
+          "2026-07-14",
+          392.75
+        ],
+        [
+          "2026-07-15",
+          390.96
+        ],
+        [
+          "2026-07-16",
+          380.53
+        ],
+        [
+          "2026-07-17",
+          375.36
+        ],
+        [
+          "2026-07-20",
+          372.46
+        ],
+        [
+          "2026-07-21",
+          382.81
+        ],
+        [
+          "2026-07-22",
+          386.73
+        ],
+        [
+          "2026-07-23",
+          380.2
+        ],
+        [
+          "2026-07-24",
+          371.86
+        ],
+        [
+          "2026-07-27",
+          371.89
+        ],
+        [
+          "2026-07-28",
+          365.83
+        ],
+        [
+          "2026-07-29",
+          353.37
+        ],
+        [
+          "2026-07-30",
+          366.67
+        ],
+        [
+          "2026-07-31",
+          367.41
+        ],
+        [
+          "2026-08-03",
+          361.88
+        ],
+        [
+          "2026-08-04",
+          380.29
+        ],
+        [
+          "2026-08-05",
+          377.69
+        ],
+        [
+          "2026-08-06",
+          377.31
+        ],
+        [
+          "2026-08-07",
+          389.93
+        ]
+      ]
+    },
+    "AMETEK": {
+      "history_status": "fetch_failed",
+      "error_reason": "no_bars_from_providers",
+      "last_attempt_at": "2026-08-08T20:44:17.205992+00:00",
+      "next_retry_at": "2026-08-09T00:44:17.206007+00:00",
+      "provider": "tradier"
+    },
+    "AZZ": {
+      "symbol": "AZZ",
+      "provider": "tradier",
+      "canonical_history_provider": "tradier",
+      "canonical_history_provider_rank": 1,
+      "canonical_history_quality": "full_10y_tradier_verified",
+      "canonical_history_adjusted_status": "unknown",
+      "canonical_history_refresh_mode": "missing_symbols_catchup",
+      "bar_count": 2512,
+      "oldest_bar_date": "2016-08-10",
+      "newest_bar_date": "2026-08-07",
+      "years_available": 10.0,
+      "fetched_at": "2026-08-08T20:42:43.741261+00:00",
+      "stale_after": "2026-08-10T20:42:43.741271+00:00",
+      "history_status": "available_10y_fresh",
+      "base_history_status": "available_10y",
+      "error_reason": null,
+      "source_priority": 1,
+      "is_actual_limit": false,
+      "is_lifetime_under_10y": false,
+      "is_provider_cap": false,
+      "depth_confidence": 1.0,
+      "fib_scope": "full_10y",
+      "last_attempt_at": "2026-08-08T20:42:43.741261+00:00",
+      "next_retry_at": "2026-08-10T20:42:43.741271+00:00",
+      "cache_usable": true,
+      "is_10y_complete": true,
+      "volume_change_1d_pct": 11.890513,
+      "volume_change_7d_pct": -16.4911,
+      "volume_change_30d_pct": 30.104675,
+      "volume_acceleration_pp": -46.595775,
+      "volume_metrics_as_of": "2026-08-07",
+      "volume_metrics_status": "ok",
+      "change_7d": 4.284135,
+      "change_30d": 5.273437,
+      "comparison_close_tail": [
+        [
+          "2026-05-07",
+          144.09
+        ],
+        [
+          "2026-05-08",
+          147.6
+        ],
+        [
+          "2026-05-11",
+          148.65
+        ],
+        [
+          "2026-05-12",
+          148.11
+        ],
+        [
+          "2026-05-13",
+          144.31
+        ],
+        [
+          "2026-05-14",
+          147.39
+        ],
+        [
+          "2026-05-15",
+          141.16
+        ],
+        [
+          "2026-05-18",
+          139.78
+        ],
+        [
+          "2026-05-19",
+          135.55
+        ],
+        [
+          "2026-05-20",
+          137.01
+        ],
+        [
+          "2026-05-21",
+          137.07
+        ],
+        [
+          "2026-05-22",
+          137.9
+        ],
+        [
+          "2026-05-26",
+          141.5
+        ],
+        [
+          "2026-05-27",
+          141.36
+        ],
+        [
+          "2026-05-28",
+          140.15
+        ],
+        [
+          "2026-05-29",
+          135.51
+        ],
+        [
+          "2026-06-01",
+          134.24
+        ],
+        [
+          "2026-06-02",
+          136.52
+        ],
+        [
+          "2026-06-03",
+          136.87
+        ],
+        [
+          "2026-06-04",
+          138.48
+        ],
+        [
+          "2026-06-05",
+          137.71
+        ],
+        [
+          "2026-06-08",
+          137.47
+        ],
+        [
+          "2026-06-09",
+          144.17
+        ],
+        [
+          "2026-06-10",
+          140.26
+        ],
+        [
+          "2026-06-11",
+          150.15
+        ],
+        [
+          "2026-06-12",
+          150.89
+        ],
+        [
+          "2026-06-15",
+          151.96
+        ],
+        [
+          "2026-06-16",
+          153.66
+        ],
+        [
+          "2026-06-17",
+          152.01
+        ],
+        [
+          "2026-06-18",
+          157.18
+        ],
+        [
+          "2026-06-22",
+          158.24
+        ],
+        [
+          "2026-06-23",
+          152.64
+        ],
+        [
+          "2026-06-24",
+          152.93
+        ],
+        [
+          "2026-06-25",
+          160.17
+        ],
+        [
+          "2026-06-26",
+          156.64
+        ],
+        [
+          "2026-06-29",
+          152.49
+        ],
+        [
+          "2026-06-30",
+          155.05
+        ],
+        [
+          "2026-07-01",
+          149.9
+        ],
+        [
+          "2026-07-02",
+          150.01
+        ],
+        [
+          "2026-07-06",
+          152.55
+        ],
+        [
+          "2026-07-07",
+          144.05
+        ],
+        [
+          "2026-07-08",
+          143.36
+        ],
+        [
+          "2026-07-09",
+          140.9
+        ],
+        [
+          "2026-07-10",
+          146.45
+        ],
+        [
+          "2026-07-13",
+          146.49
+        ],
+        [
+          "2026-07-14",
+          149.99
+        ],
+        [
+          "2026-07-15",
+          150.46
+        ],
+        [
+          "2026-07-16",
+          151.14
+        ],
+        [
+          "2026-07-17",
+          147.21
+        ],
+        [
+          "2026-07-20",
+          147.38
+        ],
+        [
+          "2026-07-21",
+          150.42
+        ],
+        [
+          "2026-07-22",
+          150.79
+        ],
+        [
+          "2026-07-23",
+          152.84
+        ],
+        [
+          "2026-07-24",
+          149.9
+        ],
+        [
+          "2026-07-27",
+          148.64
+        ],
+        [
+          "2026-07-28",
+          146.62
+        ],
+        [
+          "2026-07-29",
+          141.24
+        ],
+        [
+          "2026-07-30",
+          144.96
+        ],
+        [
+          "2026-07-31",
+          144.72
+        ],
+        [
+          "2026-08-03",
+          149.18
+        ],
+        [
+          "2026-08-04",
+          152.71
+        ],
+        [
+          "2026-08-05",
+          151.96
+        ],
+        [
+          "2026-08-06",
+          150.85
+        ],
+        [
+          "2026-08-07",
+          150.92
         ]
       ]
     }
