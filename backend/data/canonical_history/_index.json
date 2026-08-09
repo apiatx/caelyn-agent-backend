@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-08-09T20:26:43.999149+00:00",
+  "updated_at": "2026-08-09T21:47:35.465416+00:00",
   "symbols": {
     "TEST_MARA": {
       "symbol": "TEST_MARA",
@@ -80169,8 +80169,8 @@
       "oldest_bar_date": "2021-04-21",
       "newest_bar_date": "2026-07-30",
       "years_available": 5.2,
-      "fetched_at": "2026-08-09T15:27:42.142093+00:00",
-      "stale_after": "2026-08-13T15:27:42.142104+00:00",
+      "fetched_at": "2026-08-09T21:00:16.568795+00:00",
+      "stale_after": "2026-08-13T21:00:16.568809+00:00",
       "history_status": "available_lifetime_under_10y",
       "base_history_status": "available_lifetime_under_10y",
       "error_reason": null,
@@ -80180,8 +80180,8 @@
       "is_provider_cap": false,
       "depth_confidence": 0.85,
       "fib_scope": "multi_year",
-      "last_attempt_at": "2026-08-09T15:27:42.142093+00:00",
-      "next_retry_at": "2026-08-13T15:27:42.142104+00:00",
+      "last_attempt_at": "2026-08-09T21:00:16.568795+00:00",
+      "next_retry_at": "2026-08-13T21:00:16.568809+00:00",
       "cache_usable": true,
       "is_10y_complete": true,
       "volume_change_1d_pct": 9.898024,
@@ -135836,8 +135836,8 @@
     "SOIL": {
       "history_status": "fetch_failed",
       "error_reason": "no_bars_from_providers",
-      "last_attempt_at": "2026-08-09T18:58:32.735704+00:00",
-      "next_retry_at": "2026-08-09T22:58:32.735717+00:00",
+      "last_attempt_at": "2026-08-09T20:59:24.890660+00:00",
+      "next_retry_at": "2026-08-10T00:59:24.890673+00:00",
       "provider": "tradier"
     },
     "URA": {
@@ -139591,8 +139591,8 @@
     "AMETEK": {
       "history_status": "fetch_failed",
       "error_reason": "no_bars_from_providers",
-      "last_attempt_at": "2026-08-09T18:58:16.035825+00:00",
-      "next_retry_at": "2026-08-09T22:58:16.035840+00:00",
+      "last_attempt_at": "2026-08-09T20:58:53.258021+00:00",
+      "next_retry_at": "2026-08-10T00:58:53.258033+00:00",
       "provider": "tradier"
     },
     "AZZ": {
