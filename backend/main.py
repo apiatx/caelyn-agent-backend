@@ -445,7 +445,16 @@ async def lifespan(app):
     # reaches its yield in < 2s, the worker starts serving, and GET / returns
     # 200 before the health check deadline.  All the loops below have built-in
     # startup delays (30s–5min) so they handle a briefly uninitialized state.
+    #
+    # Protected health window: the first 60 s after the process becomes
+    # responsive are reserved for serving health probes.  All heavy
+    # CPU/import/DB work in the deferred-startup thread is delayed until
+    # this window passes.  Every downstream consumer has ≥120 s startup
+    # delays, so there is no race condition.
     def _deferred_sync_startup() -> None:
+        import time as _t_dss
+        _t_dss.sleep(60)   # protected health window
+
         _init_postgres_chat_storage_on_startup("lifespan")
         try:
             from data.earnings_monitor_store import init_earnings_monitor_tables
@@ -1013,6 +1022,12 @@ async def lifespan(app):
     # first runs only after yield returns control to the event loop.
     # Each step is timed and isolated — a failure does not abort the others.
     async def _post_yield_bootstrap():
+        # Protected health window: defer bootstrap work so Autoscale health
+        # probes get 10+ s of clean HTTP responsiveness before any CPU-heavy
+        # post-yield work begins.  No feature endpoint depends on bootstrap
+        # completing within this window.
+        await asyncio.sleep(10)
+
         import time as _bst
         _bt0 = _bst.monotonic()
         _BOOTSTRAP_STATE["started_at"] = _bt0
