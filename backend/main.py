@@ -446,6 +446,13 @@ async def lifespan(app):
     # 200 before the health check deadline.  All the loops below have built-in
     # startup delays (30s–5min) so they handle a briefly uninitialized state.
     def _deferred_sync_startup() -> None:
+        # Wait for _do_init to complete so only one heavy-import daemon
+        # thread runs at a time.  _do_init imports MarketDataService +
+        # TradingAgent (~7s).  Running _deferred_sync_startup's PG init
+        # and LKG loads simultaneously doubles GIL pressure and starves
+        # the event loop for 2-6s during the Autoscale health probe window.
+        _init_event.wait(60)
+
         _init_postgres_chat_storage_on_startup("lifespan")
         try:
             from data.earnings_monitor_store import init_earnings_monitor_tables
@@ -1160,27 +1167,6 @@ async def lifespan(app):
             print(f"[BOOTSTRAP] Watchlist Stage2 warmup error: {_e}")
             _BOOTSTRAP_STATE["steps"]["stage2_lkg"] = {"ok": False, "error": str(_e)}
 
-        # 4. Retained Confluence snapshot — kick background rebuild if needed.
-        _t = _bst.monotonic()
-        try:
-            from services.confluence_v2_service import (
-                _RETAINED,
-                _RETAINED_LOCK,
-                _start_background_rebuild,
-            )
-            with _RETAINED_LOCK:
-                _have_snap = _RETAINED["snapshot"] is not None
-            if not _have_snap:
-                _started = _start_background_rebuild()
-                _msg = "started background rebuild" if _started else "warm skipped (build already in progress)"
-            else:
-                _msg = "warm skipped (snapshot already present)"
-            print(f"[BOOTSTRAP] Confluence: {_msg}")
-            _BOOTSTRAP_STATE["steps"]["confluence_warm"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
-        except Exception as _e:
-            print(f"[BOOTSTRAP] Confluence retained warm error (non-fatal): {_e}")
-            _BOOTSTRAP_STATE["steps"]["confluence_warm"] = {"ok": False, "error": str(_e)}
-
         # 5. Options screener snapshot — restore in-memory state from disk.
         _t = _bst.monotonic()
         try:
@@ -1207,10 +1193,6 @@ async def lifespan(app):
 
         # 7. Neon contract snapshot recovery — enrich partial supplement LKG rows
         #    immediately using saved Neon data. Zero Tradier calls. One DB round-trip.
-        #    Recovers score/IV/OI/EM/signal for ~15-30 symbols that have saved contract
-        #    snapshots; all others remain queued for the next regular-session scan.
-        #    NOTE: wrapped in asyncio.to_thread because the cold Neon connection can
-        #    take 5-10s and would block GET / if called directly on the event loop.
         _t = _bst.monotonic()
         try:
             from data.options_theme_supplement import run_neon_recovery_now as _neon_rec
@@ -1220,11 +1202,33 @@ async def lifespan(app):
             print(f"[BOOTSTRAP] Neon snapshot recovery error (non-fatal): {_e}")
             _BOOTSTRAP_STATE["steps"]["neon_recovery"] = {"ok": False, "error": str(_e)}
 
-        # 8. Watchlist news LKG prewarm — hydrate _news_lkg from Neon archive for
-        #    all active watchlists before any user request arrives.
-        #    Non-blocking: registered as a background task.  No provider calls.
-        #    Ensures GET /api/watchlist/{id}/news returns real content immediately
-        #    after restart without triggering a synchronous 461-ticker RSS fanout.
+        # 8. Retained Confluence snapshot — kick background rebuild if needed.
+        #    Moved after all sequential preloads so the Confluence daemon
+        #    thread (~60s) does not compound GIL pressure with the
+        #    asyncio.to_thread() steps above.
+        _t = _bst.monotonic()
+        try:
+            from services.confluence_v2_service import (
+                _RETAINED,
+                _RETAINED_LOCK,
+                _start_background_rebuild,
+            )
+            with _RETAINED_LOCK:
+                _have_snap = _RETAINED["snapshot"] is not None
+            if not _have_snap:
+                _started = _start_background_rebuild()
+                _msg = "started background rebuild" if _started else "warm skipped (build already in progress)"
+            else:
+                _msg = "warm skipped (snapshot already present)"
+            print(f"[BOOTSTRAP] Confluence: {_msg}")
+            _BOOTSTRAP_STATE["steps"]["confluence_warm"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
+        except Exception as _e:
+            print(f"[BOOTSTRAP] Confluence retained warm error (non-fatal): {_e}")
+            _BOOTSTRAP_STATE["steps"]["confluence_warm"] = {"ok": False, "error": str(_e)}
+
+        # 9. Watchlist news LKG prewarm — hydrate _news_lkg from Neon archive.
+        #    Moved after all sequential preloads so the async task (~77s Neon
+        #    archive reads) does not compound GIL pressure with the steps above.
         _t = _bst.monotonic()
         try:
             from services.watchlist_router import _prewarm_news_lkg as _news_prewarm_fn
