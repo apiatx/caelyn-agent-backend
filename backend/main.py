@@ -445,16 +445,7 @@ async def lifespan(app):
     # reaches its yield in < 2s, the worker starts serving, and GET / returns
     # 200 before the health check deadline.  All the loops below have built-in
     # startup delays (30s–5min) so they handle a briefly uninitialized state.
-    #
-    # Protected health window: the first 60 s after the process becomes
-    # responsive are reserved for serving health probes.  All heavy
-    # CPU/import/DB work in the deferred-startup thread is delayed until
-    # this window passes.  Every downstream consumer has ≥120 s startup
-    # delays, so there is no race condition.
     def _deferred_sync_startup() -> None:
-        import time as _t_dss
-        _t_dss.sleep(60)   # protected health window
-
         _init_postgres_chat_storage_on_startup("lifespan")
         try:
             from data.earnings_monitor_store import init_earnings_monitor_tables
@@ -682,19 +673,23 @@ async def lifespan(app):
     # /api/sectors/page-data endpoints still work lazily (populated on first request via sr:dashboard:v1).
     # asyncio.create_task(_sector_rotation_precompute_loop())
     async def _canon_maint_deferred():
-        await asyncio.sleep(0)   # yield to event loop before import so GET / can respond first
-        try:
+        def _import_canon_maint():
             from services.canonical_history_backfill import start_maintenance_scheduler as _fn
+            return _fn
+        try:
+            _fn = await asyncio.to_thread(_import_canon_maint)
             _fn()
         except Exception as _e:
             print(f"[STARTUP] canonical history maintenance scheduler failed to start: {_e}")
     asyncio.create_task(_canon_maint_deferred())
     asyncio.create_task(_hl_boot_and_run(_hl_state))
     async def _bittensor_deferred():
-        await asyncio.sleep(0)   # yield to event loop before import so GET / can respond first
-        try:
+        def _import_bittensor():
             from services.bittensor.router import _dashboard_refresh_loop as _bittensor_refresh_loop
-            asyncio.create_task(_bittensor_refresh_loop())
+            return _bittensor_refresh_loop
+        try:
+            _loop_fn = await asyncio.to_thread(_import_bittensor)
+            asyncio.create_task(_loop_fn())
         except Exception as _e:
             print(f"[STARTUP] Bittensor refresh task error: {_e}")
     asyncio.create_task(_bittensor_deferred())
@@ -991,10 +986,12 @@ async def lifespan(app):
     # Runs after a 5s delay so sector rotation loop has a head start.
     # No LLM calls, no API calls — pure cache/disk reads + static registry.
     async def _thematic_warmup_deferred():
-        await asyncio.sleep(0)   # yield to event loop before import so GET / can respond first
-        try:
+        def _import_thematic():
             from services.thematic_context_provider import warmup_thematic_context as _thematic_warmup
-            asyncio.create_task(_thematic_warmup())
+            return _thematic_warmup
+        try:
+            _warmup_fn = await asyncio.to_thread(_import_thematic)
+            asyncio.create_task(_warmup_fn())
         except Exception as _e:
             print(f"[STARTUP] Thematic context warmup task error: {_e}")
     asyncio.create_task(_thematic_warmup_deferred())
@@ -1022,12 +1019,6 @@ async def lifespan(app):
     # first runs only after yield returns control to the event loop.
     # Each step is timed and isolated — a failure does not abort the others.
     async def _post_yield_bootstrap():
-        # Protected health window: defer bootstrap work so Autoscale health
-        # probes get 10+ s of clean HTTP responsiveness before any CPU-heavy
-        # post-yield work begins.  No feature endpoint depends on bootstrap
-        # completing within this window.
-        await asyncio.sleep(10)
-
         import time as _bst
         _bt0 = _bst.monotonic()
         _BOOTSTRAP_STATE["started_at"] = _bt0
@@ -1257,13 +1248,15 @@ async def lifespan(app):
     # Also runs a startup staleness check (45s delay) so restarts mid-week
     # immediately refresh stale snapshots without waiting for Sunday.
     async def _calendar_snap_deferred():
-        await asyncio.sleep(0)   # yield to event loop before import so GET / can respond first
-        try:
+        def _import_calendar():
             from services.calendar_snapshot_service import (
                 weekly_scheduler_loop as _calendar_snap_loop,
                 check_and_refresh_stale as _cal_stale_check,
             )
             from config import FMP_API_KEY as _fmp_key_for_snap
+            return _calendar_snap_loop, _cal_stale_check, _fmp_key_for_snap
+        try:
+            _calendar_snap_loop, _cal_stale_check, _fmp_key_for_snap = await asyncio.to_thread(_import_calendar)
             asyncio.create_task(_calendar_snap_loop(lambda: _fmp_key_for_snap))
             asyncio.create_task(_cal_stale_check(_fmp_key_for_snap or ""))
         except Exception as _e:
@@ -1278,10 +1271,12 @@ async def lifespan(app):
     #   Sun-Fri 11:45 ET  social fundamentals warm
     #   Fri 02:00 ET  watchlist+portfolio fundamentals warm
     async def _screener_hub_deferred():
-        await asyncio.sleep(0)   # yield to event loop before import so GET / can respond first
-        try:
+        def _import_screener_hub():
             from services.screener_hub_scheduler import scheduler_loop as _screener_hub_loop
-            asyncio.create_task(_screener_hub_loop())
+            return _screener_hub_loop
+        try:
+            _loop_fn = await asyncio.to_thread(_import_screener_hub)
+            asyncio.create_task(_loop_fn())
             print("[SCREENER_HUB] Scheduler task registered")
         except Exception as _e:
             print(f"[STARTUP] Screener Hub scheduler init error: {_e}")
