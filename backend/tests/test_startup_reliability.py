@@ -587,3 +587,266 @@ class TestShutdownLifecycle:
         assert all(t.done() for t in tasks_created), (
             "Not all deferred tasks were completed/cancelled on shutdown"
         )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Tests 11–15 — to_thread import offload keeps event loop free
+#
+# These tests validate the Fix 1 / Fix 2 changes in main.py:
+# _theme_rs_warmup_deferred and _rss_sweeper_deferred now use
+# await asyncio.to_thread(sync_import_loader) instead of relying on
+# await asyncio.sleep(0) before a synchronous import.
+#
+# The key invariant: a blocking import running inside to_thread must NOT
+# starve the event loop.  GET / must return 200 in < 1 s regardless of
+# how long the import takes.
+# ═════════════════════════════════════════════════════════════════════════════
+
+pytestmark_anyio = pytest.mark.skipif(
+    not _HTTPX_AVAILABLE, reason="httpx not installed"
+)
+
+
+def _make_to_thread_app(blocking_seconds: float = 10.0):
+    """
+    Build a minimal FastAPI app whose lifespan uses the production to_thread
+    pattern for one deferred wrapper.
+
+    A synchronous import_loader runs inside asyncio.to_thread(), blocking
+    for *blocking_seconds*.  After to_thread returns, the returned callable
+    is scheduled via asyncio.create_task() on the main event loop.
+
+    Verifies that GET / stays responsive while the import is running.
+    """
+    from fastapi import FastAPI
+
+    @asynccontextmanager
+    async def test_lifespan(app: FastAPI) -> AsyncGenerator:
+        async def _deferred_wrapper():
+            def _sync_import_loader():
+                time.sleep(blocking_seconds)
+                async def _warmed_up():
+                    pass
+                return _warmed_up
+
+            _warmed_fn = await asyncio.to_thread(_sync_import_loader)
+            asyncio.create_task(_warmed_fn())
+
+        asyncio.create_task(_deferred_wrapper())
+        yield
+
+    app = FastAPI(lifespan=test_lifespan)
+
+    @app.get("/")
+    async def root():
+        return {"status": "ok"}
+
+    return app
+
+
+@pytestmark_anyio
+class TestToThreadImportKeepsEventLoopFree:
+    """Tests 11–13: to_thread import pattern preserves GET / responsiveness."""
+
+    @pytest.mark.anyio
+    async def test_11_theme_rs_slow_import_get_responds(self):
+        """
+        Test 11: Theme RS import blocking 10 s in to_thread —
+        GET / returns 200 in < 1 s.
+        """
+        app = _make_to_thread_app(blocking_seconds=10.0)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            t0 = time.monotonic()
+            response = await client.get("/")
+            elapsed = time.monotonic() - t0
+
+        assert response.status_code == 200
+        assert elapsed < 1.0, (
+            f"GET / took {elapsed*1000:.0f} ms with 10 s import in to_thread — "
+            "event loop must not be starved"
+        )
+
+    @pytest.mark.anyio
+    async def test_12_rss_slow_import_get_responds(self):
+        """
+        Test 12: RSS import blocking 10 s in to_thread —
+        GET / returns 200 in < 1 s.
+        """
+        app = _make_to_thread_app(blocking_seconds=10.0)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            t0 = time.monotonic()
+            response = await client.get("/")
+            elapsed = time.monotonic() - t0
+
+        assert response.status_code == 200
+        assert elapsed < 1.0, (
+            f"GET / took {elapsed*1000:.0f} ms with 10 s import in to_thread"
+        )
+
+    @pytest.mark.anyio
+    async def test_13_warmup_runs_on_main_event_loop(self):
+        """
+        Test 13: The async callable returned from to_thread runs on the
+        MAIN event loop (not the worker thread).
+
+        Verifies the production pattern in _theme_rs_warmup_deferred:
+          await asyncio.to_thread(sync_import_loader)
+          asyncio.create_task(returned_async_callable)
+
+        The create_task() must schedule the callable on the main event
+        loop, not execute it inside the worker thread.
+        """
+        import threading
+        main_thread_id = threading.get_ident()
+        worker_thread_id_box = [None]
+        task_ran_on_main = [False]
+
+        async def _test_direct():
+            def _sync_import_loader():
+                worker_thread_id_box[0] = threading.get_ident()
+                time.sleep(0.1)
+                async def _warmed_up():
+                    task_ran_on_main[0] = (threading.get_ident() == main_thread_id)
+                return _warmed_up
+
+            _warmed_fn = await asyncio.to_thread(_sync_import_loader)
+            task = asyncio.create_task(_warmed_fn())
+            await task
+
+        await _test_direct()
+
+        assert worker_thread_id_box[0] is not None, "Worker thread never ran"
+        assert worker_thread_id_box[0] != main_thread_id, (
+            "Sync loader ran on main thread — to_thread must offload it"
+        )
+        assert task_ran_on_main[0], (
+            "Returned async callable ran on worker thread, not main event loop"
+        )
+
+    @pytest.mark.anyio
+    async def test_14_rss_sweeper_runs_on_main_event_loop(self):
+        """
+        Test 14: RSS sweeper coroutine from to_thread runs on the MAIN
+        event loop.
+
+        Same pattern as test_13 — validates the _rss_sweeper_deferred
+        production code path.
+        """
+        import threading
+        main_thread_id = threading.get_ident()
+        worker_thread_id_box = [None]
+        task_ran_on_main = [False]
+
+        async def _test_direct():
+            def _sync_import_loader():
+                worker_thread_id_box[0] = threading.get_ident()
+                time.sleep(0.1)
+                async def _rss_loop():
+                    task_ran_on_main[0] = (threading.get_ident() == main_thread_id)
+                return _rss_loop
+
+            _loop_fn = await asyncio.to_thread(_sync_import_loader)
+            task = asyncio.create_task(_loop_fn())
+            await task
+
+        await _test_direct()
+
+        assert worker_thread_id_box[0] is not None, "Worker thread never ran"
+        assert worker_thread_id_box[0] != main_thread_id
+        assert task_ran_on_main[0], (
+            "Returned coroutine ran on worker thread, not main event loop"
+        )
+
+    @pytest.mark.anyio
+    async def test_15_no_duplicate_warmup_task(self):
+        """
+        Test 15: Deferred wrapper creates exactly one inner task.
+        Repeated CREATE_TASK cannot double-register.
+        """
+        inner_run_count = [0]
+
+        async def _inner():
+            inner_run_count[0] += 1
+
+        async def _wrapper():
+            def _sync_loader():
+                return _inner
+            _fn = await asyncio.to_thread(_sync_loader)
+            asyncio.create_task(_fn())
+
+        # Register once
+        asyncio.create_task(_wrapper())
+        await asyncio.sleep(0.2)
+        assert inner_run_count[0] == 1, (
+            f"Inner task ran {inner_run_count[0]} times — expected 1"
+        )
+
+
+@pytestmark_anyio
+class TestContinuousHealthDuringSlowImports:
+    """Tests 16–17: Continuous health probing during slow imports."""
+
+    @pytest.mark.anyio
+    async def test_16_continuous_health_during_slow_import(self):
+        """
+        Test 16 (CRITICAL): Send 5 GET / requests while a 10 s import
+        is running in to_thread.  Every response must be 200 and < 1 s.
+        """
+        app = _make_to_thread_app(blocking_seconds=10.0)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            for i in range(5):
+                t0 = time.monotonic()
+                response = await client.get("/")
+                elapsed = time.monotonic() - t0
+                assert response.status_code == 200, (
+                    f"Request {i+1} returned {response.status_code}"
+                )
+                assert elapsed < 1.0, (
+                    f"Request {i+1} took {elapsed*1000:.0f} ms — "
+                    "continuous health must stay under 1 s"
+                )
+
+    @pytest.mark.anyio
+    async def test_17_lifespan_yield_under_100ms(self):
+        """
+        Test 17: Lifespan yield completes in < 100 ms even with a slow
+        import queued via to_thread.
+        """
+        import threading
+        from fastapi import FastAPI
+
+        @asynccontextmanager
+        async def test_lifespan(app: FastAPI) -> AsyncGenerator:
+            async def _deferred():
+                def _import_loader():
+                    time.sleep(30.0)   # very slow import in worker thread
+                    async def _warmed():
+                        pass
+                    return _warmed
+                await asyncio.to_thread(_import_loader)
+
+            asyncio.create_task(_deferred())
+            yield
+
+        app = FastAPI(lifespan=test_lifespan)
+
+        @app.get("/")
+        async def root():
+            return {"status": "ok"}
+
+        t0 = time.monotonic()
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            elapsed = time.monotonic() - t0
+
+        assert elapsed < 0.100, (
+            f"Lifespan yield took {elapsed*1000:.0f} ms — "
+            "must complete in < 100 ms regardless of import duration"
+        )

@@ -991,12 +991,17 @@ async def lifespan(app):
     asyncio.create_task(_thematic_warmup_deferred())
     # Dynamic thematic universe: build and refresh every 15 min.
     asyncio.create_task(_dynamic_thematic_universe_loop())
-    # Themes by Relative Strength warmup: non-blocking loop registration.
+    # Themes by Relative Strength warmup: offloaded to worker thread so the
+    # synchronous import of theme_rs_service (heavy transitive deps) cannot
+    # starve the event loop.  The returned async callable is scheduled on the
+    # main loop after the import completes.
     async def _theme_rs_warmup_deferred():
-        await asyncio.sleep(0)   # yield to event loop before import so GET / can respond first
-        try:
+        def _import_theme_rs():
             from services.theme_rs_service import warmup_theme_rs as _theme_rs_warmup
-            asyncio.create_task(_theme_rs_warmup())
+            return _theme_rs_warmup
+        try:
+            _warmup_fn = await asyncio.to_thread(_import_theme_rs)
+            asyncio.create_task(_warmup_fn())
         except Exception as _e:
             print(f"[STARTUP] Theme RS warmup error: {_e}")
     asyncio.create_task(_theme_rs_warmup_deferred())
@@ -1301,14 +1306,18 @@ async def lifespan(app):
     asyncio.create_task(_trading_dashboard_startup())
 
     # Watchlist RSS sweeper — continuous ~2-min full-universe RSS archive sweep.
-    # Table creation (_rss_ensure_table) moved to _deferred_sync_startup() —
-    # cold Neon was adding 5-8s here.  The sweeper loop starts at ≥ 120s delay
-    # so the table is guaranteed to exist before the first write.
+    # Import offloaded to worker thread so the synchronous import of
+    # watchlist_rss_sweeper (news_major_service, httpx pool init) cannot starve
+    # the event loop.  The table is guaranteed to exist before the first write
+    # because _deferred_sync_startup runs _rss_ensure_table before the sweeper's
+    # ≥120s startup delay expires.
     async def _rss_sweeper_deferred():
-        await asyncio.sleep(0)   # yield to event loop before import so GET / can respond first
-        try:
+        def _import_rss_sweeper():
             from services.watchlist_rss_sweeper import rss_sweeper_loop as _rss_sweeper_loop
-            asyncio.create_task(_rss_sweeper_loop())
+            return _rss_sweeper_loop
+        try:
+            _loop_fn = await asyncio.to_thread(_import_rss_sweeper)
+            asyncio.create_task(_loop_fn())
             print("[STARTUP] Watchlist RSS sweeper loop registered")
         except Exception as _rss_err:
             print(f"[STARTUP] RSS sweeper loop registration error: {_rss_err}")
