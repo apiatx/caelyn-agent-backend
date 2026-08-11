@@ -1,0 +1,685 @@
+
+============================================================
+GOAL
+============================================================
+
+Make multi-agent handoffs deterministic and make it mechanically difficult to:
+
+- overwrite another agent's work
+- begin from a stale Git version
+- leave source changes only locally
+- accidentally diverge main
+- force/rewrite history
+- push failing source
+- publish dirty/uncommitted source
+- publish source that has not been pushed
+- mistake Replit-generated publish commits for source-code changes
+- mask deployment compile failures
+
+The user works sequentially with:
+
+- DeepSeek through OpenCode
+- Codex CLI
+- Replit Agent
+- potentially more providers later
+- manual edits in the Replit editor/shell
+
+Do NOT create separate model-specific branches.
+
+The canonical workspace remains:
+
+    /home/runner/workspace
+
+Canonical branch remains:
+
+    main
+
+============================================================
+IMPORTANT CURRENT BEHAVIOR TO PRESERVE/ACCOUNT FOR
+============================================================
+
+Replit itself may create:
+
+    Published your App
+
+commits on local main during publishing.
+
+These commits can contain:
+
+- runtime data
+- cache/LKG files
+- reports
+- OpenCode state
+- generated data
+
+and may leave local main ahead of origin/main even when there is ZERO unpushed
+production source.
+
+The guard system MUST understand this.
+
+Do NOT treat:
+
+    local main ahead by a Replit publish/generated-data-only commit
+
+as equivalent to:
+
+    unpushed production source.
+
+Also do not delete/rewrite those commits merely to clean history.
+
+============================================================
+FIRST — READ-ONLY AUDIT
+============================================================
+
+Before editing, inspect:
+
+- AGENTS.md
+- .gitignore
+- .replit
+- pyproject.toml
+- current scripts/
+- current tests related to startup/build
+- current Git status/history
+- current local vs origin/main relationship
+
+Confirm:
+
+    git rev-parse --show-toplevel
+    git branch --show-current
+    git status -sb
+    git fetch origin main --quiet
+    git rev-parse HEAD
+    git rev-parse origin/main
+
+Do not alter application source during this task.
+
+============================================================
+IMPLEMENT ONE CANONICAL GUARD SYSTEM
+============================================================
+
+Prefer a single Python CLI:
+
+    scripts/workspace_guard.py
+
+rather than many unrelated scripts.
+
+It should expose clear subcommands such as:
+
+    claim
+    status
+    preflight
+    prepush
+    prepublish
+    release
+    postpublish
+
+Exact naming may vary slightly if repository evidence favors something else,
+but keep ONE canonical implementation.
+
+Do not introduce external dependencies.
+
+Use Python stdlib + Git subprocess commands.
+
+============================================================
+1. WORKSPACE CLAIM / SINGLE-WRITER LOCK
+============================================================
+
+Create an ignored operational directory such as:
+
+    .agent-state/
+
+Add it to .gitignore.
+
+It must never be committed or published as source.
+
+A claim records at minimum:
+
+- actor
+- task
+- timestamp
+- starting HEAD
+- starting origin/main
+- workspace path
+- branch
+
+Actor must be a free-form identifier so future models work too:
+
+Examples:
+
+    deepseek
+    codex
+    replit-agent
+    manual
+    gemini
+    claude
+    future-provider-name
+
+Do not hardcode only today's three agents.
+
+If another active claim exists:
+
+STOP.
+
+Show:
+
+- actor
+- task
+- timestamp
+- starting SHA
+
+Do not overwrite the lock automatically.
+
+Provide an explicit user-authorized force-release mechanism for stale locks,
+but never silently steal one.
+
+============================================================
+2. PREFLIGHT / GIT SYNCHRONIZATION
+============================================================
+
+Before production editing, preflight must verify:
+
+- repo root exactly /home/runner/workspace
+- branch exactly main
+- no merge/rebase/cherry-pick in progress
+- origin exists
+- git fetch origin main succeeds
+- no unresolved conflicts
+
+Classify working-tree changes into:
+
+A. production/config/source
+B. known generated/runtime/report/cache artifacts
+
+Be careful:
+
+    backend/data/*.py
+
+is SOURCE CODE.
+
+Do NOT classify all backend/data/** as generated.
+
+Known JSON/JSON.GZ/LKG/cache/report artifacts may be non-source according to
+existing repository behavior.
+
+If there are uncommitted production files:
+
+- if they belong to another active claim -> STOP
+- if actor=manual and manual owns claim -> allow
+- otherwise STOP and report exact paths
+
+============================================================
+3. LOCAL / REMOTE RELATIONSHIP
+============================================================
+
+Handle Git relationships explicitly.
+
+CASE A:
+
+    HEAD == origin/main
+
+Proceed.
+
+CASE B:
+
+    local behind origin/main
+    no divergence
+    no conflicting dirty source
+
+Allow ONLY a true fast-forward synchronization.
+
+Use:
+
+    git fetch
+    git merge --ff-only origin/main
+
+This fast-forward-only operation is explicitly approved for the guard tooling.
+
+No merge commit may ever be created.
+
+CASE C:
+
+    local ahead origin/main
+
+Inspect EVERY local-only commit.
+
+If local-only commits contain production source/config:
+
+STOP unless they are the current actor's already-validated task commits that
+are explicitly being completed/pushed.
+
+If local-only commits are ONLY:
+
+- Replit "Published your App" commits
+- reports
+- runtime data
+- generated data
+- caches/LKG/snapshots
+- agent state
+
+classify them as NON-SOURCE AHEAD.
+
+Do not reset/rebase/revert them.
+
+Allow work to continue.
+
+CASE D:
+
+    true divergence
+
+STOP.
+
+Never automatically:
+
+- merge divergent history
+- rebase
+- reset
+- force-push
+- cherry-pick
+
+Report both SHAs and differing commits.
+
+============================================================
+4. SOURCE FILE CLASSIFICATION
+============================================================
+
+Implement one centralized classifier used by every guard command.
+
+Production/source includes at minimum relevant:
+
+- *.py
+- *.toml
+- *.yaml / *.yml where configuration
+- .replit
+- requirements/dependency manifests
+- source scripts
+- tests
+- AGENTS.md
+- versioned git hooks
+- versioned guard scripts
+
+Generated/non-source classification must be explicit and narrow.
+
+Do not use a dangerous rule like:
+
+    backend/data/** = generated
+
+because Python modules live there.
+
+Add tests for classification.
+
+============================================================
+5. VERSIONED PRE-PUSH HOOK
+============================================================
+
+Create:
+
+    .githooks/pre-push
+
+and an installer/bootstrap command that sets:
+
+    git config core.hooksPath .githooks
+
+The hook must call the canonical workspace guard:
+
+    prepush
+
+Do not duplicate validation logic inside shell.
+
+The hook applies to:
+
+- DeepSeek
+- Codex
+- Replit shell pushes
+- future agents
+- manual git push
+
+Prepush must reject:
+
+- wrong branch
+- divergence
+- unresolved conflicts
+- dirty task source that should have been committed
+- non-fast-forward push
+- failed source validation
+
+Never permit force push.
+
+============================================================
+6. BACKEND SOURCE VALIDATION
+============================================================
+
+Create the smallest stable validation gate appropriate to source pushes.
+
+Do NOT run every expensive integration/provider test on every push.
+
+At minimum use existing repository tooling to validate:
+
+- git diff --check
+- Python compile/import sanity
+- existing fast deterministic backend smoke tests
+- changed startup-specific tests when startup-sensitive files changed
+
+If any of these files/areas change:
+
+- backend/main.py
+- .replit
+- startup/lifespan helpers
+- modules imported during startup
+
+automatically include the existing startup reliability/timing tests.
+
+Do not invent a duplicate test suite if the existing tests already cover it.
+
+============================================================
+7. PRE-PUBLISH GATE
+============================================================
+
+Add:
+
+    workspace_guard.py prepublish
+
+This is DIFFERENT from prepush.
+
+It must refuse publish readiness unless:
+
+- branch = main
+- no unresolved conflicts
+- no dirty production source/config
+- current production source commit is already contained in origin/main
+- required source validation passes
+- deployment build validation passes
+- backend health/startup smoke passes
+
+IMPORTANT:
+
+Use the REAL Replit health contract.
+
+Do NOT use the artificial rule:
+
+    every request <1 second
+
+that was previously used during debugging.
+
+For deployment readiness, the backend must remain responsive inside Replit's
+actual ~5-second homepage health-check budget.
+
+Use a reasonable safety margin if practical, but do not turn deployment
+readiness into another perfection exercise.
+
+No 5xx.
+No process exit.
+
+Provider internet failures in local tests must be isolated using existing mocks
+or test mechanisms.
+
+Do not add provider calls to the health route.
+
+============================================================
+8. MAKE LOCAL BUILD MATCH REPLIT BUILD
+============================================================
+
+Audit current .replit [deployment].build.
+
+Current historical configuration has used:
+
+    ... compileall ... ;
+    ... compileall ... ;
+    true
+
+An unconditional trailing:
+
+    true
+
+can mask compile failures.
+
+That is NOT acceptable.
+
+Implement ONE canonical deterministic build command that:
+
+- exits nonzero on real compile/build failure
+- is callable locally by prepublish
+- is also used by Replit deployment build
+
+Prefer a small existing-repo script if that avoids duplicated commands.
+
+Do not change the deployment run command unless necessary.
+
+Do not alter port mappings or Autoscale target unless repository evidence
+requires it.
+
+The same build logic must run:
+
+    locally before publish
+    AND
+    during Replit publish
+
+This prevents local/deployment build drift.
+
+============================================================
+9. TASK COMPLETION / HANDOFF
+============================================================
+
+Update AGENTS.md so these rules apply explicitly to:
+
+- Codex CLI
+- DeepSeek/OpenCode
+- Replit Agent
+- any future coding agent/model
+- manual user workflow where relevant
+
+For a successful implementation task, canonical lifecycle becomes:
+
+    claim
+    preflight
+    edit
+    validate
+    exact staging
+    focused commit
+    prepush hook
+    git push origin main
+    verify push
+    release
+    report
+
+Every completed source task must report:
+
+- starting HEAD
+- starting origin/main
+- task commit SHA
+- ending HEAD
+- ending origin/main
+- changed production files
+- validation result
+
+Do NOT leave a successfully completed source task as an unpushed local source
+commit.
+
+This rule applies uniformly.
+
+============================================================
+10. MANUAL USER EDITS
+============================================================
+
+Document a simple manual workflow.
+
+The user must be able to do something equivalent to:
+
+    claim --actor manual --task "description"
+
+then edit files manually.
+
+While manual owns the claim, agents must refuse to modify production source.
+
+The user can:
+
+A. commit/push manually using the same hook
+
+OR
+
+B. explicitly hand the dirty files to an agent in a later prompt.
+
+Agents may NEVER silently discard or overwrite manual dirty source.
+
+============================================================
+11. REPLIT PUBLISH COMMITS
+============================================================
+
+Provide:
+
+    postpublish
+
+as a READ/CLASSIFY operation by default.
+
+After publish it should:
+
+- fetch origin
+- show current HEAD
+- show origin/main
+- identify any new "Published your App" commit
+- list its changed paths
+- classify source vs generated-only
+- report whether production source remains synchronized
+
+Do not reset/rebase publication commits.
+
+If automatically pushing a generated-only publication commit is considered,
+DO NOT enable that silently.
+
+Require an explicit flag/user request.
+
+The important invariant is SOURCE synchronization, not cosmetic SHA equality.
+
+============================================================
+12. AGENTS.md CORRECTIONS
+============================================================
+
+The current AGENTS.md contains useful architecture/scope protections.
+
+PRESERVE THEM.
+
+Do not weaken:
+
+- architecture-change approval
+- two-production-file default
+- provider safety
+- database mutation safety
+- no reset/rebase/force push
+- exact staging
+- report requirements
+
+Modify only the Git/handoff/deployment sections required to install this system.
+
+IMPORTANT:
+
+The current rule that agents may continue despite arbitrary local/remote drift
+must become the explicit classified behavior above.
+
+Do not rely on model judgment alone.
+
+The guard script decides.
+
+============================================================
+13. TESTS FOR THE GUARD ITSELF
+============================================================
+
+Add focused tests for at least:
+
+- correct repo/main accepted
+- wrong branch rejected
+- active lock rejected
+- manual lock preserved
+- dirty production source rejected
+- dirty runtime JSON accepted
+- backend/data/foo.py treated as SOURCE
+- local behind fast-forward case
+- divergence rejected
+- local ahead source commit detected
+- local ahead generated-only Published-App commit accepted
+- non-fast-forward push rejected
+- prepublish rejects dirty source
+- prepublish rejects source not contained in origin/main
+- build failure returns nonzero
+- trailing `true` cannot mask compile failure
+- startup-sensitive file change selects startup validation
+
+Use temporary Git repositories for Git-state unit tests.
+
+Do not mutate the real repository history during tests.
+
+============================================================
+14. SCOPE
+============================================================
+
+Expected files include infrastructure only, such as:
+
+    AGENTS.md
+    .gitignore
+    .githooks/pre-push
+    scripts/workspace_guard.py
+    a canonical build-validation script if needed
+    focused guard tests
+    .replit ONLY for making its build invoke the canonical build script
+
+DO NOT TOUCH APPLICATION BUSINESS LOGIC.
+
+No Watchlist.
+No taxonomy.
+No providers.
+No DB schema.
+No API behavior.
+No startup scheduling changes.
+No caches.
+No frontend.
+
+This infrastructure task is explicitly allowed to exceed the normal
+two-production-file limit ONLY for the guard files listed above.
+
+============================================================
+15. DO NOT PUBLISH DURING THIS TASK
+============================================================
+
+Do not publish.
+
+We are installing the guard before using it for publication.
+
+After implementation:
+
+- run all guard tests
+- run existing startup tests
+- run prepublish in validation/dry-run mode
+- verify git hook behavior in a temporary Git repo where practical
+- ensure no business source changed
+
+Then create ONE focused infrastructure commit.
+
+Push it to origin/main using the NEW prepush guard.
+
+Do not publish.
+
+============================================================
+FINAL REPORT
+============================================================
+
+Report:
+
+1. starting HEAD and origin/main
+2. current Replit publish-commit behavior observed
+3. files changed
+4. exact guard lifecycle
+5. source/generated classifier rules
+6. lock behavior
+7. behind/ahead/divergence behavior
+8. prepush behavior
+9. prepublish behavior
+10. exact Replit build command before/after
+11. confirmation compile failure can no longer be masked
+12. manual-edit workflow
+13. tests and results
+14. existing startup tests results
+15. dry-run prepublish result
+16. diff stat
+17. commit SHA
+18. push result
+19. ending HEAD and origin/main
+20. git status
+21. DO NOT PUBLISH
