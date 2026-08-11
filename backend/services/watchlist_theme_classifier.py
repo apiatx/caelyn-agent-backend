@@ -39,9 +39,17 @@ _PROVIDER_ENV     = "THEME_CLASSIFIER_PROVIDER"
 _MODEL_ENV        = "THEME_CLASSIFIER_MODEL"
 
 _DEFAULT_MODELS = {
-    "gemini": "gemini-2.0-flash-lite",
-    "openai": "gpt-4o-mini",
+    "gemini":   "gemini-2.0-flash-lite",
+    "openai":   "gpt-4o-mini",
+    "deepseek": "deepseek-chat",
 }
+
+_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+
+# Per-ticker singleton job tracking: set of tickers currently being classified.
+# Prevents duplicate classification jobs for the same ticker.
+_INFLIGHT_TICKERS: set[str] = set()
+_INFLIGHT_LOCK = asyncio.Lock()
 
 # ── Job state ─────────────────────────────────────────────────────────────────
 
@@ -121,16 +129,16 @@ def _detect_provider() -> tuple[str, str]:
     provider = os.getenv(_PROVIDER_ENV, "").lower().strip()
     model    = os.getenv(_MODEL_ENV, "").strip()
 
-    gemini_key = os.getenv("GEMINI_API_KEY", "")
-    openai_key = os.getenv("OPENAI_API_KEY", "")
+    deepseek_key = os.getenv("DEEPSEEK_API_KEY", "")
+    gemini_key   = os.getenv("GEMINI_API_KEY", "")
+    openai_key   = os.getenv("OPENAI_API_KEY", "")
 
+    # DeepSeek V4 Flash — authorised for automatic Watchlist theme assignment
+    if provider in ("deepseek", "") and deepseek_key:
+        return "deepseek", model or _DEFAULT_MODELS["deepseek"]
     if provider in ("gemini", "") and gemini_key:
         return "gemini", model or _DEFAULT_MODELS["gemini"]
     if provider in ("openai", "") and openai_key:
-        return "openai", model or _DEFAULT_MODELS["openai"]
-    if provider == "gemini":
-        return "gemini", model or _DEFAULT_MODELS["gemini"]
-    if provider == "openai":
         return "openai", model or _DEFAULT_MODELS["openai"]
     return "none", ""
 
@@ -541,3 +549,435 @@ def get_theme_provenance(symbol: str) -> dict:
         "needs_review":        needs_review,
         "is_mapped":           bool(final_theme and final_theme not in ("Other / Uncategorized",)),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Canonical taxonomy single-ticker classifier — DeepSeek V4 Flash
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+#  Triggered on Watchlist ticker ADD (not save). Runs as a background
+#  asyncio.create_task — the add response does not wait for classification.
+#
+#  Classifies against the CURRENT canonical taxonomy (THEME_RS_UNIVERSE),
+#  validates returned IDs, and persists through atomic_taxonomy_write_db()
+#  (the same canonical write path as manual taxonomy assignment).
+#
+#  Confidence threshold for auto-persist:  >= 0.75
+#  Low-confidence / no-valid-theme / provider failure → ticker stays unassigned.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_CONFIDENCE_THRESHOLD = 0.75
+_MIN_DESCRIPTION_LEN  = 20
+
+
+def _get_assignable_registry() -> dict:
+    """Return only assignable canonical theme/sub_theme nodes."""
+    from services.theme_rs_universe import THEME_RS_UNIVERSE
+    return {
+        k: v for k, v in THEME_RS_UNIVERSE.items()
+        if v.get("assignable", True)
+        and v.get("classification") in ("theme", "sub_theme")
+    }
+
+
+def _build_taxonomy_prompt(registry: dict) -> str:
+    """Build deterministic taxonomy description for the LLM prompt."""
+    lines = ["# Canonical Theme Taxonomy", "", "## Themes"]
+    parents = {k: v for k, v in registry.items() if v.get("classification") == "theme"}
+    for pid, meta in sorted(parents.items()):
+        lines.append(f"- {pid}: {meta.get('display_name', '')}")
+    lines.append("")
+    lines.append("## Subthemes")
+    subs = {k: v for k, v in registry.items() if v.get("classification") == "sub_theme"}
+    for sid, meta in sorted(subs.items()):
+        parent = meta.get("parent_theme_id", "?")
+        lines.append(f"- {sid} (parent={parent}): {meta.get('display_name', '')}")
+    return "\n".join(lines)
+
+
+def _build_single_ticker_prompt(
+    ticker: str,
+    company_name: str,
+    description: str,
+    sector: str,
+    registry: dict,
+) -> str:
+    taxonomy_desc = _build_taxonomy_prompt(registry)
+    return f"""You are a financial analyst performing thematic stock classification.
+
+{taxonomy_desc}
+
+## Classification Rules
+- primary_theme_id: the company's defining business/value-chain identity.
+  Prefer a subtheme when it fits better than a parent theme.
+- additional_theme_ids: meaningful secondary exposures (up to 3).
+- Only use IDs from the taxonomy above — do not invent IDs.
+- If no theme/subtheme genuinely represents this company, set no_valid_theme=true.
+- Do not use Sector IDs — sectors are not themes.
+- If primary exposure is unclear or ambiguous, set confidence below 0.6.
+
+## Ticker to Classify
+TICKER: {ticker}
+Company: {company_name}
+Sector: {sector or 'Unknown'}
+Description: {description[:600]}
+
+## Output
+Return ONLY a single JSON object — no markdown, no explanation:
+{{
+  "ticker": "{ticker}",
+  "company_name": "{company_name}",
+  "primary_theme_id": "canonical_id_or_null",
+  "primary_subtheme_id": "canonical_id_or_null",
+  "additional_theme_ids": [],
+  "confidence": 0.0,
+  "rationale": "one-sentence business rationale",
+  "no_valid_theme": false
+}}"""
+
+
+async def _call_deepseek_taxonomy(prompt: str, model_name: str) -> dict | None:
+    """Call DeepSeek V4 Flash for single-ticker taxonomy classification."""
+    deepseek_key = os.getenv("DEEPSEEK_API_KEY", "")
+    if not deepseek_key:
+        print("[THEME_CLASSIFIER] DeepSeek API key not found")
+        return None
+
+    raw_text = ""
+    try:
+        import openai as _oai
+        client = _oai.OpenAI(api_key=deepseek_key, base_url=_DEEPSEEK_BASE_URL)
+        resp = await asyncio.to_thread(
+            client.chat.completions.create,
+            model=model_name,
+            max_tokens=1024,
+            temperature=0.1,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = resp.choices[0].message.content or ""
+    except Exception as exc:
+        print(f"[THEME_CLASSIFIER] DeepSeek call error: {exc}")
+        return None
+
+    try:
+        clean = raw_text.strip()
+        if clean.startswith("```"):
+            clean = clean.split("```")[1]
+            if clean.lower().startswith("json"):
+                clean = clean[4:]
+            clean = clean.strip()
+        return _json.loads(clean)
+    except Exception as exc:
+        print(f"[THEME_CLASSIFIER] DeepSeek JSON parse error: {exc}")
+        return None
+
+
+def _validate_taxonomy_result(
+    result: dict,
+    requested_ticker: str,
+    registry: dict,
+) -> tuple[dict | None, str]:
+    """
+    Validate a DeepSeek classification result against the canonical taxonomy.
+    Returns (validated_result, error_reason).
+    """
+    ticker = (result.get("ticker") or "").upper().strip()
+    if ticker != requested_ticker.upper():
+        return None, f"Ticker mismatch: got {ticker!r}, expected {requested_ticker!r}"
+
+    no_valid = bool(result.get("no_valid_theme", False))
+    if no_valid:
+        return {
+            "ticker":              ticker,
+            "no_valid_theme":      True,
+            "confidence":          0.0,
+            "rationale":           str(result.get("rationale", "")),
+        }, ""
+
+    assignable_ids = set(registry.keys())
+
+    def _check_id(tid: str | None) -> str | None:
+        if not tid:
+            return None
+        if tid not in assignable_ids:
+            return None
+        return tid
+
+    primary = _check_id(result.get("primary_theme_id") or None)
+    subtheme = _check_id(result.get("primary_subtheme_id") or None)
+    raw_additional = result.get("additional_theme_ids") or []
+    additional: list[str] = []
+    for aid in raw_additional:
+        valid_aid = _check_id(aid)
+        if valid_aid and valid_aid not in (primary, subtheme):
+            additional.append(valid_aid)
+
+    # Validate subtheme parent relationship — correct if mismatched
+    effective_primary = subtheme or primary
+    if subtheme and subtheme in registry:
+        parent_from_registry = registry[subtheme].get("parent_theme_id", "")
+        if parent_from_registry and primary and parent_from_registry != primary:
+            print(
+                f"[THEME_CLASSIFIER] validator: subtheme {subtheme!r} parent is "
+                f"{parent_from_registry!r}, correcting primary from {primary!r}"
+            )
+            primary = parent_from_registry
+
+    confidence = float(result.get("confidence", 0.0) or 0.0)
+
+    if not effective_primary and not additional:
+        return {
+            "ticker":              ticker,
+            "no_valid_theme":      True,
+            "confidence":          confidence,
+            "rationale":           str(result.get("rationale", "")),
+        }, ""
+
+    return {
+        "ticker":                ticker,
+        "company_name":           str(result.get("company_name", "")),
+        "primary_theme_id":       primary,
+        "primary_subtheme_id":    subtheme,
+        "additional_theme_ids":   sorted(set(additional)),
+        "confidence":             confidence,
+        "rationale":              str(result.get("rationale", "")),
+        "no_valid_theme":         False,
+    }, ""
+
+
+async def _persist_classification(validated: dict) -> bool:
+    """
+    Persist a validated classification through the canonical atomic taxonomy
+    write path. Returns True on success.
+    """
+    ticker = validated["ticker"]
+    effective_primary = validated.get("primary_subtheme_id") or validated.get("primary_theme_id")
+    additional = validated.get("additional_theme_ids") or []
+
+    try:
+        from data.pg_storage import atomic_taxonomy_write_db
+
+        ticker_overrides: list[dict] = []
+
+        if effective_primary:
+            ticker_overrides.append({
+                "theme_id": effective_primary,
+                "symbol":   ticker,
+                "action":   "add",
+                "source":   "deepseek_auto_classify",
+                "note":     f"confidence={validated['confidence']:.2f} rationale={validated.get('rationale', '')[:120]}",
+            })
+
+        for aid in additional:
+            ticker_overrides.append({
+                "theme_id": aid,
+                "symbol":   ticker,
+                "action":   "add",
+                "source":   "deepseek_auto_classify",
+                "note":     f"confidence={validated['confidence']:.2f}",
+            })
+
+        if not ticker_overrides:
+            return False
+
+        primary_op: dict | None = None
+        if effective_primary:
+            primary_op = {
+                "action":  "set",
+                "user_id": "default",
+                "ticker":  ticker,
+                "category": effective_primary,
+                "source":  "deepseek_auto_classify",
+                "reason":  f"auto-classified by DeepSeek V4 Flash (confidence={validated['confidence']:.2f})",
+            }
+
+        txn_result = atomic_taxonomy_write_db(
+            ticker_overrides=ticker_overrides,
+            primary_operation=primary_op,
+        )
+
+        if not txn_result.get("ok"):
+            print(f"[THEME_CLASSIFIER] atomic write failed: {txn_result.get('error')}")
+            return False
+
+        # Cache invalidation — same pattern as manual taxonomy assignment
+        try:
+            from services.category_overrides import invalidate_overrides_cache
+            invalidate_overrides_cache("default")
+        except Exception as _inv_err:
+            print(f"[THEME_CLASSIFIER] overrides cache invalidation error (non-fatal): {_inv_err}")
+
+        try:
+            from services.watchlist_router import invalidate_bulk_lkg_for_ticker
+            invalidate_bulk_lkg_for_ticker(ticker)
+        except Exception as _lkg_err:
+            print(f"[THEME_CLASSIFIER] LKG invalidation error (non-fatal): {_lkg_err}")
+
+        return True
+
+    except Exception as exc:
+        print(f"[THEME_CLASSIFIER] persist error: {exc}")
+        return False
+
+
+async def classify_and_assign_ticker(
+    ticker: str,
+    company_name: str = "",
+    description: str = "",
+    sector: str = "",
+) -> dict:
+    """
+    Classify a SINGLE ticker against the canonical taxonomy using DeepSeek V4 Flash,
+    validate the result, and persist high-confidence assignments through the
+    canonical atomic taxonomy write path.
+
+    Idempotent / exactly-once-ish via per-ticker in-flight tracking.
+    Returns a result dict with keys:
+      ticker, action (classified/input_incomplete/already_assigned/skipped_inflight),
+      primary_theme_id, confidence, rationale, error (if any).
+    """
+    sym = ticker.upper().strip()
+    result = {
+        "ticker":      sym,
+        "action":      "unknown",
+        "error":       None,
+        "confidence":  0.0,
+        "rationale":   "",
+    }
+
+    # ── 1. In-flight guard ────────────────────────────────────────────────────
+    async with _INFLIGHT_LOCK:
+        if sym in _INFLIGHT_TICKERS:
+            result["action"] = "skipped_inflight"
+            result["error"]  = "Classification already in progress for this ticker"
+            return result
+        _INFLIGHT_TICKERS.add(sym)
+
+    try:
+        # ── 2. Already assigned check ──────────────────────────────────────────
+        try:
+            from services.category_overrides import get_overrides
+            category = get_overrides("default").get(sym)
+            if category:
+                result["action"] = "already_assigned"
+                result["error"]  = f"Already has category override: {category}"
+                return result
+        except Exception:
+            pass
+
+        # Check if ticker has a canonical theme_ticker_overrides assignment
+        try:
+            from data.pg_storage import get_theme_ticker_overrides
+            rows = get_theme_ticker_overrides() or []
+            existing = [r for r in rows if r.get("symbol", "").upper() == sym and r.get("action") == "add"]
+            if existing:
+                result["action"] = "already_assigned"
+                result["error"]  = "Already has theme_ticker_overrides assignments"
+                return result
+        except Exception:
+            pass
+
+        # ── 3. Input completeness check ────────────────────────────────────────
+        if not company_name or company_name.strip().upper() == sym:
+            result["action"] = "input_incomplete"
+            result["error"]  = "INPUT_INCOMPLETE: company_name missing or equals ticker"
+            return result
+
+        desc_len = len((description or "").strip())
+        if desc_len < _MIN_DESCRIPTION_LEN:
+            result["action"] = "input_incomplete"
+            result["error"]  = f"INPUT_INCOMPLETE: description too short ({desc_len} chars, need {_MIN_DESCRIPTION_LEN})"
+            return result
+
+        # ── 4. Provider check ──────────────────────────────────────────────────
+        provider, model_name = _detect_provider()
+        if provider != "deepseek" and not os.getenv("DEEPSEEK_API_KEY"):
+            result["action"] = "provider_unavailable"
+            result["error"]  = "DeepSeek API key not configured"
+            return result
+
+        provider, model_name = "deepseek", _DEFAULT_MODELS["deepseek"]
+
+        # ── 5. Build prompt and call DeepSeek ──────────────────────────────────
+        registry = _get_assignable_registry()
+        if not registry:
+            result["action"] = "provider_unavailable"
+            result["error"]  = "Taxonomy registry empty — cannot classify"
+            return result
+
+        prompt = _build_single_ticker_prompt(
+            ticker=sym,
+            company_name=company_name,
+            description=description,
+            sector=sector,
+            registry=registry,
+        )
+
+        _upd(last_provider="deepseek", last_model=model_name)
+        raw_result = await _call_deepseek_taxonomy(prompt, model_name)
+
+        if raw_result is None:
+            result["action"] = "provider_failed"
+            result["error"]  = "DeepSeek API call failed or returned invalid JSON"
+            mark_needs_review([sym], "deepseek_api_failure")
+            return result
+
+        # ── 6. Validate ────────────────────────────────────────────────────────
+        validated, validation_error = _validate_taxonomy_result(
+            raw_result, sym, registry,
+        )
+
+        if validation_error:
+            result["action"]      = "validation_failed"
+            result["error"]       = validation_error
+            result["confidence"]  = float(raw_result.get("confidence", 0.0) or 0.0)
+            result["rationale"]   = str(raw_result.get("rationale", "") or "")[:200]
+            mark_needs_review([sym], f"validation_failed: {validation_error}")
+            return result
+
+        result["confidence"] = validated["confidence"]
+        result["rationale"]  = validated.get("rationale", "")[:200]
+
+        # ── 7. No valid theme ──────────────────────────────────────────────────
+        if validated.get("no_valid_theme"):
+            result["action"] = "no_valid_theme"
+            result["error"]  = (
+                f"No valid thematic assignment in current taxonomy. "
+                f"Ticker retains sector-level display. Rationale: {result['rationale']}"
+            )
+            return result
+
+        # ── 8. Confidence gate ─────────────────────────────────────────────────
+        if validated["confidence"] < _CONFIDENCE_THRESHOLD:
+            result["action"] = "low_confidence"
+            result["error"]  = (
+                f"Confidence {validated['confidence']:.2f} below threshold "
+                f"{_CONFIDENCE_THRESHOLD} — needs manual review"
+            )
+            mark_needs_review([sym], f"low_confidence_{validated['confidence']:.2f}")
+            return result
+
+        # ── 9. Persist ─────────────────────────────────────────────────────────
+        persisted = await _persist_classification(validated)
+        if persisted:
+            effective_primary = validated.get("primary_subtheme_id") or validated.get("primary_theme_id")
+            result["action"]            = "classified"
+            result["primary_theme_id"]  = effective_primary
+            result["subtheme_id"]       = validated.get("primary_subtheme_id")
+            result["additional_ids"]    = validated.get("additional_theme_ids", [])
+            return result
+        else:
+            result["action"] = "persist_failed"
+            result["error"]  = "Canonical write transaction failed"
+            return result
+
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        result["action"] = "internal_error"
+        result["error"]  = str(exc)
+        return result
+
+    finally:
+        async with _INFLIGHT_LOCK:
+            _INFLIGHT_TICKERS.discard(sym)
