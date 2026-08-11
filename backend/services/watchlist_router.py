@@ -6283,32 +6283,14 @@ async def add_ticker_endpoint(watchlist_id: str, body: _AddTickerBody):
         # canonical thematic assignment. Uses DeepSeek V4 Flash via the
         # canonical taxonomy classifier. Classification failure never blocks
         # or invalidates the successful add.
+        #
+        # Only passes information already cheaply available — the classifier
+        # hydrates description/sector from the fundamentals cache in the
+        # background (off the request path).
         try:
             from services.watchlist_theme_classifier import classify_and_assign_ticker as _classify_one
             _company = body.company_name or ""
-            _desc = ""
-            _sector = ""
-            try:
-                from data.pg_storage import _get_conn as _pg_conn, _put_conn as _pg_put
-                _conn = _pg_conn()
-                if _conn:
-                    try:
-                        with _conn.cursor() as _cur:
-                            _cur.execute(
-                                "SELECT fields FROM public.watchlist_fundamentals_cache WHERE symbol = %s",
-                                (t,),
-                            )
-                            _row = _cur.fetchone()
-                            if _row and _row[0]:
-                                _fields = _row[0] if isinstance(_row[0], dict) else {}
-                                _profile = _fields.get("profile", {})
-                                _desc = (_profile.get("description") or _fields.get("description") or "").strip()
-                                _sector = (_profile.get("sector") or _fields.get("sector") or "").strip()
-                    finally:
-                        _pg_put(_conn)
-            except Exception:
-                pass
-            _aio_add.create_task(_classify_one(t, _company, _desc, _sector))
+            _aio_add.create_task(_classify_one(t, _company, "", ""))
             print(f"[WATCHLIST_ADD] theme classifier queued for new ticker {t}")
         except Exception as _cls_err:
             print(f"[WATCHLIST_ADD] theme classifier trigger skipped (non-fatal): {_cls_err}")

@@ -41,7 +41,7 @@ _MODEL_ENV        = "THEME_CLASSIFIER_MODEL"
 _DEFAULT_MODELS = {
     "gemini":   "gemini-2.0-flash-lite",
     "openai":   "gpt-4o-mini",
-    "deepseek": "deepseek-chat",
+    "deepseek": "deepseek-v4-flash",
 }
 
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
@@ -611,6 +611,9 @@ def _build_single_ticker_prompt(
 - primary_theme_id: the company's defining business/value-chain identity.
   Prefer a subtheme when it fits better than a parent theme.
 - additional_theme_ids: meaningful secondary exposures (up to 3).
+  Additional themes must represent material, direct business exposure.
+  Do not assign themes merely because the company uses a technology,
+  sells to companies in that theme, or has tangential supply-chain exposure.
 - Only use IDs from the taxonomy above — do not invent IDs.
 - If no theme/subtheme genuinely represents this company, set no_valid_theme=true.
 - Do not use Sector IDs — sectors are not themes.
@@ -876,6 +879,42 @@ async def classify_and_assign_ticker(
                 return result
         except Exception:
             pass
+
+        # ── 2b. Background metadata hydration ──────────────────────────────
+        # If description/sector were not supplied, read from the existing
+        # watchlist_fundamentals_cache.  Runs in the background via
+        # asyncio.to_thread() so the event loop is never blocked.  Never
+        # adds provider calls.
+        if not description or not sector:
+            try:
+                def _read_fundamentals() -> tuple[str, str]:
+                    from data.pg_storage import _get_conn as _pg_c, _put_conn as _pg_p
+                    conn = _pg_c()
+                    if conn is None:
+                        return description, sector
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "SELECT fields FROM public.watchlist_fundamentals_cache WHERE symbol = %s",
+                                (sym,),
+                            )
+                            row = cur.fetchone()
+                            if row and row[0]:
+                                fields = row[0] if isinstance(row[0], dict) else {}
+                                profile = fields.get("profile", {})
+                                _d = (profile.get("description") or fields.get("description") or "").strip()
+                                _s = (profile.get("sector") or fields.get("sector") or "").strip()
+                                return (
+                                    _d if _d and not description else description,
+                                    _s if _s and not sector else sector,
+                                )
+                        return description, sector
+                    finally:
+                        _pg_p(conn)
+
+                description, sector = await asyncio.to_thread(_read_fundamentals)
+            except Exception:
+                pass
 
         # ── 3. Input completeness check ────────────────────────────────────────
         if not company_name or company_name.strip().upper() == sym:
