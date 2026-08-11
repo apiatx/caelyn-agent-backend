@@ -2,10 +2,12 @@
 
 ## Agent identity and report routing
 
-These rules apply to both:
+These rules apply to all coding agents and the user's own manual edits:
 
 - Codex CLI
 - DeepSeek running through OpenCode
+- Replit Agent
+- Any future coding agent or model provider
 
 Determine the active agent runtime from the environment in which you are
 operating.
@@ -16,8 +18,16 @@ Use exactly one agent-specific final report path:
   `/home/runner/workspace/.codex-reports/latest.md`
 - DeepSeek through OpenCode:
   `/home/runner/workspace/.opencode-reports/latest.md`
+- Replit Agent:
+  Report is delivered in the agent conversation (chat). Do NOT invent a
+  separate Replit-specific file report path — no such path exists in this
+  repository. If the user explicitly requests a file, create it at the path
+  they specify.
+- Future providers:
+  Use a new provider-specific report directory only if the user explicitly
+  establishes one. Never invent a path.
 
-Never write to or overwrite the other agent's report file.
+Never write to or overwrite another agent's report file.
 
 The assigned report file is an operational artifact, not a production file.
 Never stage or commit it.
@@ -25,12 +35,12 @@ Never stage or commit it.
 The active agent may create its assigned report directory if it does not exist.
 
 Every completed task, including a read-only audit, must update the active
-agent's assigned `latest.md` report unless the user explicitly says not to
-create or update a report file.
+agent's assigned report (file or conversation, per above) unless the user
+explicitly says not to create or update a report.
 
 ## Agent report files and final output
 
-Use the report file that matches the active coding agent:
+Use the report location that matches the active coding agent:
 
 - DeepSeek/OpenCode:
   `/home/runner/workspace/.opencode-reports/latest.md`
@@ -38,9 +48,13 @@ Use the report file that matches the active coding agent:
 - Codex CLI:
   `/home/runner/workspace/.codex-reports/latest.md`
 
+- Replit Agent:
+  Deliver report in the agent conversation. No file write required unless
+  the user requests one.
+
 After completing the task and creating the approved local commit:
 
-1. overwrite the matching `latest.md` report
+1. overwrite the matching `latest.md` report (Codex/OpenCode only)
 2. verify that the report file exists and contains the current task heading
 3. print the complete report into the agent conversation before stopping
 
@@ -50,21 +64,24 @@ For DeepSeek/OpenCode, run:
 printf '\n===== BEGIN OPENCODE REPORT =====\n'
 cat /home/runner/workspace/.opencode-reports/latest.md
 printf '\n===== END OPENCODE REPORT =====\n'
+```
 
 For Codex CLI, run:
 
+```bash
 printf '\n===== BEGIN CODEX REPORT =====\n'
 cat /home/runner/workspace/.codex-reports/latest.md
 printf '\n===== END CODEX REPORT =====\n'
+```
 
 Do not merely state that the report exists.
 
 Do not stop after showing only:
 
-the report path
-the line count
-the file size
-the commit summary
+- the report path
+- the line count
+- the file size
+- the commit summary
 
 The complete report must be printed in the agent output.
 
@@ -126,45 +143,219 @@ Before editing:
 The active coding agent may run `git fetch origin main --quiet` only to refresh
 remote tracking information.
 
-## Git handling in Replit
+## Workspace guard
 
-Replit may automatically create `Published your App` commits and may modify or
-commit runtime, cache, LKG, report, generated-data, or OpenCode state files.
+This repository includes a canonical guard script at:
 
-These conditions are not task blockers.
+    scripts/workspace_guard.py
 
-Continue normally when:
+and versioned pre-push hook at:
 
-- the production files authorized for the current task are not already modified
-  by unrelated work
-- there is no merge conflict
-- there is no conflicting uncommitted or unpushed production-code change in the
-  same task files
+    .githooks/pre-push
 
-Do not stop merely because:
+The guard exposes subcommands: `claim`, `status`, `preflight`, `prepush`,
+`prepublish`, `release`, `postpublish`, `install-hooks`.
 
-- local `main` is ahead of or behind `origin/main`
-- `origin/main` contains a Replit `Published your App` commit
-- runtime, cache, LKG, report, generated-data, or OpenCode files are dirty
-- unrelated generated files were automatically committed by Replit
-- local and remote differ only through non-conflicting commits
+The git hook is installed with:
 
-Do not reset, rebase, revert, clean, restore, amend, or rewrite Git history
-merely to make the branch clean or exactly even with `origin/main`.
+    python3.11 scripts/workspace_guard.py install-hooks
 
-Preserve all unrelated files and commits exactly as they are.
+After installing, every `git push` (from any agent, shell, or manual command)
+automatically calls the guard's `prepush` check.
 
-Stop and report only when:
+The guard is the authority on all git-state decisions described below.
+Do not bypass or duplicate its logic in shell scripts or agent prompts.
 
-- an authorized production file contains unrelated existing modifications
-- there is an actual merge conflict
-- local and remote contain conflicting production-code changes affecting the
-  current task
-- proceeding would require a destructive Git operation
-- the required previous production implementation is genuinely absent
+## Canonical task lifecycle
 
-Do not create a workaround, alternate clone, branch, worktree, merge path, or
-temporary repository.
+For every implementation task, follow this lifecycle in order:
+
+    1. claim      — acquire single-writer lock
+                    python3.11 scripts/workspace_guard.py claim \
+                        --actor <actor> --task "<description>"
+
+    2. preflight  — verify git state before editing
+                    python3.11 scripts/workspace_guard.py preflight \
+                        --actor <actor>
+
+    3. edit       — make changes to authorized files only
+
+    4. validate   — run tests, verify behavior
+
+    5. stage      — stage exact approved task files only (never `git add .`)
+
+    6. commit     — one focused commit on local main
+
+    7. prepush    — guard is invoked automatically by the pre-push hook;
+                    or run manually before pushing:
+                    python3.11 scripts/workspace_guard.py prepush
+
+    8. push       — git push origin main
+
+    9. verify     — confirm HEAD, local main, origin/main, origin/HEAD all match
+
+    10. release   — release workspace lock
+                    python3.11 scripts/workspace_guard.py release --actor <actor>
+
+    11. report    — write final report (file or conversation per agent type)
+
+Do NOT leave a successfully completed source task as an unpushed local source
+commit.
+
+## Single-writer workspace lock
+
+Only one agent or user may hold the workspace claim at a time.
+
+Valid actor identifiers (free-form — future providers work without code changes):
+
+    deepseek
+    codex
+    replit-agent
+    manual
+    gemini
+    claude
+    <any-future-provider>
+
+If another active claim exists, STOP. Show the holder's actor, task, timestamp,
+and starting SHA. Do not silently overwrite the lock.
+
+For stale locks (>24 hours old), the guard auto-releases during a new claim.
+For manual force-release: `workspace_guard.py release --force`.
+Agents must never force-release without explicit user authorization.
+
+## Manual user workflow
+
+The user may claim the workspace directly:
+
+    python3.11 scripts/workspace_guard.py claim \
+        --actor manual --task "description of manual edit"
+
+While a `manual` claim is active:
+
+- All coding agents must refuse to modify production source files.
+- Agents may continue read-only inspection and reporting.
+
+After manual edits, the user can:
+
+**Option A** — commit and push manually (the pre-push hook still runs):
+```bash
+git diff --check
+git add <exact paths>
+git commit -m "descriptive message"
+git push origin main   # hook validates automatically
+python3.11 scripts/workspace_guard.py release --actor manual
+```
+
+**Option B** — hand dirty files to an agent in a later prompt.
+The agent must acknowledge the existing dirty source, claim the workspace,
+and treat those files as part of the task scope.
+
+Agents must NEVER silently discard or overwrite manual dirty source.
+
+## Git handling — local/remote relationship
+
+**The guard script decides.** Do not rely on model judgment alone to assess
+git state. Run `python3.11 scripts/workspace_guard.py preflight` or inspect
+`classify_local_remote()` output before editing.
+
+Four cases are recognized:
+
+**Case A — HEAD == origin/main**
+Proceed normally.
+
+**Case B — local behind origin/main, no divergence**
+Allow only a true fast-forward synchronization:
+```bash
+git fetch origin main
+git merge --ff-only origin/main
+```
+No merge commit may ever be created.
+
+**Case C — local ahead of origin/main**
+Inspect every local-only commit.
+
+If local-only commits contain production source/config → **C-source**:
+STOP unless these are the current actor's already-validated task commits
+being explicitly completed.
+
+If ALL local-only commits are Replit "Published your App" commits, reports,
+runtime data, generated data, caches, LKG, snapshots, or agent state
+→ **C-generated**:
+Classify as NON-SOURCE AHEAD. Do not reset/rebase/revert those commits.
+Work may continue.
+
+**Case D — true divergence**
+STOP. Never automatically:
+- merge divergent history
+- rebase
+- reset
+- force-push
+- cherry-pick
+
+Report both SHAs and differing commits. Wait for user resolution.
+
+## Replit publish commits
+
+Replit may automatically create `Published your App` commits on local `main`
+during publishing. These commits typically contain only:
+
+- runtime data
+- cache/LKG files
+- reports
+- OpenCode state
+- generated data
+
+These commits may leave local `main` ahead of `origin/main` even when there is
+ZERO unpushed production source.
+
+Do NOT treat:
+
+    local main ahead by a Replit publish/generated-data-only commit
+
+as equivalent to:
+
+    unpushed production source.
+
+Do not delete, reset, rebase, or rewrite Replit publish commits.
+
+After a publish, run:
+
+    python3.11 scripts/workspace_guard.py postpublish
+
+to read and classify the post-publish state. This is a read-only operation.
+
+## Source file classification
+
+The guard's `is_source_file()` function is the centralized classifier.
+Use it — do not invent parallel classification logic.
+
+Production/source includes:
+
+- `*.py` anywhere (including `backend/data/*.py`)
+- `*.toml`, `*.yaml`, `*.yml` (configuration)
+- `.replit`
+- `requirements*.txt`, `pyproject.toml`
+- `scripts/*.sh`, `scripts/*.py`
+- `.githooks/*`
+- `AGENTS.md`
+- `Makefile`, `*.cfg`, `*.ini`
+
+**`backend/data/*.py` is SOURCE CODE even though the directory contains
+generated JSON/gz files. Never classify an entire directory as generated.**
+
+Generated/non-source (explicit narrowlist):
+
+- `backend/data/**/*.json`
+- `backend/data/**/*.json.gz`
+- `backend/data/**/*.json.tmp`
+- `.opencode-reports/**`
+- `.codex-reports/**`
+- `.opencode-persistent/**`
+- `.opencode/**`
+- `.codex/**`
+- `.agent-state/**`
+
+When in doubt, the classifier defaults to SOURCE (conservative).
 
 ## Git workflow
 
@@ -178,7 +369,7 @@ The active coding agent may:
 - stage only exact approved task files
 - create exactly one focused commit on `main`
 - push the completed task commit to `origin/main`
-- write its assigned agent-specific `latest.md` report
+- write its assigned agent-specific report
 
 The active coding agent must never:
 
@@ -253,6 +444,77 @@ a partial or failing state.
 
 If the user says audit only, read only, do not edit, do not commit, or do not
 push, follow that instruction instead.
+
+## Pre-push hook
+
+The pre-push hook at `.githooks/pre-push` delegates entirely to:
+
+    python3.11 scripts/workspace_guard.py prepush
+
+It applies to ALL pushes: DeepSeek, Codex, Replit Agent, manual `git push`,
+and any future agent. It is never bypassed.
+
+The prepush guard rejects:
+
+- wrong branch (not `main`)
+- true divergence (Case D)
+- non-fast-forward push
+- unresolved conflicts
+- failed build (compile errors)
+- failed source validation (whitespace, syntax)
+- startup test failures when startup-sensitive files changed
+
+Force-push is never permitted.
+
+## Prepublish gate
+
+Before every Replit publish, run:
+
+    python3.11 scripts/workspace_guard.py prepublish
+
+This gate refuses publish readiness unless:
+
+- branch = main
+- no unresolved conflicts
+- no dirty production source/config
+- all production source commits are already in origin/main
+- build validation passes (scripts/run_build.sh exits 0)
+- backend health smoke: GET / responds with non-5xx within 5 seconds
+  (Replit's actual Autoscale health-probe budget — not an artificial 1s rule)
+
+Do not add provider calls to the health route.
+Do not simulate health checks without the running server.
+
+## Build validation
+
+The canonical build command is:
+
+    bash scripts/run_build.sh
+
+This script:
+
+- compiles all backend Python source directories
+- compiles `.pythonlibs`
+- exits NONZERO on any compile failure
+- has NO trailing `true` — compile failures are never masked
+
+The same script is used by:
+
+- Replit deployment build (`.replit [deployment].build`)
+- `workspace_guard.py prepush` (when source files changed)
+- `workspace_guard.py prepublish`
+
+This eliminates local/deployment build drift.
+
+## Startup-sensitive files
+
+When any of these files change, prepush automatically includes the startup
+test suite (`test_startup_reliability.py`, `test_startup_timing.py`):
+
+- `backend/main.py`
+- `.replit`
+- `backend/core/lifespan*`
+- `backend/services/*startup*` or `backend/services/*init*`
 
 ## Ground truth and architecture
 
@@ -422,12 +684,8 @@ Clearly distinguish task-related failures from unrelated pre-existing failures.
 
 ## Final report
 
-After completing the task, overwrite the report assigned to the active agent:
-
-- Codex CLI:
-  `/home/runner/workspace/.codex-reports/latest.md`
-- DeepSeek through OpenCode:
-  `/home/runner/workspace/.opencode-reports/latest.md`
+After completing the task, deliver the report per the active agent's type
+(file or conversation — see "Agent identity and report routing" above).
 
 For an implementation task, write the report after the commit has been pushed
 successfully to `origin/main`.

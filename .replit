@@ -58,7 +58,7 @@ outputType = "webview"
 [deployment]
 deploymentTarget = "autoscale"
 run = ["bash", "-c", "cd /home/runner/workspace/backend && python3.11 -m uvicorn main:app --host=0.0.0.0 --port=5000"]
-build = ["bash", "-c", "cd /home/runner/workspace/backend && python3.11 -m compileall -q agent core data routes services scripts *.py; python3.11 -m compileall -q /home/runner/workspace/.pythonlibs; true"]
+build = ["bash", "/home/runner/workspace/scripts/run_build.sh"]
 
 [userenv]
 

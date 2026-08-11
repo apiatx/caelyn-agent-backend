@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# CaelynAI versioned pre-push hook.
+#
+# Installed via:  python3.11 scripts/workspace_guard.py install-hooks
+# Applies to:  DeepSeek/OpenCode, Codex CLI, Replit Agent, manual git push,
+#              and any future agent/model using this repository.
+#
+# Do NOT duplicate validation logic here — the canonical guard owns all logic.
+# This hook is intentionally thin: it delegates entirely to workspace_guard.py.
+
+set -euo pipefail
+
+GUARD="$(git rev-parse --show-toplevel)/scripts/workspace_guard.py"
+
+if [[ ! -f "$GUARD" ]]; then
+  echo "ERROR: workspace_guard.py not found at $GUARD" >&2
+  echo "       Cannot validate push. Aborting." >&2
+  exit 1
+fi
+
+exec python3.11 "$GUARD" prepush
