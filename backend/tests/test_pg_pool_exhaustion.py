@@ -1,17 +1,20 @@
 """
-Tests for pg_storage connection pool exhaustion fix.
+Tests for pg_storage connection pool exhaustion fix and health-check safety.
 
 Validates:
   - pool exhaustion returns None without destroying the pool
-  - genuine connection errors still trigger pool rebuild
-  - instrumentation tracks checkouts, checkins, and exhaustion count
-  - _put_conn records checkin even when pool is destroyed
+  - one stale connection does NOT destroy the whole pool (closeall not called)
+  - health-check failure discards only the failed conn, pool survives for retry
+  - retry after stale conn can obtain a healthy connection from the SAME pool
+  - exhaustion detection is narrow (PoolError + canonical message only)
+  - instrumentation stores no connection objects (caller/timestamp metadata only)
+  - genuine pool-level errors still trigger pool rebuild
 """
 from __future__ import annotations
 
 import sys
 import unittest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch, PropertyMock, call
 
 # Ensure backend is importable
 sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.dirname(__file__)))
@@ -21,8 +24,30 @@ from psycopg2.pool import PoolError
 from psycopg2 import OperationalError
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _mock_healthy_conn():
+    """Return a MagicMock that passes the health check (SELECT 1)."""
+    c = MagicMock()
+    cur = MagicMock()
+    cur.fetchone.return_value = (1,)
+    c.cursor.return_value = cur
+    return c
+
+
+def _mock_stale_conn():
+    """Return a MagicMock whose cursor.execute raises on SELECT 1."""
+    c = MagicMock()
+    cur = MagicMock()
+    cur.execute.side_effect = OperationalError("server closed the connection")
+    c.cursor.return_value = cur
+    return c
+
+
+# ── Tests ─────────────────────────────────────────────────────────────────────
+
 class TestPoolExhaustionSafeReturn(unittest.TestCase):
-    """Pool exhaustion must NOT destroy the pool — it must return None gracefully."""
+    """Pool exhaustion must NOT destroy the pool — return None gracefully."""
 
     def setUp(self):
         pgs._pool = None
@@ -32,25 +57,19 @@ class TestPoolExhaustionSafeReturn(unittest.TestCase):
         pgs._conn_checkouts.clear()
 
     def test_exhaustion_returns_none_pool_untouched(self):
-        """When getconn raises PoolError('connection pool exhausted'), return None
-        and do NOT call closeall() — other callers' connections are still valid."""
         mock_pool = MagicMock()
         mock_pool.getconn.side_effect = PoolError("connection pool exhausted")
         pgs._pool = mock_pool
 
-        # Force _DATABASE_URL to be truthy so _get_conn proceeds
         with patch.object(pgs, "_DATABASE_URL", "postgresql://test:test@localhost/test", create=True):
             result = pgs._get_conn()
 
         self.assertIsNone(result)
-        # closeall() must NOT have been called
         mock_pool.closeall.assert_not_called()
-        # Pool object must still be assigned (not set to None)
         self.assertIsNotNone(pgs._pool)
         self.assertEqual(pgs._conn_exhaustion_count, 1)
 
     def test_exhaustion_increments_counter(self):
-        """Each pool-exhaustion getconn call increments the exhaustion counter."""
         mock_pool = MagicMock()
         mock_pool.getconn.side_effect = PoolError("connection pool exhausted")
         pgs._pool = mock_pool
@@ -61,31 +80,140 @@ class TestPoolExhaustionSafeReturn(unittest.TestCase):
 
         self.assertEqual(pgs._conn_exhaustion_count, 2)
 
-    def test_genuine_error_still_destroys_pool(self):
-        """Non-exhaustion errors (e.g. OperationalError) must still destroy pool."""
+    def test_non_poolerror_with_exhausted_word_not_exhaustion(self):
+        """Exception('budget exhausted') is NOT pool capacity exhaustion."""
         mock_pool = MagicMock()
-        mock_pool.getconn.side_effect = OperationalError(
-            "could not connect to server"
-        )
+        mock_pool.getconn.side_effect = RuntimeError("worker budget exhausted")
+        pgs._pool = mock_pool
+
+        with patch.object(pgs, "_DATABASE_URL", "postgresql://test:test@localhost/test", create=True):
+            result = pgs._get_conn()
+
+        # Should NOT be classified as pool exhaustion — destroy was called
+        self.assertIsNone(result)
+        # Exhaustion counter must NOT increment
+        self.assertEqual(pgs._conn_exhaustion_count, 0)
+        # Pool-level failure → closeall called, pool set to None
+        mock_pool.closeall.assert_called()
+        self.assertIsNone(pgs._pool)
+
+    def test_poolerror_wrong_message_not_exhaustion(self):
+        """PoolError without 'connection pool exhausted' is not capacity exhaustion."""
+        mock_pool = MagicMock()
+        mock_pool.getconn.side_effect = PoolError("connection pool is closed")
+        pgs._pool = mock_pool
+
+        with patch.object(pgs, "_DATABASE_URL", "postgresql://test:test@localhost/test", create=True):
+            result = pgs._get_conn()
+
+        # Should be treated as genuine pool failure
+        self.assertIsNone(result)
+        self.assertEqual(pgs._conn_exhaustion_count, 0)
+        mock_pool.closeall.assert_called()
+        self.assertIsNone(pgs._pool)
+
+    def test_genuine_error_still_destroys_pool(self):
+        mock_pool = MagicMock()
+        mock_pool.getconn.side_effect = OperationalError("could not connect to server")
         pgs._pool = mock_pool
 
         with patch.object(pgs, "_DATABASE_URL", "postgresql://test:test@localhost/test", create=True):
             result = pgs._get_conn()
 
         self.assertIsNone(result)
-        # closeall() MUST have been called for genuine errors
         mock_pool.closeall.assert_called()
-        # Pool must be reset
         self.assertIsNone(pgs._pool)
-        # Exhaustion counter must NOT increment for non-exhaustion errors
         self.assertEqual(pgs._conn_exhaustion_count, 0)
 
     def test_empty_database_url_returns_none(self):
-        """No DATABASE_URL should return None immediately."""
         with patch.object(pgs, "_DATABASE_URL", "", create=True):
             result = pgs._get_conn()
         self.assertIsNone(result)
         self.assertEqual(pgs._last_conn_error, "No NEON_DATABASE_URL or DATABASE_URL set")
+
+
+class TestHealthCheckFailurePreservesPool(unittest.TestCase):
+    """One stale connection must NOT destroy the pool."""
+
+    def setUp(self):
+        pgs._pool = None
+        pgs._available = False
+        pgs._last_conn_error = None
+        pgs._conn_checkouts.clear()
+        pgs._conn_exhaustion_count = 0
+
+    def test_stale_conn_does_not_call_closeall(self):
+        """Health-check failure discards only the bad conn; pool survives."""
+        mock_pool = MagicMock()
+        stale = _mock_stale_conn()
+        mock_pool.getconn.return_value = stale
+        pgs._pool = mock_pool
+
+        with patch.object(pgs, "_DATABASE_URL", "postgresql://test:test@localhost/test", create=True):
+            result = pgs._get_conn()
+
+        # After 2 stale attempts, returns None
+        self.assertIsNone(result)
+        # closeall() must NOT be called — pool is still healthy
+        mock_pool.closeall.assert_not_called()
+        # putconn(conn, close=True) must have been called on each stale conn
+        putconn_calls = [
+            c for c in mock_pool.putconn.call_args_list
+            if c[1].get("close") is True
+        ]
+        self.assertGreater(len(putconn_calls), 0, "Expected putconn(conn, close=True) calls")
+        # Pool must survive — NOT set to None
+        self.assertIsNotNone(pgs._pool)
+
+    def test_stale_then_healthy_retry_same_pool(self):
+        """After one stale connection, retry from same pool gets a healthy conn."""
+        mock_pool = MagicMock()
+        stale = _mock_stale_conn()
+        healthy = _mock_healthy_conn()
+        mock_pool.getconn.side_effect = [stale, healthy]
+        pgs._pool = mock_pool
+
+        with patch.object(pgs, "_DATABASE_URL", "postgresql://test:test@localhost/test", create=True):
+            result = pgs._get_conn()
+
+        self.assertIsNotNone(result)
+        self.assertIs(result, healthy)
+        # Pool survived
+        self.assertIsNotNone(pgs._pool)
+        mock_pool.closeall.assert_not_called()
+        # One putconn(close=True) for the stale conn
+        close_calls = [
+            c for c in mock_pool.putconn.call_args_list
+            if c[1].get("close") is True
+        ]
+        self.assertEqual(len(close_calls), 1)
+
+    def test_stale_conn_pool_survives_for_next_caller(self):
+        """After health-check exhaustion (all retries stale), a subsequent
+        caller can still get a healthy connection from the same pool."""
+        mock_pool = MagicMock()
+        stale = _mock_stale_conn()
+        healthy = _mock_healthy_conn()
+
+        # Caller A: gets only stale connections
+        caller_a_pool = MagicMock()
+        caller_a_pool.getconn.side_effect = [stale, stale]
+        pgs._pool = caller_a_pool
+
+        with patch.object(pgs, "_DATABASE_URL", "postgresql://test:test@localhost/test", create=True):
+            result_a = pgs._get_conn()
+        self.assertIsNone(result_a)
+        self.assertIsNotNone(pgs._pool, "Pool must survive for next caller")
+
+        # Caller B: pool still exists, gets a healthy conn
+        caller_b_pool = MagicMock()
+        caller_b_pool.getconn.return_value = healthy
+        pgs._pool = caller_b_pool
+
+        with patch.object(pgs, "_DATABASE_URL", "postgresql://test:test@localhost/test", create=True):
+            result_b = pgs._get_conn()
+        self.assertIsNotNone(result_b)
+        self.assertIs(result_b, healthy)
 
 
 class TestInstrumentationTracking(unittest.TestCase):
@@ -112,14 +240,12 @@ class TestInstrumentationTracking(unittest.TestCase):
         conn_a = MagicMock()
         conn_b = MagicMock()
 
-        # Stagger checkouts so conn_a is held longer
         pgs._record_checkout(conn_a, "caller_a")
         time.sleep(0.01)
         pgs._record_checkout(conn_b, "caller_b")
 
         snap = pgs._pool_exhaustion_snapshot()
         self.assertEqual(snap["held_connections"], 2)
-        # conn_a held longer → appears first
         self.assertEqual(snap["callers"][0]["caller"], "caller_a")
         self.assertGreater(snap["callers"][0]["held_s"], 0)
 
@@ -129,22 +255,47 @@ class TestInstrumentationTracking(unittest.TestCase):
         snap_after = pgs._pool_exhaustion_snapshot()
         self.assertEqual(snap_after["held_connections"], 0)
 
+    def test_instrumentation_stores_no_connection_objects(self):
+        """Tracked entries contain only caller/timestamp — never the conn."""
+        conn = MagicMock()
+        pgs._record_checkout(conn, "test_caller")
+
+        entry = pgs._conn_checkouts[id(conn)]
+        self.assertIn("acquired_s", entry)
+        self.assertIn("caller", entry)
+        self.assertEqual(entry["caller"], "test_caller")
+        # The connection itself must NOT be in the entry
+        self.assertNotIn("conn", entry)
+        self.assertNotIn("connection", entry)
+        # The value must not be the connection object
+        self.assertIsNot(entry, conn)
+
+        pgs._record_checkin(conn)
+        self.assertNotIn(id(conn), pgs._conn_checkouts)
+
 
 class TestIsPoolExhaustedError(unittest.TestCase):
-    """Exhaustion detection must be robust to message formatting changes."""
+    """Exhaustion detection must be narrow — PoolError + canonical message."""
 
-    def test_recognises_exhaustion_message(self):
+    def test_recognises_canonical_poolerror(self):
         e = PoolError("connection pool exhausted")
         self.assertTrue(pgs._is_pool_exhausted_error(e))
 
-    def test_exhausted_keyword(self):
-        e = Exception("some prefix POOL EXHAUSTED suffix")
-        self.assertTrue(pgs._is_pool_exhausted_error(e))
-
-    def test_non_exhaustion_error(self):
-        e = Exception("could not connect to server")
+    def test_poolerror_wrong_message_not_exhaustion(self):
+        e = PoolError("connection pool is closed")
         self.assertFalse(pgs._is_pool_exhausted_error(e))
-        self.assertFalse(pgs._is_pool_exhausted_error(OperationalError("timeout")))
+
+    def test_non_poolerror_with_keyword_not_exhaustion(self):
+        e = RuntimeError("worker budget exhausted")
+        self.assertFalse(pgs._is_pool_exhausted_error(e))
+
+    def test_operational_error_not_exhaustion(self):
+        e = OperationalError("could not connect to server")
+        self.assertFalse(pgs._is_pool_exhausted_error(e))
+
+    def test_generic_exception_not_exhaustion(self):
+        e = Exception("connection pool exhausted")
+        self.assertFalse(pgs._is_pool_exhausted_error(e))
 
 
 class TestPoolInstrumentation(unittest.TestCase):
@@ -167,7 +318,7 @@ class TestPoolInstrumentation(unittest.TestCase):
 
 
 class TestCallerAutoDetection(unittest.TestCase):
-    """_get_conn must auto-detect the calling function when no explicit caller."""
+    """_get_conn must auto-detect the calling function."""
 
     def setUp(self):
         pgs._pool = None
@@ -176,9 +327,7 @@ class TestCallerAutoDetection(unittest.TestCase):
         pgs._conn_checkouts.clear()
         pgs._conn_exhaustion_count = 0
 
-    def test_auto_populated_caller_not_empty(self):
-        """When pool is exhausted, the stored error message is set correctly.
-        The auto-detected caller name appears in the print output not _last_conn_error."""
+    def test_exhaustion_sets_error_message(self):
         mock_pool = MagicMock()
         mock_pool.getconn.side_effect = PoolError("connection pool exhausted")
         pgs._pool = mock_pool

@@ -96,9 +96,19 @@ def _record_checkin(conn):
 
 
 def _is_pool_exhausted_error(exc: Exception) -> bool:
-    """True when the pool has zero free connections and maxconn are in use."""
-    msg = str(exc).lower()
-    return "exhausted" in msg or "pool exhausted" in msg
+    """True when getconn() raised PoolError because maxconn are in use.
+
+    Must be a psycopg2.pool.PoolError whose canonical message is
+    'connection pool exhausted'.  Does NOT match arbitrary exceptions
+    that merely contain the word 'exhausted' in unrelated text.
+    """
+    try:
+        from psycopg2.pool import PoolError
+    except Exception:
+        return False
+    if not isinstance(exc, PoolError):
+        return False
+    return "connection pool exhausted" in str(exc)
 
 
 def _pool_exhaustion_snapshot() -> dict:
@@ -124,8 +134,10 @@ def _get_conn(caller: str = ""):
     """Get a healthy connection from the pool (lazy-initialized).
 
     If a pooled connection is stale (Neon kills idle connections aggressively),
-    discard it, destroy the pool, and rebuild once.  This guarantees callers
-    always receive a usable connection or an explicit None.
+    discard ONLY that one connection and retry from the same pool.  The pool
+    is destroyed only when getconn() itself fails (indicating pool-level
+    corruption or network loss).  This guarantees callers always receive a
+    usable connection or an explicit None.
 
     "connection pool exhausted" errors are NOT a signal to destroy the pool.
     Destroying the pool on exhaustion closes connections that are currently
@@ -197,12 +209,16 @@ def _get_conn(caller: str = ""):
         except Exception as e:
             _last_conn_error = f"Health check failed (attempt {attempt+1}): {e}"
             print(f"[PG_STORAGE] {_last_conn_error}")
-            # Connection is dead — drop it and rebuild pool
+            # Discard THIS one stale connection — never destroy the
+            # whole pool just because one connection expired.  Other
+            # callers may hold healthy connections; closeall() would
+            # kill them and recreate the cascade.
             try:
                 _pool.putconn(conn, close=True)
             except Exception:
                 pass
-            _destroy_pool()
+            # Retry from the same pool — it will create a fresh
+            # connection (or reuse an idle one) on the next getconn().
             continue
 
     return None
