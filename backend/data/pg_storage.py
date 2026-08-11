@@ -54,7 +54,13 @@ def _to_jsonb(value):
 
 
 def _destroy_pool():
-    """Tear down the connection pool so the next _get_conn() rebuilds it."""
+    """Tear down the connection pool so the next _get_conn() rebuilds it.
+
+    WARNING: closeall() closes every connection in the pool INCLUDING
+    connections currently checked out by other callers.  This must never
+    be called in response to "pool exhausted" — only when a connection
+    is genuinely dead (stale/closed by Neon).
+    """
     global _pool, _available
     if _pool is not None:
         try:
@@ -63,17 +69,84 @@ def _destroy_pool():
             pass
     _pool = None
     _available = False
-def _get_conn():
+
+
+# ── Connection hold-time instrumentation ────────────────────────────────────
+# Track every checkout so we can report which callers are holding connections
+# the longest during a pool exhaustion event.  Access via api_ops_instrumentation().
+
+_conn_checkouts: dict = {}   # id(conn) → {"acquired_s": float, "caller": str}
+_conn_exhaustion_count = 0
+
+import threading as _threading
+_conn_lock = _threading.Lock()
+
+
+def _record_checkout(conn, caller: str):
+    with _conn_lock:
+        _conn_checkouts[id(conn)] = {
+            "acquired_s": __import__("time").monotonic(),
+            "caller": caller,
+        }
+
+
+def _record_checkin(conn):
+    with _conn_lock:
+        _conn_checkouts.pop(id(conn), None)
+
+
+def _is_pool_exhausted_error(exc: Exception) -> bool:
+    """True when the pool has zero free connections and maxconn are in use."""
+    msg = str(exc).lower()
+    return "exhausted" in msg or "pool exhausted" in msg
+
+
+def _pool_exhaustion_snapshot() -> dict:
+    """Read-only snapshot of currently-held connections for diagnostics."""
+    import time as _time
+    with _conn_lock:
+        now = _time.monotonic()
+        held = []
+        for cid, info in list(_conn_checkouts.items()):
+            held.append({
+                "caller": info["caller"],
+                "held_s": round(now - info["acquired_s"], 3),
+            })
+        held.sort(key=lambda x: -x["held_s"])
+        return {
+            "held_connections": len(held),
+            "exhaustion_events": _conn_exhaustion_count,
+            "callers": held[:10],
+        }
+
+
+def _get_conn(caller: str = ""):
     """Get a healthy connection from the pool (lazy-initialized).
 
     If a pooled connection is stale (Neon kills idle connections aggressively),
     discard it, destroy the pool, and rebuild once.  This guarantees callers
     always receive a usable connection or an explicit None.
+
+    "connection pool exhausted" errors are NOT a signal to destroy the pool.
+    Destroying the pool on exhaustion closes connections that are currently
+    checked out by other callers, amplifying a transient bottleneck into a
+    full cascade.  Instead, we return None and let the caller back off.
     """
-    global _pool, _available, _last_conn_error
+    global _pool, _available, _last_conn_error, _conn_exhaustion_count
     if not _DATABASE_URL:
         _last_conn_error = "No NEON_DATABASE_URL or DATABASE_URL set"
         return None
+
+    if not caller:
+        try:
+            import traceback as _tb
+            _stack = _tb.extract_stack(limit=4)
+            # _stack: [<frame>, ..., _get_conn, caller_fn]
+            if len(_stack) >= 2:
+                _fr = _stack[-2]
+                caller = f"{_fr.filename.split('/')[-1]}:{_fr.name}:{_fr.lineno}"
+        except Exception:
+            caller = "unknown"
 
     for attempt in range(2):  # at most one retry after pool rebuild
         if _pool is None:
@@ -95,6 +168,16 @@ def _get_conn():
         try:
             conn = _pool.getconn()
         except Exception as e:
+            if _is_pool_exhausted_error(e):
+                _conn_exhaustion_count += 1
+                _last_conn_error = f"getconn pool exhausted (attempt {attempt+1}): {e}"
+                print(
+                    f"[PG_STORAGE] {_last_conn_error} "
+                    f"| snapshot={_pool_exhaustion_snapshot()}"
+                )
+                # Return None without destroying pool — other callers'
+                # checked-out connections are still healthy.
+                return None
             _last_conn_error = f"getconn failed: {e}"
             print(f"[PG_STORAGE] {_last_conn_error}")
             _destroy_pool()
@@ -109,6 +192,7 @@ def _get_conn():
             conn.commit()
             cur.close()
             _last_conn_error = None
+            _record_checkout(conn, caller)
             return conn
         except Exception as e:
             _last_conn_error = f"Health check failed (attempt {attempt+1}): {e}"
@@ -122,8 +206,20 @@ def _get_conn():
             continue
 
     return None
+
+
+def pool_instrumentation() -> dict:
+    """Read diagnostics: held connections, exhaustion count, pool state."""
+    snap = _pool_exhaustion_snapshot()
+    snap["pool_active"] = _pool is not None
+    snap["pool_available"] = _available
+    snap["last_conn_error"] = _last_conn_error
+    return snap
+
+
 def _put_conn(conn):
     """Return a connection to the pool."""
+    _record_checkin(conn)
     if _pool and conn:
         try:
             _pool.putconn(conn)

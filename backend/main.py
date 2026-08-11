@@ -2282,6 +2282,7 @@ async def admin_startup_status():
       steps               — per-step {ok, ms, error?} (populated as each step completes)
       init_complete       — FastAPI _do_init() thread finished
       options_session     — current options market session info (scan gate status)
+      db_pool             — pg_storage connection pool instrumentation
     """
     import time as _st
     try:
@@ -2289,6 +2290,11 @@ async def admin_startup_status():
         _options_session = _sess_info()
     except Exception as _se:
         _options_session = {"error": str(_se)}
+    try:
+        from data.pg_storage import pool_instrumentation as _pg_instr
+        _pg_pool_info = _pg_instr()
+    except Exception:
+        _pg_pool_info = None
     return {
         "bootstrap_done":  _BOOTSTRAP_STATE.get("done", False),
         "elapsed_ms":      _BOOTSTRAP_STATE.get("elapsed_ms"),
@@ -2298,6 +2304,7 @@ async def admin_startup_status():
         "uptime_s":        round(_st.monotonic() - _BOOTSTRAP_STATE["started_at"], 1)
                            if _BOOTSTRAP_STATE.get("started_at") else None,
         "options_session": _options_session,
+        "db_pool":         _pg_pool_info,
     }
 
 
