@@ -2373,6 +2373,7 @@ class FmpFundamentalsRefresher:
         # Profile metadata
         _profile_meta: dict[str, Any] = {}
         for _fmp_key, _meta_key in [
+            ("companyName", "companyName"),
             ("description", "description"),
             ("website",     "website"),
             ("ceo",         "ceo"),

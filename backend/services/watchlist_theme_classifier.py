@@ -569,6 +569,50 @@ def get_theme_provenance(symbol: str) -> dict:
 _CONFIDENCE_THRESHOLD = 0.75
 _MIN_DESCRIPTION_LEN  = 20
 
+# Background metadata hydration retry: fundamentals hydration for a freshly
+# added ticker can take tens of seconds.  The classifier task retries the
+# cache read (never a provider call) until company_name + description are
+# available, then gives up with an observable metadata_insufficient outcome.
+_MAX_HYDRATE_ATTEMPTS = 10
+_HYDRATE_RETRY_DELAY  = 20.0
+
+# ── Per-ticker single-ticker classifier observability ────────────────────────
+# In-memory only: records when a ticker was scheduled and its latest result so
+# status queries can distinguish never_scheduled / scheduled / provider_failed /
+# metadata_insufficient / no_valid_theme / classified / etc.
+_SCHEDULED_AT:  dict[str, str]  = {}   # sym -> ISO ts when task was scheduled
+_TICKER_RESULTS: dict[str, dict] = {}  # sym -> latest result dict
+
+
+def _record_scheduled(sym: str) -> None:
+    _SCHEDULED_AT[sym] = _ts()
+
+
+def _record_result(sym: str, result: dict) -> None:
+    result["updated_at"] = _ts()
+    _TICKER_RESULTS[sym] = dict(result)
+
+
+def get_ticker_classification_status(symbol: str) -> dict:
+    """Observability: latest single-ticker classification state for a symbol."""
+    sym = (symbol or "").upper().strip()
+    entry = _TICKER_RESULTS.get(sym)
+    if entry:
+        return {"ticker": sym, **dict(entry)}
+    if sym in _SCHEDULED_AT:
+        return {
+            "ticker":      sym,
+            "action":      "scheduled",
+            "scheduled_at": _SCHEDULED_AT.get(sym),
+            "updated_at":  None,
+        }
+    return {
+        "ticker":      sym,
+        "action":      "never_scheduled",
+        "scheduled_at": None,
+        "updated_at":  None,
+    }
+
 
 def _get_assignable_registry() -> dict:
     """Return only assignable canonical theme/sub_theme nodes."""
@@ -650,14 +694,24 @@ async def _call_deepseek_taxonomy(prompt: str, model_name: str) -> dict | None:
     try:
         import openai as _oai
         client = _oai.OpenAI(api_key=deepseek_key, base_url=_DEEPSEEK_BASE_URL)
+        # max_tokens=2048: deepseek-v4-flash can return empty content with
+        # finish_reason='length' when the 1024 budget is exhausted by thinking
+        # tokens; the larger budget avoids silent truncation-to-empty.
         resp = await asyncio.to_thread(
             client.chat.completions.create,
             model=model_name,
-            max_tokens=1024,
+            max_tokens=2048,
             temperature=0.1,
             messages=[{"role": "user", "content": prompt}],
         )
         raw_text = resp.choices[0].message.content or ""
+        if not raw_text.strip():
+            _finish = getattr(resp.choices[0], "finish_reason", None)
+            print(
+                f"[THEME_CLASSIFIER] DeepSeek returned empty content "
+                f"(finish_reason={_finish!r}) — observable provider failure"
+            )
+            return None
     except Exception as exc:
         print(f"[THEME_CLASSIFIER] DeepSeek call error: {exc}")
         return None
@@ -823,11 +877,63 @@ async def _persist_classification(validated: dict) -> bool:
         return False
 
 
+async def _hydrate_ticker_metadata(
+    sym: str,
+    company_name: str,
+    description: str,
+    sector: str,
+) -> tuple[str, str, str]:
+    """
+    Read cached company metadata for sym from public.watchlist_fundamentals_cache
+    (the canonical FMP profile store).  Cache-read only — never adds provider
+    calls.  Returns (company_name, description, sector) with any previously
+    supplied non-empty values preserved.
+    """
+    try:
+        def _read_fundamentals() -> tuple[str, str, str]:
+            from data.pg_storage import _get_conn as _pg_c, _put_conn as _pg_p
+            conn = _pg_c()
+            if conn is None:
+                return company_name, description, sector
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT fields FROM public.watchlist_fundamentals_cache WHERE symbol = %s",
+                        (sym,),
+                    )
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        fields = row[0] if isinstance(row[0], dict) else {}
+                        profile = fields.get("profile", {})
+                        _c = (
+                            profile.get("companyName")
+                            or fields.get("companyName")
+                            or profile.get("name")
+                            or ""
+                        ).strip()
+                        _d = (profile.get("description") or fields.get("description") or "").strip()
+                        _s = (profile.get("sector") or fields.get("sector") or "").strip()
+                        return (
+                            _c if _c and not company_name else company_name,
+                            _d if _d and not description else description,
+                            _s if _s and not sector else sector,
+                        )
+                return company_name, description, sector
+            finally:
+                _pg_p(conn)
+
+        return await asyncio.to_thread(_read_fundamentals)
+    except Exception:
+        return company_name, description, sector
+
+
 async def classify_and_assign_ticker(
     ticker: str,
     company_name: str = "",
     description: str = "",
     sector: str = "",
+    hydrate_attempts: int | None = None,
+    hydrate_delay: float | None = None,
 ) -> dict:
     """
     Classify a SINGLE ticker against the canonical taxonomy using DeepSeek V4 Flash,
@@ -835,11 +941,23 @@ async def classify_and_assign_ticker(
     canonical atomic taxonomy write path.
 
     Idempotent / exactly-once-ish via per-ticker in-flight tracking.
+
+    Metadata hydration retry: company_name/description/sector are hydrated from
+    the cached FMP fundamentals store (cache-read only, never a provider call).
+    Because the add-time priority hydration runs concurrently, the classifier
+    retries the cache read a bounded number of times with short sleeps before
+    giving up with an observable metadata_insufficient outcome.  Retry counts
+    are injectable for tests; production defaults are module constants.
+
     Returns a result dict with keys:
-      ticker, action (classified/input_incomplete/already_assigned/skipped_inflight),
+      ticker, action (classified/input_incomplete/already_assigned/skipped_inflight/
+      provider_unavailable/metadata_insufficient/provider_failed/parse_failed/
+      validation_failed/low_confidence/no_valid_theme/persisted successfully/
+      persistence failed),
       primary_theme_id, confidence, rationale, error (if any).
     """
     sym = ticker.upper().strip()
+    _record_scheduled(sym)
     result = {
         "ticker":      sym,
         "action":      "unknown",
@@ -880,52 +998,41 @@ async def classify_and_assign_ticker(
         except Exception:
             pass
 
-        # ── 2b. Background metadata hydration ──────────────────────────────
-        # If description/sector were not supplied, read from the existing
-        # watchlist_fundamentals_cache.  Runs in the background via
-        # asyncio.to_thread() so the event loop is never blocked.  Never
-        # adds provider calls.
-        if not description or not sector:
-            try:
-                def _read_fundamentals() -> tuple[str, str]:
-                    from data.pg_storage import _get_conn as _pg_c, _put_conn as _pg_p
-                    conn = _pg_c()
-                    if conn is None:
-                        return description, sector
-                    try:
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                "SELECT fields FROM public.watchlist_fundamentals_cache WHERE symbol = %s",
-                                (sym,),
-                            )
-                            row = cur.fetchone()
-                            if row and row[0]:
-                                fields = row[0] if isinstance(row[0], dict) else {}
-                                profile = fields.get("profile", {})
-                                _d = (profile.get("description") or fields.get("description") or "").strip()
-                                _s = (profile.get("sector") or fields.get("sector") or "").strip()
-                                return (
-                                    _d if _d and not description else description,
-                                    _s if _s and not sector else sector,
-                                )
-                        return description, sector
-                    finally:
-                        _pg_p(conn)
+        # ── 2b/3. Background metadata hydration + completeness gate ─────────────
+        # If description/sector/company_name were not supplied, read them from
+        # the existing watchlist_fundamentals_cache.  Runs in the background via
+        # asyncio.to_thread() so the event loop is never blocked.  Never adds
+        # provider calls.  Retries a bounded number of times so a concurrently
+        # running add-time hydration can complete first.
+        attempts = hydrate_attempts if hydrate_attempts is not None else _MAX_HYDRATE_ATTEMPTS
+        delay    = hydrate_delay if hydrate_delay is not None else _HYDRATE_RETRY_DELAY
 
-                description, sector = await asyncio.to_thread(_read_fundamentals)
-            except Exception:
-                pass
+        company = (company_name or "").strip()
+        desc    = (description or "").strip()
+        sect    = (sector or "").strip()
 
-        # ── 3. Input completeness check ────────────────────────────────────────
-        if not company_name or company_name.strip().upper() == sym:
-            result["action"] = "input_incomplete"
-            result["error"]  = "INPUT_INCOMPLETE: company_name missing or equals ticker"
+        for _attempt in range(attempts + 1):
+            if not company or company.upper() == sym or len(desc) < _MIN_DESCRIPTION_LEN:
+                company, desc, sect = await _hydrate_ticker_metadata(sym, company, desc, sect)
+                company = (company or "").strip()
+                desc    = (desc or "").strip()
+                sect    = (sect or "").strip()
+            if company and company.upper() != sym and len(desc) >= _MIN_DESCRIPTION_LEN:
+                break
+            if _attempt < attempts:
+                await asyncio.sleep(delay)
+
+        if not company or company.strip().upper() == sym:
+            result["action"] = "metadata_insufficient"
+            result["error"]  = "METADATA_INSUFFICIENT: company_name missing or equals ticker"
+            mark_needs_review([sym], "metadata_insufficient")
             return result
 
-        desc_len = len((description or "").strip())
+        desc_len = len(desc)
         if desc_len < _MIN_DESCRIPTION_LEN:
-            result["action"] = "input_incomplete"
-            result["error"]  = f"INPUT_INCOMPLETE: description too short ({desc_len} chars, need {_MIN_DESCRIPTION_LEN})"
+            result["action"] = "metadata_insufficient"
+            result["error"]  = f"METADATA_INSUFFICIENT: description too short ({desc_len} chars, need {_MIN_DESCRIPTION_LEN})"
+            mark_needs_review([sym], "metadata_insufficient")
             return result
 
         # ── 4. Provider check ──────────────────────────────────────────────────
@@ -946,9 +1053,9 @@ async def classify_and_assign_ticker(
 
         prompt = _build_single_ticker_prompt(
             ticker=sym,
-            company_name=company_name,
-            description=description,
-            sector=sector,
+            company_name=company,
+            description=desc,
+            sector=sect,
             registry=registry,
         )
 
@@ -980,9 +1087,11 @@ async def classify_and_assign_ticker(
         # ── 7. No valid theme ──────────────────────────────────────────────────
         if validated.get("no_valid_theme"):
             result["action"] = "no_valid_theme"
-            result["error"]  = (
-                f"No valid thematic assignment in current taxonomy. "
-                f"Ticker retains sector-level display. Rationale: {result['rationale']}"
+            result["error"]  = None
+            result["rationale"] = validated.get("rationale", "")[:200]
+            print(
+                f"[THEME_CLASSIFIER] {sym}: no_valid_theme (successful outcome, "
+                f"no theme persisted) rationale={result['rationale'][:80]!r}"
             )
             return result
 
@@ -1018,5 +1127,12 @@ async def classify_and_assign_ticker(
         return result
 
     finally:
+        _record_result(sym, result)
+        _detail = ""
+        if result.get("primary_theme_id"):
+            _detail = f" primary={result['primary_theme_id']}"
+        if result.get("error"):
+            _detail += f" err={result['error'][:120]!r}"
+        print(f"[THEME_CLASSIFIER] single-ticker {sym}: action={result['action']}{_detail}")
         async with _INFLIGHT_LOCK:
             _INFLIGHT_TICKERS.discard(sym)

@@ -1517,16 +1517,19 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
     import asyncio as _aio_enrich
     quote_map: dict[str, dict] = {}
     _name_overrides: dict[str, str] = {}
+    _sector_overrides: dict[str, str] = {}
     fund_snaps: dict[str, dict] = {}
     cached_market_data: dict[str, dict[str, Any]] = {}
     _t_fetch = _time.monotonic()
     try:
         from services.name_overrides import get_name_overrides as _get_name_overrides
         from data.watchlist_fundamentals_store import get_snapshots_bulk as _get_fund_snaps_mc
+        from data.pg_storage import get_category_sector_overrides as _get_sector_overrides
         _loop = _aio_enrich.get_event_loop()
-        _q_res, _n_res, _f_res, _m_res = await _aio_enrich.gather(
+        _q_res, _n_res, _sec_res, _f_res, _m_res = await _aio_enrich.gather(
             get_watchlist_quotes(tickers),
             _loop.run_in_executor(None, _get_name_overrides, "default"),
+            _loop.run_in_executor(None, _get_sector_overrides, "default"),
             _loop.run_in_executor(None, _get_fund_snaps_mc, tickers),
             _loop.run_in_executor(None, _load_cached_watchlist_market_data, tickers),
             return_exceptions=True,
@@ -1539,6 +1542,10 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             print(f"[WATCHLIST_ENRICH] name overrides load failed (non-fatal): {_n_res}")
         else:
             _name_overrides = _n_res or {}
+        if isinstance(_sec_res, Exception):
+            print(f"[WATCHLIST_ENRICH] sector overrides load failed (non-fatal): {_sec_res}")
+        else:
+            _sector_overrides = _sec_res or {}
         if isinstance(_f_res, Exception):
             print(f"[WATCHLIST_ENRICH] fund_snaps load failed (non-fatal): {_f_res}")
         else:
@@ -1550,8 +1557,9 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
     except Exception as _fetch_err:
         print(f"[WATCHLIST_ENRICH] parallel fetch failed (non-fatal): {_fetch_err}")
     print(
-        f"[WATCHLIST_ENRICH] quote+names+fundsnaps+history fetch_ms={round((_time.monotonic()-_t_fetch)*1000)} "
-        f"quotes={len(quote_map)} name_overrides={len(_name_overrides)} fund_snaps={len(fund_snaps)} "
+        f"[WATCHLIST_ENRICH] quote+names+sector_overrides+fundsnaps+history fetch_ms={round((_time.monotonic()-_t_fetch)*1000)} "
+        f"quotes={len(quote_map)} name_overrides={len(_name_overrides)} sector_overrides={len(_sector_overrides)} "
+        f"fund_snaps={len(fund_snaps)} "
         f"history_metrics={len(cached_market_data)}"
     )
     # Pre-load for get_by_id_endpoint's apply_fmp_overlays — avoids a second Neon round-trip
@@ -1624,12 +1632,15 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
 
         # ── Name ──────────────────────────────────────────────────────────
         # Priority: name override (DB) > Tradier description > FMP quote name
-        #           > CSV column > ticker symbol
+        #           > CSV column > cached FMP fundamentals companyName
+        #           > ticker symbol (temporary fallback only)
         if not enriched.get("name"):
             enriched["name"] = (
                 q.get("name")
                 or csv_row.get("Company Name")
                 or csv_row.get("Name")
+                or ((_fund_snap.get("fields") or {}).get("profile") or {}).get("companyName")
+                or ((_fund_snap.get("fields") or {}).get("companyName"))
                 or sym
             )
         # Manual override wins over everything — applied after initial name
@@ -1944,6 +1955,14 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         # Normalised to a canonical sector ID; null when unavailable or unknown.
         # Never derived from primary_theme_id, parent_theme_id, rollup_sector_ids,
         # or any other theme-hierarchy field.
+        #
+        # Part C — manual sector override precedence:
+        #   explicit manual sector override > provider/FMP sector > null
+        # Exposure (all canonical sector IDs):
+        #   sector_id          — effective sector (manual override wins)
+        #   provider_sector_id — provider/FMP-derived sector (pre-override)
+        #   manual_sector_id   — the explicit manual override (None when absent)
+        #   sector_source      — "manual_override" | "fmp" | None
         try:
             _fund_fields = _fund_snap.get("fields") or {}
             _id_sector_raw = (
@@ -1953,9 +1972,20 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
                 or csv_row.get("sector")
                 or ""
             )
-            enriched["sector_id"] = _wl_norm_sector(_id_sector_raw) or None
+            _provider_sector_id = _wl_norm_sector(_id_sector_raw) or None
+            _manual_sector_id   = _sector_overrides.get(sym) or None
+            enriched["provider_sector_id"] = _provider_sector_id
+            enriched["manual_sector_id"]   = _manual_sector_id
+            enriched["sector_id"]          = _manual_sector_id or _provider_sector_id
+            enriched["sector_source"]      = (
+                "manual_override" if _manual_sector_id
+                else ("fmp" if _provider_sector_id else None)
+            )
         except Exception:
             enriched.setdefault("sector_id", None)
+            enriched.setdefault("provider_sector_id", None)
+            enriched.setdefault("manual_sector_id", None)
+            enriched.setdefault("sector_source", None)
 
         return enriched
 
@@ -2647,6 +2677,7 @@ async def _priority_hydrate_symbols(symbols: list[str], watchlist_id: str) -> No
         from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher as _FmpH
         from data.watchlist_fundamentals_store import upsert_snapshot as _us_h
         from services.watchlist_quote_cache import is_fmp_symbol_eligible as _fmp_elig2
+        from services.otc_service import otc_to_fmp as _otc_to_fmp
         _ref_h = _FmpH(_fmp_key_h)
         fund_syms = [s for s in deduped if _fmp_elig2(s)]
         for sym in deduped:
@@ -2655,7 +2686,11 @@ async def _priority_hydrate_symbols(symbols: list[str], watchlist_id: str) -> No
             )
         for sym in fund_syms:
             try:
-                _res = await _ref_h.normalize_symbol(sym)
+                # OTC provider boundary: FMP is called with the bare provider
+                # symbol; the canonical OTC:<ticker> identity is preserved for
+                # the store write below.
+                _fmp_call_sym = _otc_to_fmp(sym)
+                _res = await _ref_h.normalize_symbol(_fmp_call_sym)
                 _out = _us_h(
                     sym, watchlist_id,
                     _res.get("fields") or {},
@@ -2687,6 +2722,7 @@ async def _priority_hydrate_symbols(symbols: list[str], watchlist_id: str) -> No
             )
             from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher as _FmpMC
             from services.watchlist_quote_cache import is_fmp_symbol_eligible as _fmp_elig3
+            from services.otc_service import otc_to_fmp as _otc_to_fmp_mc
             _ref_mc = _FmpMC(_fmp_mc)
             mc_syms = [s for s in deduped if _fmp_elig3(s)]
             _existing = _gs_mc(mc_syms)
@@ -2695,7 +2731,7 @@ async def _priority_hydrate_symbols(symbols: list[str], watchlist_id: str) -> No
                 if _snap_f.get("_market_cap_implied_shares") is not None:
                     continue
                 try:
-                    _raw = await _ref_mc._get("profile", {"symbol": sym})
+                    _raw = await _ref_mc._get("profile", {"symbol": _otc_to_fmp_mc(sym)})
                     _prof = (_raw[0] if isinstance(_raw, list) and _raw
                              else (_raw if isinstance(_raw, dict) else {}))
                     _mc = _prof.get("marketCap")
@@ -2712,6 +2748,34 @@ async def _priority_hydrate_symbols(symbols: list[str], watchlist_id: str) -> No
                     pass
     except Exception:
         pass  # non-fatal — market-cap backfill best-effort
+
+    # ── D2. Company-name repair (canonical watchlist csv_data) ─────────────────
+    # Once the FMP fundamentals snapshot carries a proper companyName, persist
+    # it into the canonical Watchlist csv row's "Name" column so the ticker
+    # never renders with ticker-as-name.  Never overwrites an existing proper
+    # name (watchlist_set_ticker_names only fills missing/blank/ticker rows).
+    # Cache-read only — no extra provider calls beyond the hydration above.
+    try:
+        from data.watchlist_fundamentals_store import get_snapshots_bulk as _gs_rep
+        _rep_snaps = _gs_rep(deduped) or {}
+        _rep_names: dict[str, str] = {}
+        for _rep_sym in deduped:
+            _rep_snap = (_rep_snaps.get(_rep_sym) or {}).get("fields") or {}
+            _rep_prof = _rep_snap.get("profile") or {}
+            _rep_cn = (
+                str(_rep_prof.get("companyName") or _rep_snap.get("companyName") or "").strip()
+            )
+            if _rep_cn and _rep_cn.upper() != _rep_sym:
+                _rep_names[_rep_sym] = _rep_cn
+        if _rep_names:
+            from data.pg_storage import watchlist_set_ticker_names as _wstn_rep
+            _rep_out = _wstn_rep(watchlist_id, _rep_names)
+            print(
+                f"[PRIORITY_HYDRATE] company-name repair wl={watchlist_id} "
+                f"repaired={_rep_out.get('repaired', 0)} tickers={sorted(_rep_names)[:6]}"
+            )
+    except Exception as _rep_err:
+        print(f"[PRIORITY_HYDRATE] company-name repair failed (non-fatal): {_rep_err}")
 
     # ── E. Options overlay (supplement priority queue + per-ticker cache check) ─
     #
@@ -6486,6 +6550,18 @@ async def bulk_add_tickers_endpoint(watchlist_id: str, body: _BulkAddBody):
 
         # Single priority hydration task for all new symbols
         _aio_bulk.create_task(_priority_hydrate_symbols(newly_added, watchlist_id))
+
+        # ── Background theme classification for newly added tickers ─────────
+        # Same canonical single-ticker path as POST /{id}/ticker.  Never blocks
+        # the bulk-add response; classification failures are recorded in the
+        # classifier's per-ticker status registry.
+        try:
+            from services.watchlist_theme_classifier import classify_and_assign_ticker as _cls_bulk
+            for sym in newly_added:
+                _aio_bulk.create_task(_cls_bulk(sym, "", "", ""))
+            print(f"[BULK_ADD] theme classifier queued for {len(newly_added)} new ticker(s)")
+        except Exception as _cls_bulk_err:
+            print(f"[BULK_ADD] theme classifier trigger skipped (non-fatal): {_cls_bulk_err}")
 
     return {
         "success":      True,

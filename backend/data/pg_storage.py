@@ -707,6 +707,13 @@ def init_tables():
             CREATE INDEX IF NOT EXISTS idx_wl_cat_overrides_user
             ON public.watchlist_category_overrides (user_id)
         """)
+        # Manual canonical sector override column (Part C: sector editor).
+        # NULL = no manual sector; provider/FMP sector applies.  Preserves
+        # existing data on upgrades.
+        cur.execute("""
+            ALTER TABLE public.watchlist_category_overrides
+            ADD COLUMN IF NOT EXISTS sector_id TEXT
+        """)
 
         # ── Manual ticker name overrides ────────────────────────────────────
         cur.execute("""
@@ -1104,6 +1111,29 @@ def get_category_overrides(user_id: str = "default") -> dict[str, str]:
             return {row[0]: row[1] for row in cur.fetchall()}
     except Exception as e:
         print(f"[PG_STORAGE] get_category_overrides failed: {e}")
+        return {}
+    finally:
+        _put_conn(conn)
+
+
+def get_category_sector_overrides(user_id: str = "default") -> dict[str, str]:
+    """
+    Return {ticker: sector_id} for explicit manual sector overrides.
+    Only rows with a non-empty sector_id are returned; empty result when none.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT ticker, sector_id FROM public.watchlist_category_overrides "
+                "WHERE user_id = %s AND sector_id IS NOT NULL AND sector_id <> ''",
+                (user_id,),
+            )
+            return {row[0]: row[1] for row in cur.fetchall()}
+    except Exception as e:
+        print(f"[PG_STORAGE] get_category_sector_overrides failed: {e}")
         return {}
     finally:
         _put_conn(conn)
@@ -2214,6 +2244,85 @@ def watchlist_remove_ticker(watchlist_id: str, canonical_ticker: str) -> dict:
         _put_conn(conn)
 
 
+def watchlist_set_ticker_names(watchlist_id: str, names: dict[str, str]) -> dict:
+    """
+    Repair company names in the canonical watchlist csv_data rows.
+
+    For each symbol in `names`, set the csv row's "Name" column ONLY when the
+    row currently has no proper name (missing, blank, or equals the symbol).
+    Never overwrites an existing proper name.  Same advisory-lock pattern as
+    watchlist_add_ticker.  Returns {"repaired": N, "rows_updated": bool}.
+    """
+    if not names:
+        return {"repaired": 0, "rows_updated": False}
+    clean_names = {
+        str(s).strip().upper(): str(n).strip()
+        for s, n in names.items()
+        if str(s).strip() and str(n).strip() and str(n).strip().upper() != str(s).strip().upper()
+    }
+    if not clean_names:
+        return {"repaired": 0, "rows_updated": False}
+
+    conn = _get_conn()
+    if conn is None:
+        return {"repaired": 0, "rows_updated": False, "error": "db_unavailable"}
+    try:
+        from psycopg2.extras import Json
+        lock_key = _watchlist_lock_key(watchlist_id)
+        cur = conn.cursor()
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
+        cur.execute(
+            "SELECT csv_data FROM public.watchlist WHERE id = %s FOR UPDATE",
+            (watchlist_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            conn.rollback()
+            cur.close()
+            return {"repaired": 0, "rows_updated": False, "error": "not_found"}
+
+        csv_data: list = list(row[0] or [])
+        repaired = 0
+        for csv_row in csv_data:
+            if not isinstance(csv_row, dict):
+                continue
+            sym = (
+                str(csv_row.get("Symbol") or csv_row.get("symbol") or csv_row.get("Ticker") or "")
+                .strip().upper()
+            )
+            if sym not in clean_names:
+                continue
+            existing = (
+                str(csv_row.get("Name") or csv_row.get("Company Name") or "").strip()
+            )
+            if existing and existing.upper() != sym:
+                continue  # proper name already present — never overwrite
+            csv_row["Name"] = clean_names[sym]
+            repaired += 1
+
+        if repaired:
+            cur.execute(
+                "UPDATE public.watchlist SET csv_data = %s, updated_at = NOW() WHERE id = %s",
+                (Json(csv_data), watchlist_id),
+            )
+        conn.commit()
+        cur.close()
+        print(
+            f"[PG_STORAGE] watchlist_set_ticker_names: wl={watchlist_id} "
+            f"repaired={repaired}/{len(clean_names)}"
+        )
+        return {"repaired": repaired, "rows_updated": repaired > 0}
+    except Exception as e:
+        print(f"[PG_STORAGE] watchlist_set_ticker_names error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"repaired": 0, "rows_updated": False, "error": str(e)}
+    finally:
+        _put_conn(conn)
+
+
 def watchlist_list() -> list:
     """List all saved watchlists (metadata only, no full data)."""
     conn = _get_conn()
@@ -2861,6 +2970,7 @@ def atomic_taxonomy_write_db(
     ticker_overrides: list[dict],
     primary_operation: dict | None = None,
     category_override: dict | None = None,
+    sector_override: dict | None = None,
 ) -> dict:
     """
     Write all theme_ticker_overrides rows PLUS an optional watchlist_category_overrides
@@ -2877,9 +2987,20 @@ def atomic_taxonomy_write_db(
         → upserts watchlist_category_overrides (sets canonical primary)
       {"action": "clear", "user_id": ..., "ticker": ...}
         → deletes watchlist_category_overrides row (clears canonical primary)
+        A manual sector override on the same row is preserved (category is
+        blanked in place instead of deleting the whole row).
 
     category_override: legacy alias — treated as a "set" primary_operation when
       primary_operation is None. Accepts {user_id?, ticker, category, source?, reason?}.
+
+    sector_override: optional explicit manual sector override, executed in the
+      SAME transaction as theme changes. One of two shapes:
+      {"action": "set", "user_id": ..., "ticker": ..., "sector_id": ..., "source"?: ..., "reason"?: ...}
+        → upserts watchlist_category_overrides.sector_id without touching the
+          stored theme category (inserts a category='' row when none exists;
+          empty category is treated as no theme override by consumers).
+      {"action": "clear", "user_id": ..., "ticker": ...}
+        → sets sector_id = NULL, restoring provider/FMP sector behavior.
 
     primary_operation takes precedence over category_override when both are supplied.
 
@@ -2950,14 +3071,61 @@ def atomic_taxonomy_write_db(
                         ),
                     )
                 elif _op_action == "clear":
+                    # Preserve a manual sector override on the same row: delete
+                    # only when no sector override exists; otherwise blank the
+                    # theme category in place (empty category = no theme override).
                     cur.execute(
                         "DELETE FROM public.watchlist_category_overrides "
+                        "WHERE user_id = %s AND ticker = %s "
+                        "AND (sector_id IS NULL OR sector_id = '')",
+                        (_op_user, _op_ticker),
+                    )
+                    cur.execute(
+                        "UPDATE public.watchlist_category_overrides "
+                        "SET category = '', reason = NULL, updated_at = NOW() "
                         "WHERE user_id = %s AND ticker = %s",
                         (_op_user, _op_ticker),
                     )
                 else:
                     raise ValueError(
                         f"atomic_taxonomy_write_db: unknown primary_operation action {_op_action!r}; "
+                        f"must be 'set' or 'clear'"
+                    )
+
+            # ── 3. Manual sector override (set or clear) — same transaction ────
+            if sector_override is not None:
+                _sec_action = sector_override.get("action", "set")
+                _sec_user   = sector_override.get("user_id", "default")
+                _sec_ticker = sector_override["ticker"]
+
+                if _sec_action == "set":
+                    cur.execute(
+                        """
+                        INSERT INTO public.watchlist_category_overrides
+                            (user_id, ticker, category, sector_id, source, reason, updated_at)
+                        VALUES (%s, %s, '', %s, %s, %s, NOW())
+                        ON CONFLICT (user_id, ticker) DO UPDATE SET
+                            sector_id  = EXCLUDED.sector_id,
+                            updated_at = NOW()
+                        """,
+                        (
+                            _sec_user,
+                            _sec_ticker,
+                            sector_override["sector_id"],
+                            sector_override.get("source", "manual_sector_override"),
+                            sector_override.get("reason"),
+                        ),
+                    )
+                elif _sec_action == "clear":
+                    cur.execute(
+                        "UPDATE public.watchlist_category_overrides "
+                        "SET sector_id = NULL, updated_at = NOW() "
+                        "WHERE user_id = %s AND ticker = %s",
+                        (_sec_user, _sec_ticker),
+                    )
+                else:
+                    raise ValueError(
+                        f"atomic_taxonomy_write_db: unknown sector_override action {_sec_action!r}; "
                         f"must be 'set' or 'clear'"
                     )
 

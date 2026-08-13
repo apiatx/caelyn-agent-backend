@@ -1203,12 +1203,18 @@ class TickerTaxonomyBody(BaseModel):
     """
     primary_theme_id:     Optional[str]      = None
     additional_theme_ids: list[str]          = []
+    sector_id:            Optional[str]      = None
     note:                 Optional[str]      = None
     created_by:           Optional[str]      = "admin"
 
     @field_validator("primary_theme_id")
     @classmethod
     def _normalize_primary(cls, v: Optional[str]) -> Optional[str]:
+        return v.strip().lower() if v else None
+
+    @field_validator("sector_id")
+    @classmethod
+    def _normalize_sector(cls, v: Optional[str]) -> Optional[str]:
         return v.strip().lower() if v else None
 
     @field_validator("additional_theme_ids")
@@ -1296,6 +1302,23 @@ async def admin_put_ticker_taxonomy(
     for atid in body.additional_theme_ids:
         _validate_theme_id(atid, f"additional_theme_ids[{atid!r}]")
 
+    # ── 3b. Validate optional manual sector override ─────────────────────────
+    # Only canonical sector IDs (classification == "sector") are accepted.
+    # Explicit null (field provided but empty) = clear the override, restoring
+    # provider/FMP sector behavior.  Absent field = no sector change.
+    _sector_changed = "sector_id" in body.model_fields_set
+    _committed_sector: Optional[str] = None
+    if _sector_changed and body.sector_id:
+        if body.sector_id not in sector_ids:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"sector_id {body.sector_id!r}: not a canonical sector ID. "
+                    f"Valid ids: {sorted(sector_ids)}"
+                ),
+            )
+        _committed_sector = body.sector_id
+
     # ── 4. Normalize: remove primary from additional, deduplicate, prune ancestors
     additional: list[str] = sorted(
         {t for t in body.additional_theme_ids if t != body.primary_theme_id}
@@ -1375,12 +1398,32 @@ async def admin_put_ticker_taxonomy(
             "ticker":  ticker,
         }
 
+    # Build manual sector override operation (same transaction as theme changes)
+    sector_op: Optional[dict] = None
+    if _sector_changed:
+        if _committed_sector:
+            sector_op = {
+                "action":    "set",
+                "user_id":   "default",
+                "ticker":    ticker,
+                "sector_id": _committed_sector,
+                "source":    "manual_sector_override",
+                "reason":    body.note,
+            }
+        else:
+            sector_op = {
+                "action":  "clear",
+                "user_id": "default",
+                "ticker":  ticker,
+            }
+
     # ── 8. One atomic transaction — all or nothing ────────────────────────────
     _t_start = time.monotonic()
     from data.pg_storage import atomic_taxonomy_write_db
     txn_result = atomic_taxonomy_write_db(
         ticker_overrides=membership_edits,
         primary_operation=primary_op,
+        sector_override=sector_op,
     )
     _t_txn = time.monotonic()
 
@@ -1629,7 +1672,8 @@ async def admin_put_ticker_taxonomy(
         "additional_theme_ids": _committed_additionals,
         "theme_ids":            _committed_theme_ids,
         "subtheme_ids":         _committed_subthemes,
-        "sector_id":            None,
+        "sector_id":            _committed_sector if _sector_changed else None,
+        "sector_changed":       _sector_changed,
         "memberships_removed":  sorted(to_remove),
         "memberships_added":    sorted(to_add),
     }
