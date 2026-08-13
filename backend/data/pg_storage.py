@@ -7,6 +7,7 @@ Auto-creates tables on first use. Survives all deploys and autoscale events.
 
 import json
 import os
+import time
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 
@@ -77,6 +78,8 @@ def _destroy_pool():
 
 _conn_checkouts: dict = {}   # id(conn) → {"acquired_s": float, "caller": str}
 _conn_exhaustion_count = 0
+_last_pool_exhaustion_log: float = 0.0   # epoch-seconds of last printed exhaustion line
+_POOL_EXHAUSTION_LOG_INTERVAL = 30.0     # print at most once per 30 s to avoid burst spam
 
 import threading as _threading
 _conn_lock = _threading.Lock()
@@ -181,12 +184,16 @@ def _get_conn(caller: str = ""):
             conn = _pool.getconn()
         except Exception as e:
             if _is_pool_exhausted_error(e):
+                global _last_pool_exhaustion_log
                 _conn_exhaustion_count += 1
                 _last_conn_error = f"getconn pool exhausted (attempt {attempt+1}): {e}"
-                print(
-                    f"[PG_STORAGE] {_last_conn_error} "
-                    f"| snapshot={_pool_exhaustion_snapshot()}"
-                )
+                _now = time.monotonic()
+                if _now - _last_pool_exhaustion_log >= _POOL_EXHAUSTION_LOG_INTERVAL:
+                    _last_pool_exhaustion_log = _now
+                    print(
+                        f"[PG_STORAGE] {_last_conn_error} "
+                        f"| snapshot={_pool_exhaustion_snapshot()}"
+                    )
                 # Return None without destroying pool — other callers'
                 # checked-out connections are still healthy.
                 return None

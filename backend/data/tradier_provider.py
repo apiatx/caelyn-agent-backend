@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -44,6 +45,11 @@ _coalesced_chain_count:      int = 0
 _coalesced_timesales_count:  int = 0
 _coalesced_history_count:    int = 0
 _last_429_at: float | None   = None  # epoch seconds
+# Rate-limit "lane full / global headroom" deferral log lines.
+# Keys: arbitrary string (lane+kind); value: epoch-second of last print.
+# At most one print per key per _LANE_FULL_LOG_INTERVAL seconds.
+_lane_full_last_log: dict[str, float] = {}
+_LANE_FULL_LOG_INTERVAL = 15.0
 
 # ── Process-wide singleton provider (lazy) ────────────────────────────────────
 # Constructed on first call to get_provider(); avoids importing tradier_provider
@@ -753,12 +759,20 @@ class TradierProvider:
         # Non-blocking admission
         if not _bgt.check_budget(lane):
             _bgt.record_defer(lane)
-            print(f"[TRADIER][bg/history] {lane!r} lane full — deferring {symbol}")
+            _lf_key = f"history/{lane}/full"
+            _lf_now = time.monotonic()
+            if _lf_now - _lane_full_last_log.get(_lf_key, 0.0) >= _LANE_FULL_LOG_INTERVAL:
+                _lane_full_last_log[_lf_key] = _lf_now
+                print(f"[TRADIER][bg/history] {lane!r} lane full — deferring {symbol}")
             return []
 
         admitted = await TRADIER_LIMITER.try_acquire_background(reserve=reserve)
         if not admitted:
-            print(f"[TRADIER][bg/history] global headroom < {reserve+1} — deferring {symbol}")
+            _lf_key = f"history/{lane}/headroom"
+            _lf_now = time.monotonic()
+            if _lf_now - _lane_full_last_log.get(_lf_key, 0.0) >= _LANE_FULL_LOG_INTERVAL:
+                _lane_full_last_log[_lf_key] = _lf_now
+                print(f"[TRADIER][bg/history] global headroom < {reserve+1} — deferring {symbol}")
             return []
 
         _bgt.record_call(lane)
@@ -945,12 +959,20 @@ class TradierProvider:
         # Non-blocking admission: lane budget check first (no global acquire yet)
         if not _bgt.check_budget(lane):
             _bgt.record_defer(lane)
-            print(f"[TRADIER][bg/timesales] {lane!r} lane full — deferring {symbol}")
+            _lf_key = f"timesales/{lane}/full"
+            _lf_now = time.monotonic()
+            if _lf_now - _lane_full_last_log.get(_lf_key, 0.0) >= _LANE_FULL_LOG_INTERVAL:
+                _lane_full_last_log[_lf_key] = _lf_now
+                print(f"[TRADIER][bg/timesales] {lane!r} lane full — deferring {symbol}")
             return []
 
         admitted = await TRADIER_LIMITER.try_acquire_background(reserve=reserve)
         if not admitted:
-            print(f"[TRADIER][bg/timesales] global headroom < {reserve+1} — deferring {symbol}")
+            _lf_key = f"timesales/{lane}/headroom"
+            _lf_now = time.monotonic()
+            if _lf_now - _lane_full_last_log.get(_lf_key, 0.0) >= _LANE_FULL_LOG_INTERVAL:
+                _lane_full_last_log[_lf_key] = _lf_now
+                print(f"[TRADIER][bg/timesales] global headroom < {reserve+1} — deferring {symbol}")
             return []
 
         # Record the lane call AFTER successful global admission
