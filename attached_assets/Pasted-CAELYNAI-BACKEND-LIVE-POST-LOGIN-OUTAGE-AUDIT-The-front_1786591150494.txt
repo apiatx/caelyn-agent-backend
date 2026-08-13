@@ -1,0 +1,197 @@
+CAELYNAI BACKEND — LIVE POST-LOGIN OUTAGE AUDIT
+
+The frontend Preview is authenticated successfully, but most of the site still
+does not load.
+
+DO NOT EDIT YET.
+
+We already proved Preview auth is working.
+
+Current visible failures include:
+
+- Home dashboard unavailable
+- Macro unavailable
+- Should I Trade unavailable
+- Daily Alpha Board unavailable
+- Catalysts unavailable
+- Themes unavailable
+- News unavailable/loading
+- Portfolio snapshot empty
+- Watchlist snapshot empty
+- Hyperliquid unavailable
+- Top movers/losers unavailable
+
+Prediction Markets still works.
+
+A prior frontend audit observed real FastAPI errors including:
+
+    GET /api/home/dashboard              500
+    GET /api/home/movers                 500
+    GET /api/home/risk-intelligence      502
+    GET /api/hyperliquid/signals         500
+    GET /api/home/top-catalysts          500
+
+The new pg_storage pool safety commits are:
+
+    f3347ba6
+    f80b2211
+
+First determine whether those commits are actually running in the current live
+backend process.
+
+============================================================
+PHASE 1 — READ ONLY
+============================================================
+
+Inspect the current live process and logs.
+
+Probe these exact endpoints from the running backend:
+
+    GET /
+    GET /api/admin/startup-status
+    GET /api/watchlist/list
+    GET one current Watchlist detail
+    GET /api/home/dashboard
+    GET /api/home/daily-alpha-board
+    GET /api/home/top-catalysts
+    GET /api/home/movers
+    GET /api/home/risk-intelligence
+    GET themes list/current theme endpoint
+    GET news endpoint used by Home
+    GET portfolio holdings/snapshot endpoint
+    GET options endpoint used by Home
+    GET /api/hyperliquid/signals
+    GET /api/predict/odds/live
+
+For every endpoint report:
+
+    HTTP status
+    latency
+    response/error body
+    first internal exception/root error from server logs
+
+Do not just report "500".
+
+Trace each 500/502 to the first actual exception.
+
+============================================================
+DB POOL CHECK
+============================================================
+
+Inspect:
+
+    /api/admin/startup-status → db_pool
+
+Report:
+
+    pool_active
+    pool_available
+    held_connections
+    exhaustion_events
+    current callers
+    last_conn_error
+
+Also confirm whether the running process contains the behavior from:
+
+    f80b2211
+
+Specifically:
+
+- pool exhaustion does NOT destroy pool
+- stale single connection does NOT destroy pool
+
+If production is still running an older deployment, STOP and say so.
+
+Do not debug old production behavior against newer workspace source.
+
+============================================================
+COMMON FAILURE CHECK
+============================================================
+
+Determine whether the failing endpoints share one dependency.
+
+Examples to investigate:
+
+- pg_storage returns None after exhaustion
+- Neon connection unavailable
+- shared Home aggregation dependency
+- startup background task incomplete
+- shared market/fundamental cache unavailable
+- provider exception bubbling to several endpoints
+- one shared service throwing at import/runtime
+- event-loop saturation
+- stale deployment
+
+Find the common denominator before changing anything.
+
+============================================================
+IMPORTANT
+============================================================
+
+Do NOT:
+
+- change frontend
+- change auth
+- change taxonomy/theme classifier
+- increase DB pool size
+- add retries
+- add fallbacks
+- disable background jobs
+- publish
+- make speculative fixes
+
+============================================================
+IF ROOT CAUSE IS OLD DEPLOYMENT
+============================================================
+
+If f80b2211 is NOT currently deployed:
+
+STOP.
+
+Report that clearly.
+
+Do not make another code change.
+
+We will publish the already-reviewed backend fix first.
+
+============================================================
+IF ROOT CAUSE IS CURRENT CODE
+============================================================
+
+If f80b2211 IS deployed and these endpoints still 500:
+
+trace the shared failure to the exact function/file/exception.
+
+Do not edit until you can show:
+
+    endpoint
+        →
+    service
+        →
+    failing function
+        →
+    exact exception
+        →
+    common dependency
+
+============================================================
+FINAL REPORT — NO EDITS
+============================================================
+
+Return:
+
+1. current running source/deployment SHA if determinable
+2. whether f80b2211 is live
+3. endpoint status/latency table
+4. db_pool instrumentation
+5. exact exceptions for every 500/502
+6. shared root cause
+7. whether this is:
+       old deployment
+       DB/pool
+       shared service
+       provider
+       event-loop
+       other
+8. recommended smallest fix
+9. confirmation NO FILES CHANGED
