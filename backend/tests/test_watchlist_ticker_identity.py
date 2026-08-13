@@ -24,6 +24,22 @@ Covers three connected defects in the newly-added Watchlist ticker lifecycle:
          theme/subtheme/additional theme writes
        - taxonomy cache + BULK LKG invalidation still occurs after writes
 
+  D. Bounded classifier concurrency (bulk-add fanout protection)
+       - bulk add still returns before classifiers finish
+       - every genuinely new ticker is eventually scheduled
+       - concurrent classification execution never exceeds the configured limit
+       - single-ticker behavior unchanged
+       - manual assignments still skip classification
+
+  E. DeepSeek length-truncation handling
+       - normal response → exactly one call
+       - explicit length truncation → exactly one bounded retry
+       - retry succeeds → classification proceeds
+       - retry also truncates → provider_failed (observable)
+       - arbitrary API errors do not loop
+       - invalid JSON remains observable, not retried
+       - no_valid_theme remains a successful outcome
+
 Run:
     cd backend && python -m pytest tests/test_watchlist_ticker_identity.py -v
 """
@@ -955,3 +971,294 @@ class TestPersistClassificationInvalidation:
         assert ok is True
         assert inv_ov == ["default"], "category overrides cache must be invalidated"
         assert lkg == ["TSTX"], "BULK LKG must be invalidated for the ticker"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# D — Bounded classifier concurrency (bulk-add fanout protection)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestClassifierConcurrencyBound:
+    def _mock_add_deps(self, monkeypatch):
+        monkeypatch.setattr("data.pg_storage.watchlist_add_ticker",
+                            lambda wl, t, family_aliases=None: {"added": True, "ticker_count": 1})
+        monkeypatch.setattr("data.pg_storage.is_available", lambda: True)
+        monkeypatch.setattr("services.canonical_security_adapter.exchange_family_aliases",
+                            lambda t: [])
+        monkeypatch.setattr("services.user_earnings_service.invalidate_user_earnings",
+                            lambda u: None)
+        monkeypatch.setattr("services.watchlist_quote_cache.is_fmp_symbol_eligible",
+                            lambda t: False)
+
+        async def _fake_priority(syms, wl_id):
+            return None
+
+        monkeypatch.setattr("services.watchlist_router._priority_hydrate_symbols",
+                            _fake_priority)
+
+    @pytest.mark.asyncio
+    async def test_bulk_add_returns_before_classifiers_finish(self, monkeypatch):
+        import services.watchlist_router as wr
+
+        self._mock_add_deps(monkeypatch)
+        release = asyncio.Event()
+        started: list[str] = []
+        done: list[str] = []
+
+        async def _slow_classify(ticker, *a, **k):
+            started.append(ticker)
+            await release.wait()
+            done.append(ticker)
+            return {"action": "classified"}
+
+        monkeypatch.setattr("services.watchlist_theme_classifier.classify_and_assign_ticker",
+                            _slow_classify)
+
+        body = wr._BulkAddBody(tickers=["T1", "T2", "T3", "T4", "T5", "T6"])
+        resp = await asyncio.wait_for(
+            wr.bulk_add_tickers_endpoint("wl-bulk", body), timeout=5.0,
+        )
+        assert resp["success"] is True
+        assert not done, "bulk-add HTTP response must NOT wait for classifiers"
+        assert started, "classifier tasks should have started in the background"
+        release.set()  # cleanup
+
+    @pytest.mark.asyncio
+    async def test_all_bulk_added_tickers_eventually_classified(self, monkeypatch):
+        import services.watchlist_router as wr
+
+        self._mock_add_deps(monkeypatch)
+        classified: list[str] = []
+
+        async def _fake_classify(ticker, *a, **k):
+            classified.append(ticker)
+            return {"action": "classified"}
+
+        monkeypatch.setattr("services.watchlist_theme_classifier.classify_and_assign_ticker",
+                            _fake_classify)
+
+        tickers = [f"BLK{i}" for i in range(12)]
+        body = wr._BulkAddBody(tickers=tickers)
+        resp = await asyncio.wait_for(
+            wr.bulk_add_tickers_endpoint("wl-bulk", body), timeout=5.0,
+        )
+        assert resp["success"] is True
+        for _ in range(50):
+            if len(classified) == len(tickers):
+                break
+            await asyncio.sleep(0)
+        assert sorted(classified) == sorted(tickers), (
+            "every genuinely-new bulk-added ticker must be scheduled — none dropped"
+        )
+
+    @pytest.mark.asyncio
+    async def test_concurrent_execution_never_exceeds_limit(self, monkeypatch):
+        import re
+        import threading
+        import services.watchlist_theme_classifier as wc
+
+        active = 0
+        peak = 0
+        lock = threading.Lock()
+        calls = 0
+
+        async def _fake_deepseek(prompt, model_name):
+            nonlocal active, peak, calls
+            _m = re.search(r"TICKER: (\S+)", prompt)
+            _sym = _m.group(1) if _m else "CONC"
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                calls += 1
+            await asyncio.sleep(0.1)
+            with lock:
+                active -= 1
+            return {
+                "ticker": _sym,
+                "company_name": f"Concurrent Co {_sym}",
+                "primary_theme_id": "semiconductors",
+                "primary_subtheme_id": None,
+                "additional_theme_ids": [],
+                "confidence": 0.9,
+                "rationale": "test",
+                "no_valid_theme": False,
+            }
+
+        async def _fake_persist(validated):
+            return True
+
+        monkeypatch.setattr(wc, "_call_deepseek_taxonomy", _fake_deepseek)
+        monkeypatch.setattr(wc, "_persist_classification", _fake_persist)
+        monkeypatch.setattr(wc, "mark_needs_review", lambda syms, reason="": None)
+        monkeypatch.setattr("services.category_overrides.get_overrides",
+                            lambda uid="default": {})
+        monkeypatch.setattr("data.pg_storage.get_theme_ticker_overrides",
+                            lambda theme_id=None: [])
+
+        tickers = [f"CONC{i}" for i in range(9)]
+        results = await asyncio.gather(*[
+            wc.classify_and_assign_ticker(
+                t, f"Concurrent Co {t}", _LONG_DESC, "Technology",
+                hydrate_attempts=0, hydrate_delay=0.0,
+            )
+            for t in tickers
+        ])
+        assert calls == 9, "every scheduled classification must execute"
+        assert peak <= wc._MAX_CONCURRENT_CLASSIFICATIONS, (
+            f"concurrent DeepSeek executions must never exceed the bound; peak={peak}"
+        )
+        assert peak == wc._MAX_CONCURRENT_CLASSIFICATIONS, (
+            "with 9 contenders the bound should be reached exactly (3)"
+        )
+        assert all(r["action"] == "classified" for r in results), results
+
+    def test_semaphore_limit_is_conservative(self):
+        import services.watchlist_theme_classifier as wc
+        assert wc._MAX_CONCURRENT_CLASSIFICATIONS == 3, (
+            "default bound must remain max 3 concurrent DeepSeek executions"
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# E — DeepSeek length-truncation handling (one bounded retry)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestDeepSeekLengthTruncation:
+    @staticmethod
+    def _resp(content: str, finish: str):
+        choice = MagicMock()
+        choice.message.content = content
+        choice.finish_reason = finish
+        resp = MagicMock()
+        resp.choices = [choice]
+        return resp
+
+    def _mock_openai(self, monkeypatch, side_effects):
+        """side_effects: list of (content, finish) tuples or exceptions."""
+        fake_client = MagicMock()
+
+        def _create(**kwargs):
+            effect = side_effects.pop(0)
+            if isinstance(effect, Exception):
+                raise effect
+            content, finish = effect
+            return self._resp(content, finish)
+
+        fake_client.chat.completions.create.side_effect = _create
+        monkeypatch.setattr("openai.OpenAI", lambda *a, **k: fake_client)
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+        return fake_client
+
+    @pytest.mark.asyncio
+    async def test_normal_response_single_call(self, monkeypatch):
+        wc = _get_classifier()
+        client = self._mock_openai(monkeypatch, [
+            ('{"classifications": []}', "stop"),
+        ])
+        result = await wc._call_deepseek_taxonomy("prompt", "deepseek-v4-flash")
+        assert result == {"classifications": []}
+        assert client.chat.completions.create.call_count == 1, "no retry on normal response"
+        assert client.chat.completions.create.call_args.kwargs["max_tokens"] == 2048
+
+    @pytest.mark.asyncio
+    async def test_length_truncation_triggers_exactly_one_retry(self, monkeypatch):
+        wc = _get_classifier()
+        client = self._mock_openai(monkeypatch, [
+            ("", "length"),                                    # truncated first attempt
+            ('{"classifications": []}', "stop"),                # retry succeeds
+        ])
+        result = await wc._call_deepseek_taxonomy("prompt", "deepseek-v4-flash")
+        assert result == {"classifications": []}
+        assert client.chat.completions.create.call_count == 2, "exactly one bounded retry"
+        max_tokens = [c.kwargs["max_tokens"]
+                      for c in client.chat.completions.create.call_args_list]
+        assert max_tokens == [2048, 4096], (
+            "retry must use the larger budget, not an unbounded loop"
+        )
+
+    @pytest.mark.asyncio
+    async def test_retry_success_classification_proceeds(self, monkeypatch):
+        import services.watchlist_theme_classifier as wc
+        import json as _json
+
+        valid_payload = _json.dumps({
+            "ticker": "NVDA",
+            "company_name": "NVIDIA Corp",
+            "primary_theme_id": "semiconductors",
+            "primary_subtheme_id": None,
+            "additional_theme_ids": [],
+            "confidence": 0.95,
+            "rationale": "accelerators",
+            "no_valid_theme": False,
+        })
+        self._mock_openai(monkeypatch, [("", "length"), (valid_payload, "stop")])
+
+        async def _fake_persist(validated):
+            return True
+
+        monkeypatch.setattr(wc, "_persist_classification", _fake_persist)
+        monkeypatch.setattr(wc, "mark_needs_review", lambda syms, reason="": None)
+        monkeypatch.setattr("services.category_overrides.get_overrides",
+                            lambda uid="default": {})
+        monkeypatch.setattr("data.pg_storage.get_theme_ticker_overrides",
+                            lambda theme_id=None: [])
+
+        result = await wc.classify_and_assign_ticker(
+            "NVDA", "NVIDIA Corp", _LONG_DESC, "Technology",
+            hydrate_attempts=0, hydrate_delay=0.0,
+        )
+        assert result["action"] == "classified", result
+        assert result["primary_theme_id"] == "semiconductors"
+
+    @pytest.mark.asyncio
+    async def test_retry_also_truncates_is_provider_failed(self, monkeypatch):
+        import services.watchlist_theme_classifier as wc
+
+        client = self._mock_openai(monkeypatch, [("", "length"), ("", "length")])
+        needs_review: list = []
+        monkeypatch.setattr(wc, "mark_needs_review",
+                            lambda syms, reason="": needs_review.append((syms, reason)))
+        monkeypatch.setattr("services.category_overrides.get_overrides",
+                            lambda uid="default": {})
+        monkeypatch.setattr("data.pg_storage.get_theme_ticker_overrides",
+                            lambda theme_id=None: [])
+
+        result = await wc.classify_and_assign_ticker(
+            "NVDA", "NVIDIA Corp", _LONG_DESC, "Technology",
+            hydrate_attempts=0, hydrate_delay=0.0,
+        )
+        assert result["action"] == "provider_failed", result
+        assert result["error"]
+        assert client.chat.completions.create.call_count == 2, (
+            "exactly two provider calls — no unbounded retry loop"
+        )
+        assert needs_review == [(["NVDA"], "deepseek_api_failure")]
+
+    @pytest.mark.asyncio
+    async def test_api_error_does_not_loop(self, monkeypatch):
+        wc = _get_classifier()
+        client = self._mock_openai(monkeypatch, [Exception("api down")])
+        result = await wc._call_deepseek_taxonomy("prompt", "deepseek-v4-flash")
+        assert result is None
+        assert client.chat.completions.create.call_count == 1, (
+            "arbitrary API errors must not be retried"
+        )
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_observable_not_retried(self, monkeypatch):
+        wc = _get_classifier()
+        client = self._mock_openai(monkeypatch, [("not valid json at all", "stop")])
+        result = await wc._call_deepseek_taxonomy("prompt", "deepseek-v4-flash")
+        assert result is None, "invalid JSON remains an observable provider failure"
+        assert client.chat.completions.create.call_count == 1, (
+            "invalid JSON must not trigger the length-truncation retry"
+        )
+
+    @pytest.mark.asyncio
+    async def test_empty_content_non_length_not_retried(self, monkeypatch):
+        wc = _get_classifier()
+        client = self._mock_openai(monkeypatch, [("", "stop")])
+        result = await wc._call_deepseek_taxonomy("prompt", "deepseek-v4-flash")
+        assert result is None
+        assert client.chat.completions.create.call_count == 1, (
+            "empty content with non-length finish reason must not retry"
+        )

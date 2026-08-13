@@ -576,6 +576,24 @@ _MIN_DESCRIPTION_LEN  = 20
 _MAX_HYDRATE_ATTEMPTS = 10
 _HYDRATE_RETRY_DELAY  = 20.0
 
+# ── Bounded classifier concurrency ───────────────────────────────────────────
+# Bulk-add schedules one background task per new ticker.  Without a bound,
+# 100 bulk-added tickers would fan out into 100 concurrent DeepSeek calls,
+# hydration DB reads and canonical writes.  This in-process semaphore bounds
+# the expensive single-ticker classification execution (metadata hydration
+# reads, the DeepSeek call, and canonical persistence) to a small, safe number
+# while the HTTP add response never awaits it.  Sleeps between hydration
+# retries happen OUTSIDE the semaphore so waiting tasks hold no resource.
+_MAX_CONCURRENT_CLASSIFICATIONS = 3
+_CLASSIFY_SEMAPHORE: asyncio.Semaphore | None = None
+
+
+def _get_classify_semaphore() -> asyncio.Semaphore:
+    global _CLASSIFY_SEMAPHORE
+    if _CLASSIFY_SEMAPHORE is None:
+        _CLASSIFY_SEMAPHORE = asyncio.Semaphore(_MAX_CONCURRENT_CLASSIFICATIONS)
+    return _CLASSIFY_SEMAPHORE
+
 # ── Per-ticker single-ticker classifier observability ────────────────────────
 # In-memory only: records when a ticker was scheduled and its latest result so
 # status queries can distinguish never_scheduled / scheduled / provider_failed /
@@ -625,17 +643,18 @@ def _get_assignable_registry() -> dict:
 
 
 def _build_taxonomy_prompt(registry: dict) -> str:
-    """Build deterministic taxonomy description for the LLM prompt."""
-    lines = ["# Canonical Theme Taxonomy", "", "## Themes"]
-    parents = {k: v for k, v in registry.items() if v.get("classification") == "theme"}
-    for pid, meta in sorted(parents.items()):
-        lines.append(f"- {pid}: {meta.get('display_name', '')}")
-    lines.append("")
-    lines.append("## Subthemes")
-    subs = {k: v for k, v in registry.items() if v.get("classification") == "sub_theme"}
-    for sid, meta in sorted(subs.items()):
-        parent = meta.get("parent_theme_id", "?")
-        lines.append(f"- {sid} (parent={parent}): {meta.get('display_name', '')}")
+    """
+    Build a COMPACT deterministic taxonomy description for the LLM prompt.
+
+    One canonical `id: display name` line per assignable theme/subtheme node.
+    No per-node metadata, no parent references, no headings — the model only
+    needs canonical IDs + concise display context to select memberships, and
+    a smaller prompt reduces DeepSeek output-budget pressure (see
+    _call_deepseek_taxonomy length-truncation handling).
+    """
+    lines = ["Assignable theme/subtheme IDs (use ONLY these):"]
+    for tid, meta in sorted(registry.items()):
+        lines.append(f"- {tid}: {meta.get('display_name', '')}")
     return "\n".join(lines)
 
 
@@ -651,25 +670,21 @@ def _build_single_ticker_prompt(
 
 {taxonomy_desc}
 
-## Classification Rules
-- primary_theme_id: the company's defining business/value-chain identity.
-  Prefer a subtheme when it fits better than a parent theme.
-- additional_theme_ids: meaningful secondary exposures (up to 3).
-  Additional themes must represent material, direct business exposure.
-  Do not assign themes merely because the company uses a technology,
-  sells to companies in that theme, or has tangential supply-chain exposure.
-- Only use IDs from the taxonomy above — do not invent IDs.
+Rules:
+- primary_theme_id: the company's defining business identity. Prefer a subtheme
+  when it fits better than a parent theme.
+- additional_theme_ids: up to 3 material, direct secondary exposures (no
+  tangential technology or supply-chain adjacency).
+- Use only the IDs above — never invent IDs or use sector names as themes.
 - If no theme/subtheme genuinely represents this company, set no_valid_theme=true.
-- Do not use Sector IDs — sectors are not themes.
-- If primary exposure is unclear or ambiguous, set confidence below 0.6.
+- If the primary exposure is unclear, set confidence below 0.6.
 
-## Ticker to Classify
+Ticker to classify:
 TICKER: {ticker}
 Company: {company_name}
 Sector: {sector or 'Unknown'}
-Description: {description[:600]}
+Description: {description[:400]}
 
-## Output
 Return ONLY a single JSON object — no markdown, no explanation:
 {{
   "ticker": "{ticker}",
@@ -683,37 +698,75 @@ Return ONLY a single JSON object — no markdown, no explanation:
 }}"""
 
 
+# DeepSeek output budget: the compacted prompt (see _build_taxonomy_prompt)
+# needs far less than 2048 output tokens for the required JSON.  Live evidence
+# showed deepseek-v4-flash can still return EMPTY content with
+# finish_reason='length' (reasoning tokens consuming the budget) — exactly one
+# bounded retry with a larger budget is allowed in that case only.
+_DEEPSEEK_MAX_TOKENS          = 2048
+_DEEPSEEK_RETRY_MAX_TOKENS    = 4096
+
+
 async def _call_deepseek_taxonomy(prompt: str, model_name: str) -> dict | None:
-    """Call DeepSeek V4 Flash for single-ticker taxonomy classification."""
+    """
+    Call DeepSeek V4 Flash for single-ticker taxonomy classification.
+
+    Retry policy (bounded, background-task only — never on a request path):
+      - first attempt: max_tokens = _DEEPSEEK_MAX_TOKENS
+      - if the response is empty with finish_reason == 'length' (explicit
+        budget truncation), exactly ONE retry with _DEEPSEEK_RETRY_MAX_TOKENS.
+      - any other failure (API error, invalid JSON, empty content with any
+        other finish_reason) stays observable and is NOT retried.
+    """
     deepseek_key = os.getenv("DEEPSEEK_API_KEY", "")
     if not deepseek_key:
         print("[THEME_CLASSIFIER] DeepSeek API key not found")
         return None
 
-    raw_text = ""
-    try:
+    async def _attempt(max_tokens: int) -> tuple[str, str | None]:
         import openai as _oai
         client = _oai.OpenAI(api_key=deepseek_key, base_url=_DEEPSEEK_BASE_URL)
-        # max_tokens=2048: deepseek-v4-flash can return empty content with
-        # finish_reason='length' when the 1024 budget is exhausted by thinking
-        # tokens; the larger budget avoids silent truncation-to-empty.
         resp = await asyncio.to_thread(
             client.chat.completions.create,
             model=model_name,
-            max_tokens=2048,
+            max_tokens=max_tokens,
             temperature=0.1,
             messages=[{"role": "user", "content": prompt}],
         )
-        raw_text = resp.choices[0].message.content or ""
-        if not raw_text.strip():
-            _finish = getattr(resp.choices[0], "finish_reason", None)
-            print(
-                f"[THEME_CLASSIFIER] DeepSeek returned empty content "
-                f"(finish_reason={_finish!r}) — observable provider failure"
-            )
-            return None
+        raw = resp.choices[0].message.content or ""
+        finish = getattr(resp.choices[0], "finish_reason", None)
+        return raw, finish
+
+    raw_text = ""
+    finish = None
+    try:
+        raw_text, finish = await _attempt(_DEEPSEEK_MAX_TOKENS)
     except Exception as exc:
         print(f"[THEME_CLASSIFIER] DeepSeek call error: {exc}")
+        return None
+
+    if not raw_text.strip() and finish == "length":
+        print(
+            "[THEME_CLASSIFIER] DeepSeek length-truncated to empty content "
+            f"(max_tokens={_DEEPSEEK_MAX_TOKENS}) — single bounded retry "
+            f"with max_tokens={_DEEPSEEK_RETRY_MAX_TOKENS}"
+        )
+        try:
+            raw_text, finish = await _attempt(_DEEPSEEK_RETRY_MAX_TOKENS)
+        except Exception as exc:
+            print(f"[THEME_CLASSIFIER] DeepSeek retry call error: {exc}")
+            return None
+        if not raw_text.strip():
+            print(
+                f"[THEME_CLASSIFIER] DeepSeek retry also returned empty content "
+                f"(finish_reason={finish!r}) — observable provider failure"
+            )
+            return None
+    elif not raw_text.strip():
+        print(
+            f"[THEME_CLASSIFIER] DeepSeek returned empty content "
+            f"(finish_reason={finish!r}) — observable provider failure, no retry"
+        )
         return None
 
     try:
@@ -1004,6 +1057,11 @@ async def classify_and_assign_ticker(
         # asyncio.to_thread() so the event loop is never blocked.  Never adds
         # provider calls.  Retries a bounded number of times so a concurrently
         # running add-time hydration can complete first.
+        #
+        # Concurrency: each hydration DB read is taken under the shared
+        # classification semaphore so bulk adds cannot fan out unlimited
+        # concurrent cache reads; the sleep between retries happens OUTSIDE
+        # the semaphore so waiting tasks hold no resource.
         attempts = hydrate_attempts if hydrate_attempts is not None else _MAX_HYDRATE_ATTEMPTS
         delay    = hydrate_delay if hydrate_delay is not None else _HYDRATE_RETRY_DELAY
 
@@ -1011,13 +1069,17 @@ async def classify_and_assign_ticker(
         desc    = (description or "").strip()
         sect    = (sector or "").strip()
 
+        def _meta_ready() -> bool:
+            return bool(company and company.upper() != sym and len(desc) >= _MIN_DESCRIPTION_LEN)
+
         for _attempt in range(attempts + 1):
-            if not company or company.upper() == sym or len(desc) < _MIN_DESCRIPTION_LEN:
-                company, desc, sect = await _hydrate_ticker_metadata(sym, company, desc, sect)
+            if not _meta_ready():
+                async with _get_classify_semaphore():
+                    company, desc, sect = await _hydrate_ticker_metadata(sym, company, desc, sect)
                 company = (company or "").strip()
                 desc    = (desc or "").strip()
                 sect    = (sect or "").strip()
-            if company and company.upper() != sym and len(desc) >= _MIN_DESCRIPTION_LEN:
+            if _meta_ready():
                 break
             if _attempt < attempts:
                 await asyncio.sleep(delay)
@@ -1044,7 +1106,7 @@ async def classify_and_assign_ticker(
 
         provider, model_name = "deepseek", _DEFAULT_MODELS["deepseek"]
 
-        # ── 5. Build prompt and call DeepSeek ──────────────────────────────────
+        # ── 5. Build prompt and call DeepSeek (bounded concurrency) ───────────
         registry = _get_assignable_registry()
         if not registry:
             result["action"] = "provider_unavailable"
@@ -1060,7 +1122,8 @@ async def classify_and_assign_ticker(
         )
 
         _upd(last_provider="deepseek", last_model=model_name)
-        raw_result = await _call_deepseek_taxonomy(prompt, model_name)
+        async with _get_classify_semaphore():
+            raw_result = await _call_deepseek_taxonomy(prompt, model_name)
 
         if raw_result is None:
             result["action"] = "provider_failed"
@@ -1105,8 +1168,9 @@ async def classify_and_assign_ticker(
             mark_needs_review([sym], f"low_confidence_{validated['confidence']:.2f}")
             return result
 
-        # ── 9. Persist ─────────────────────────────────────────────────────────
-        persisted = await _persist_classification(validated)
+        # ── 9. Persist (bounded concurrency — canonical write under semaphore) ──
+        async with _get_classify_semaphore():
+            persisted = await _persist_classification(validated)
         if persisted:
             effective_primary = validated.get("primary_subtheme_id") or validated.get("primary_theme_id")
             result["action"]            = "classified"
