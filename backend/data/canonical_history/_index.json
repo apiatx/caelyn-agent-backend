@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-08-13T03:10:46.924146+00:00",
+  "updated_at": "2026-08-13T05:19:51.836315+00:00",
   "symbols": {
     "TEST_MARA": {
       "symbol": "TEST_MARA",
@@ -135876,8 +135876,8 @@
     "SOIL": {
       "history_status": "fetch_failed",
       "error_reason": "no_bars_from_providers",
-      "last_attempt_at": "2026-08-13T02:39:26.488865+00:00",
-      "next_retry_at": "2026-08-13T06:39:26.488922+00:00",
+      "last_attempt_at": "2026-08-13T05:19:51.811680+00:00",
+      "next_retry_at": "2026-08-13T09:19:51.811690+00:00",
       "provider": "tradier"
     },
     "URA": {
@@ -139631,8 +139631,8 @@
     "AMETEK": {
       "history_status": "fetch_failed",
       "error_reason": "no_bars_from_providers",
-      "last_attempt_at": "2026-08-13T02:39:09.764010+00:00",
-      "next_retry_at": "2026-08-13T06:39:09.764025+00:00",
+      "last_attempt_at": "2026-08-13T05:19:32.636238+00:00",
+      "next_retry_at": "2026-08-13T09:19:32.636249+00:00",
       "provider": "tradier"
     },
     "AZZ": {
@@ -146216,6 +146216,46 @@
           39.47
         ]
       ]
+    },
+    "OTC:GRSLF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:NNOMF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:CPWHF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
+    },
+    "OTC:VNPKF": {
+      "volume_change_1d_pct": null,
+      "volume_change_7d_pct": null,
+      "volume_change_30d_pct": null,
+      "volume_acceleration_pp": null,
+      "volume_metrics_as_of": null,
+      "volume_metrics_status": "unavailable",
+      "change_7d": null,
+      "change_30d": null
     }
   }
 }
