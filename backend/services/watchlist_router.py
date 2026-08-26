@@ -7014,7 +7014,9 @@ async def get_by_id_endpoint(watchlist_id: str):
     import time as _t_get
     _t0_get = _t_get.monotonic()
 
-    store = load_watchlist(watchlist_id)
+    # Offload the synchronous Postgres/disk read so it never blocks the
+    # event loop (matches the to_thread pattern used elsewhere in this file).
+    store = await _aio.to_thread(load_watchlist, watchlist_id)
     if store is None:
         return {"empty": True}
     _wl_load_ms = round((_t_get.monotonic() - _t0_get) * 1000)

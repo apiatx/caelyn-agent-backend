@@ -1,73 +1,364 @@
 {
   "macro_regime": "inflationary",
-  "active_themes": [],
-  "emerging_themes": [
+  "active_themes": [
     {
-      "name": "Optical Interconnects",
-      "score": 3.0,
-      "source": "x_consensus",
+      "name": "Silver (Commodity Lens)",
+      "score": 89.1,
+      "source": "theme_rs_service",
       "evidence": [
-        "X consensus: 2 tickers \u2014 AAOI, LITE"
+        "Top-percentile RS (89/100) vs theme universe. Outperforming SPY +93.6%, QQQ +76.8%. Breadth N/A."
       ],
       "related_etfs": [
-        "COHR",
-        "LITE",
-        "AAOI"
+        "SLV",
+        "SIL",
+        "SILJ"
+      ],
+      "related_tickers": []
+    },
+    {
+      "name": "Metals & Mining",
+      "score": 87.9,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Top-percentile RS (88/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +3343.3%, QQQ "
+      ],
+      "related_etfs": [
+        "AA",
+        "AGI",
+        "ASM",
+        "AUGO"
       ],
       "related_tickers": [
-        "AAOI",
-        "LITE"
+        "STLD",
+        "NEM",
+        "NUE"
       ]
     },
     {
-      "name": "Optical Components & Lasers",
-      "score": 3.0,
-      "source": "x_consensus",
+      "name": "Precious Metals",
+      "score": 87.8,
+      "source": "theme_rs_service",
       "evidence": [
-        "X consensus: 2 tickers \u2014 AAOI, LITE"
+        "Top-percentile RS (88/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +77.8%, QQQ +6"
       ],
       "related_etfs": [
-        "IPGP",
-        "COHR",
-        "LITE"
+        "AG",
+        "GDX",
+        "GDXJ",
+        "SIL"
       ],
       "related_tickers": [
-        "AAOI",
-        "LITE"
+        "AEM",
+        "NEM",
+        "FNV"
       ]
     },
     {
-      "name": "[Deprecated] Photonics / Lasers",
-      "score": 3.0,
-      "source": "x_consensus",
+      "name": "Base Metals & Diversified Mining",
+      "score": 84.6,
+      "source": "theme_rs_service",
       "evidence": [
-        "X consensus: 2 tickers \u2014 AAOI, LITE"
+        "Top-percentile RS (85/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +77.1%, QQQ +6"
       ],
       "related_etfs": [
-        "IPGP",
-        "COHR",
-        "LITE"
+        "COPX",
+        "DBB",
+        "HBM",
+        "PICK"
       ],
       "related_tickers": [
-        "AAOI",
-        "LITE"
+        "SCCO",
+        "TECK",
+        "BHP"
+      ]
+    },
+    {
+      "name": "Servers & Compute Systems",
+      "score": 83.0,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Top-percentile RS (83/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +388.6%, QQQ +"
+      ],
+      "related_etfs": [
+        "DELL",
+        "HPE",
+        "NTAP",
+        "OSS"
+      ],
+      "related_tickers": [
+        "PTC"
+      ]
+    },
+    {
+      "name": "Gold (Commodity Lens)",
+      "score": 82.2,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Top-percentile RS (82/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +99.2%, QQQ +8"
+      ],
+      "related_etfs": [
+        "GLD",
+        "IAU",
+        "GDX",
+        "GDXJ"
+      ],
+      "related_tickers": [
+        "AEM",
+        "NEM"
+      ]
+    },
+    {
+      "name": "Earth Observation & Space Data",
+      "score": 79.4,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Top-percentile RS (79/100) vs theme universe. Outperforming SPY -157.3%, QQQ -174.1%. Breadth 0%."
+      ],
+      "related_etfs": [
+        "SPIR"
+      ],
+      "related_tickers": [
+        "GNSS"
+      ]
+    },
+    {
+      "name": "Biotech",
+      "score": 75.2,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Top-percentile RS (75/100) vs theme universe. Outperforming SPY -66.8%, QQQ -83.7%. Breadth 57%."
+      ],
+      "related_etfs": [
+        "ABCL",
+        "ABSI",
+        "ADPT",
+        "ARKG"
+      ],
+      "related_tickers": [
+        "VRTX",
+        "GILD",
+        "REGN"
       ]
     }
   ],
-  "dead_zones": [],
-  "sector_leaders": [],
-  "sector_laggards": [],
+  "emerging_themes": [
+    {
+      "name": "Steel & Ferrous Metals",
+      "score": 69.5,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (70/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "SLX",
+        "XME"
+      ],
+      "related_tickers": [
+        "STLD",
+        "RS",
+        "NUE"
+      ]
+    },
+    {
+      "name": "Launch & Space Systems",
+      "score": 69.1,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (69/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "RKLB",
+        "SPIR"
+      ],
+      "related_tickers": []
+    },
+    {
+      "name": "Digital Asset Platforms",
+      "score": 69.1,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (69/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "COIN",
+        "HOOD",
+        "MSTR"
+      ],
+      "related_tickers": [
+        "GBTC"
+      ]
+    },
+    {
+      "name": "Materials",
+      "score": 68.9,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (69/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "ALB",
+        "FCX",
+        "VAW",
+        "XLB"
+      ],
+      "related_tickers": [
+        "NEM",
+        "NUE",
+        "LIN"
+      ]
+    },
+    {
+      "name": "Drones & Autonomous Systems",
+      "score": 67.9,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (68/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "AVAV",
+        "ITA",
+        "JOBY",
+        "ONDS"
+      ],
+      "related_tickers": [
+        "ACHR",
+        "EH"
+      ]
+    }
+  ],
+  "dead_zones": [
+    {
+      "name": "Nuclear Equipment & Services",
+      "score": 12.1,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Bottom-quartile RS (12/100) vs 104-theme universe. SPY delta +143.5%, QQQ delta +126.6%. Breadth N/A \u2014 minimal buying pr"
+      ],
+      "related_etfs": [
+        "BWXT",
+        "CW",
+        "LMT"
+      ],
+      "related_tickers": []
+    },
+    {
+      "name": "Battery Technology & Energy Storage",
+      "score": 17.7,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Bottom-quartile RS (18/100) vs 104-theme universe. SPY delta -25.7%, QQQ delta -42.5%. Breadth 0% \u2014 minimal buying press"
+      ],
+      "related_etfs": [
+        "BATT",
+        "ELVA",
+        "ENVX",
+        "KULR"
+      ],
+      "related_tickers": [
+        "FLUX"
+      ]
+    },
+    {
+      "name": "Solar",
+      "score": 20.4,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Bottom-quartile RS (20/100) vs 104-theme universe. SPY delta -146.0%, QQQ delta -162.9%. Breadth N/A \u2014 minimal buying pr"
+      ],
+      "related_etfs": [
+        "ASTI",
+        "ENPH",
+        "SEDG",
+        "TAN"
+      ],
+      "related_tickers": []
+    },
+    {
+      "name": "Utilities",
+      "score": 24.1,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Bottom-quartile RS (24/100) vs 104-theme universe. SPY delta -48.8%, QQQ delta -65.6%. Breadth 100% \u2014 minimal buying pre"
+      ],
+      "related_etfs": [
+        "XLU",
+        "VPU"
+      ],
+      "related_tickers": [
+        "SO",
+        "AEP",
+        "EXC"
+      ]
+    },
+    {
+      "name": "E&P / Upstream",
+      "score": 24.9,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Bottom-quartile RS (25/100) vs 104-theme universe. SPY delta -55.1%, QQQ delta -72.0%. Breadth 100% \u2014 minimal buying pre"
+      ],
+      "related_etfs": [
+        "DRIP",
+        "XOP"
+      ],
+      "related_tickers": [
+        "COP",
+        "EOG",
+        "OVV"
+      ]
+    }
+  ],
+  "sector_leaders": [
+    {
+      "sector": "Industrials",
+      "ticker": "BTG",
+      "score": 72.1,
+      "posture": "leading"
+    },
+    {
+      "sector": "Materials",
+      "ticker": "FCX",
+      "score": 68.9,
+      "posture": "improving"
+    },
+    {
+      "sector": "Health Care",
+      "ticker": "XLV",
+      "score": 61.8,
+      "posture": "improving"
+    },
+    {
+      "sector": "Energy",
+      "ticker": "XLE",
+      "score": 60.8,
+      "posture": "improving"
+    },
+    {
+      "sector": "Technology",
+      "ticker": "XLK",
+      "score": 58.0,
+      "posture": "improving"
+    }
+  ],
+  "sector_laggards": [
+    {
+      "sector": "Utilities",
+      "ticker": "XLU",
+      "score": 24.1,
+      "posture": "lagging"
+    }
+  ],
   "risk_notes": [],
-  "last_updated": "2026-08-26T18:12:11.210148+00:00",
+  "last_updated": "2026-08-26T21:23:10.335390+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
     "regime": "fallback",
-    "sector_rotation": "fallback",
+    "sector_rotation": "ok",
     "theme_rs_service": "ok",
     "theme_rotation": "ok",
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1787767931.210214
+  "_saved_at": 1787779390.3354425
 }
