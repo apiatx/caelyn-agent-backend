@@ -342,6 +342,46 @@ def _news_response(
     return resp
 
 
+def _build_news_archive_payload(
+    watchlist_id: str,
+    raw_map: dict[str, list[dict]],
+    started_at: float,
+) -> dict:
+    """Score and rank an archive payload off the asyncio event loop."""
+    try:
+        from services.news_signal_scorer import score_article as _score_arc
+        scored_map: dict[str, list[dict]] = {}
+        total_raw = 0
+        for _ticker, _articles in raw_map.items():
+            scored_map[_ticker] = [_score_arc(_a, _ticker) for _a in _articles]
+            total_raw += len(_articles)
+    except Exception as _e:
+        print(f"[NEWS_ARCHIVE] scoring error wl={watchlist_id} (non-fatal): {_e}")
+        scored_map = raw_map
+        total_raw = sum(len(v) for v in raw_map.values())
+
+    try:
+        enriched_map, major_summary = _build_major(scored_map)
+    except Exception as _e:
+        print(f"[NEWS_ARCHIVE] _build_major error wl={watchlist_id} (non-fatal): {_e}")
+        enriched_map, major_summary = scored_map, {}
+
+    ts = _time.time()
+    elapsed_ms = round((ts - started_at) * 1000)
+    top_ct = len(major_summary.get("major_developments") or [])
+    print(
+        f"[NEWS_ARCHIVE] built wl={watchlist_id} tickers_with_data={len(raw_map)} "
+        f"raw_articles={total_raw} top={top_ct} elapsed={elapsed_ms}ms"
+    )
+    return _news_response(
+        enriched_map,
+        major_summary,
+        ts,
+        is_building=True,
+        cache_source="neon_archive",
+    )
+
+
 async def _bg_refresh_news(watchlist_id: str, tickers: list[str]) -> None:
     """Background task: silently refresh news LKG cache for a watchlist."""
     if watchlist_id in _news_bg_building:
@@ -814,41 +854,16 @@ async def _build_news_from_archive(
         print(f"[NEWS_ARCHIVE] archive empty wl={watchlist_id} — no 48h articles")
         return None
 
-    # ── Step 2: Score each archive article (CPU only, no I/O) ──────────────
-    try:
-        from services.news_signal_scorer import score_article as _score_arc
-        scored_map: dict[str, list[dict]] = {}
-        total_raw = 0
-        for _ticker, _articles in raw_map.items():
-            scored_map[_ticker] = [_score_arc(_a, _ticker) for _a in _articles]
-            total_raw += len(_articles)
-    except Exception as _e:
-        print(f"[NEWS_ARCHIVE] scoring error wl={watchlist_id} (non-fatal): {_e}")
-        scored_map = raw_map
-        total_raw  = sum(len(v) for v in raw_map.values())
-
-    # ── Step 3: Major developments ranking ─────────────────────────────────
-    try:
-        enriched_map, major_summary = _build_major(scored_map)
-    except Exception as _e:
-        print(f"[NEWS_ARCHIVE] _build_major error wl={watchlist_id} (non-fatal): {_e}")
-        enriched_map, major_summary = scored_map, {}
-
-    ts         = _time.time()
-    elapsed_ms = round((ts - t0) * 1000)
-    top_ct     = len(major_summary.get("major_developments") or [])
-    print(
-        f"[NEWS_ARCHIVE] built wl={watchlist_id} tickers_with_data={len(raw_map)} "
-        f"raw_articles={total_raw} top={top_ct} elapsed={elapsed_ms}ms"
+    # ── Steps 2–4: deterministic CPU work off the event loop ───────────────
+    # Scoring, ranking and response construction retain identical semantics,
+    # but cannot starve request timeouts while startup prewarm is running.
+    return await loop.run_in_executor(
+        None,
+        _build_news_archive_payload,
+        watchlist_id,
+        raw_map,
+        t0,
     )
-
-    # ── Step 4: Build response — is_building=True so UI knows live data follows ─
-    data = _news_response(
-        enriched_map, major_summary, ts,
-        is_building=True,
-        cache_source="neon_archive",
-    )
-    return data
 
 
 async def _prewarm_news_lkg() -> None:

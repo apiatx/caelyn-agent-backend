@@ -221,6 +221,34 @@ class TestNewsColdStart(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(len(result.get("top_articles", [])), 0)
         self.assertIn("earnings_guidance", result.get("by_catalyst_type", {}))
 
+    async def test_archive_scoring_does_not_block_event_loop(self):
+        """Slow deterministic scoring must run in a worker during prewarm."""
+        import services.watchlist_router as wr
+        self._reset_module_state()
+
+        def _slow_score(article, ticker):
+            time.sleep(0.05)
+            return _make_scored(article, ticker)
+
+        with patch(
+            "data.rss_article_archive.query_recent_articles_for_scoring",
+            return_value=_SAMPLE_ARCHIVE_MAP,
+        ), patch(
+            "services.news_signal_scorer.score_article",
+            side_effect=_slow_score,
+        ):
+            build_task = asyncio.create_task(
+                wr._build_news_from_archive("offloop-test", _SAMPLE_TICKERS)
+            )
+            tick_started = time.monotonic()
+            await asyncio.sleep(0.01)
+            tick_elapsed = time.monotonic() - tick_started
+            result = await build_task
+
+        self.assertLess(tick_elapsed, 0.04)
+        self.assertEqual(result["cache_source"], "neon_archive")
+        self.assertTrue(result["is_building"])
+
     # ── 5. Provider outage: archive payload still returned ────────────────────
 
     async def test_archive_served_when_provider_would_fail(self):

@@ -52,6 +52,38 @@ MAX_CONTRACTS_PER_TICKER = 10
 REFETCH_INTERVAL_HOURS = 6
 
 
+def _classify_ingestion_work(get_fetch_progress):
+    """Classify ingestion work synchronously for execution in a worker."""
+    pending_tickers = []
+    stale_tickers = []
+    for ticker in OPTIONS_WATCHLIST:
+        progress = get_fetch_progress(ticker)
+        if progress is None or progress.get("status") == "pending":
+            pending_tickers.append(ticker)
+        elif progress.get("status") == "error":
+            pending_tickers.append(ticker)
+        elif progress.get("status") == "complete":
+            updated = progress.get("updated_at")
+            if updated:
+                try:
+                    last_update = datetime.fromisoformat(updated)
+                    if (
+                        datetime.now(last_update.tzinfo) - last_update
+                    ).total_seconds() > REFETCH_INTERVAL_HOURS * 3600:
+                        stale_tickers.append(ticker)
+                except Exception:
+                    stale_tickers.append(ticker)
+    return pending_tickers, stale_tickers
+
+
+async def _load_ingestion_work_queue(get_fetch_progress):
+    """Run the existing per-ticker progress reads off the event loop."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None, _classify_ingestion_work, get_fetch_progress
+    )
+
+
 def _parse_option_ticker(polygon_ticker: str) -> dict:
     """
     Parse a Polygon option ticker like 'O:AAPL250321C00200000' into components.
@@ -296,25 +328,9 @@ async def run_ingestion_loop(polygon_opts, init_event=None, stop_event=None):
 
         try:
             # Determine which tickers need fetching
-            pending_tickers = []
-            stale_tickers = []
-
-            for ticker in OPTIONS_WATCHLIST:
-                progress = get_fetch_progress(ticker)
-                if progress is None or progress.get("status") == "pending":
-                    pending_tickers.append(ticker)
-                elif progress.get("status") == "error":
-                    pending_tickers.append(ticker)  # Retry errors
-                elif progress.get("status") == "complete":
-                    # Check if stale (>6 hours since last fetch)
-                    updated = progress.get("updated_at")
-                    if updated:
-                        try:
-                            last_update = datetime.fromisoformat(updated)
-                            if (datetime.now(last_update.tzinfo) - last_update).total_seconds() > REFETCH_INTERVAL_HOURS * 3600:
-                                stale_tickers.append(ticker)
-                        except Exception:
-                            stale_tickers.append(ticker)
+            pending_tickers, stale_tickers = await _load_ingestion_work_queue(
+                get_fetch_progress
+            )
 
             # Prioritize: pending first, then stale
             work_queue = pending_tickers + stale_tickers
