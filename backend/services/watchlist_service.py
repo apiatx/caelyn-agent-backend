@@ -185,9 +185,10 @@ def load_watchlist(watchlist_id: Optional[str] = None) -> Optional[Dict[str, Any
 def list_watchlists() -> List[Dict[str, Any]]:
     """List all saved watchlists (metadata only)."""
     try:
-        from data.pg_storage import watchlist_list as pg_wl_list, is_available
-        if is_available():
-            return pg_wl_list()
+        from data.pg_storage import _watchlist_list_with_status as pg_wl_list
+        db_ok, rows = pg_wl_list()
+        if db_ok:
+            return rows
     except Exception as e:
         print(f"[Watchlist] PostgreSQL list failed: {e}")
     # Fallback: single JSON file

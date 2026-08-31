@@ -2330,11 +2330,11 @@ def watchlist_set_ticker_names(watchlist_id: str, names: dict[str, str]) -> dict
         _put_conn(conn)
 
 
-def watchlist_list() -> list:
-    """List all saved watchlists (metadata only, no full data)."""
+def _watchlist_list_with_status() -> tuple[bool, list]:
+    """Read Watchlist metadata once, preserving empty-vs-failed status."""
     conn = _get_conn()
     if conn is None:
-        return []
+        return False, []
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -2346,7 +2346,7 @@ def watchlist_list() -> list:
         """)
         rows = cur.fetchall()
         cur.close()
-        return [
+        return True, [
             {
                 "id": r[0],
                 "name": r[1],
@@ -2358,9 +2358,15 @@ def watchlist_list() -> list:
         ]
     except Exception as e:
         print(f"[PG_STORAGE] watchlist_list error: {e}")
-        return []
+        return False, []
     finally:
         _put_conn(conn)
+
+
+def watchlist_list() -> list:
+    """List all saved watchlists (metadata only, no full data)."""
+    _db_ok, rows = _watchlist_list_with_status()
+    return rows
 
 
 # ── Calendar Snapshots (non-Earnings catalyst tabs) ─────────────────

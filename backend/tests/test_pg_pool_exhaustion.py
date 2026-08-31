@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch, PropertyMock, call
 sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.dirname(__file__)))
 
 import data.pg_storage as pgs
+import services.watchlist_service as watchlist_service
 from psycopg2.pool import PoolError
 from psycopg2 import OperationalError
 
@@ -380,6 +381,91 @@ class TestPoolConstruction(unittest.TestCase):
         self.assertEqual(created["maxconn"], 5)
         self.assertEqual(created["database_url"], "postgresql://test:test@localhost/test")
         self.assertEqual(created["kwargs"], {"connect_timeout": 10})
+
+
+class TestWatchlistMetadataReadStatus(unittest.TestCase):
+    """The list path must distinguish an empty DB from a failed DB read."""
+
+    def _metadata_conn(self, rows):
+        conn = MagicMock()
+        cur = MagicMock()
+        cur.fetchall.return_value = rows
+        conn.cursor.return_value = cur
+        return conn, cur
+
+    def test_successful_nonempty_metadata_uses_one_db_cycle(self):
+        saved_at = __import__("datetime").datetime(2026, 8, 31, 12, 0, 0)
+        updated_at = __import__("datetime").datetime(2026, 8, 31, 13, 0, 0)
+        conn, cur = self._metadata_conn(
+            [("primary", "Primary", 489, saved_at, updated_at)]
+        )
+
+        with patch.object(pgs, "_get_conn", return_value=conn) as get_conn, \
+             patch.object(pgs, "_put_conn") as put_conn:
+            result = pgs._watchlist_list_with_status()
+
+        self.assertEqual(
+            result,
+            (
+                True,
+                [{
+                    "id": "primary",
+                    "name": "Primary",
+                    "ticker_count": 489,
+                    "saved_at": saved_at.isoformat(),
+                    "updated_at": updated_at.isoformat(),
+                }],
+            ),
+        )
+        get_conn.assert_called_once()
+        cur.execute.assert_called_once()
+        cur.fetchall.assert_called_once_with()
+        put_conn.assert_called_once_with(conn)
+
+    def test_successful_empty_metadata_does_not_fallback(self):
+        conn, cur = self._metadata_conn([])
+
+        with patch.object(pgs, "_get_conn", return_value=conn), \
+             patch.object(pgs, "_put_conn"), \
+             patch.object(
+                 watchlist_service,
+                 "_read_store",
+                 return_value={
+                     "id": "file-only",
+                     "name": "File fallback",
+                     "tickers": ["FILE"],
+                     "saved_at": "file-time",
+                 },
+             ) as read_store:
+            result = watchlist_service.list_watchlists()
+
+        self.assertEqual(result, [])
+        read_store.assert_not_called()
+        cur.execute.assert_called_once()
+
+    def test_database_failure_preserves_existing_file_fallback(self):
+        with patch.object(pgs, "_get_conn", return_value=None), \
+             patch.object(
+                 watchlist_service,
+                 "_read_store",
+                 return_value={
+                     "id": "file-only",
+                     "name": "File fallback",
+                     "tickers": ["FILE"],
+                     "saved_at": "file-time",
+                 },
+             ):
+            result = watchlist_service.list_watchlists()
+
+        self.assertEqual(
+            result,
+            [{
+                "id": "file-only",
+                "name": "File fallback",
+                "ticker_count": 1,
+                "saved_at": "file-time",
+            }],
+        )
 
 
 if __name__ == "__main__":
