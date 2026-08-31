@@ -339,5 +339,48 @@ class TestCallerAutoDetection(unittest.TestCase):
         self.assertEqual(pgs._conn_exhaustion_count, 1)
 
 
+class TestPoolConstruction(unittest.TestCase):
+    """The shared pool must be the thread-safe psycopg2 implementation."""
+
+    def setUp(self):
+        pgs._pool = None
+        pgs._available = False
+        pgs._last_conn_error = None
+        pgs._conn_checkouts.clear()
+
+    def test_lazy_pool_uses_threaded_class_with_existing_capacity(self):
+        healthy = _mock_healthy_conn()
+        created = {}
+
+        def _threaded_pool(minconn, maxconn, database_url, **kwargs):
+            created.update(
+                minconn=minconn,
+                maxconn=maxconn,
+                database_url=database_url,
+                kwargs=kwargs,
+            )
+            pool = MagicMock()
+            pool.getconn.return_value = healthy
+            return pool
+
+        with patch.object(
+            pgs, "_DATABASE_URL", "postgresql://test:test@localhost/test"
+        ), patch(
+            "psycopg2.pool.ThreadedConnectionPool",
+            side_effect=_threaded_pool,
+        ) as threaded_pool, patch(
+            "psycopg2.pool.SimpleConnectionPool"
+        ) as simple_pool:
+            result = pgs._get_conn("pool-construction-test")
+
+        self.assertIs(result, healthy)
+        threaded_pool.assert_called_once()
+        simple_pool.assert_not_called()
+        self.assertEqual(created["minconn"], 1)
+        self.assertEqual(created["maxconn"], 5)
+        self.assertEqual(created["database_url"], "postgresql://test:test@localhost/test")
+        self.assertEqual(created["kwargs"], {"connect_timeout": 10})
+
+
 if __name__ == "__main__":
     unittest.main()

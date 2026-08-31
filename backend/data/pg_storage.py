@@ -168,7 +168,7 @@ def _get_conn(caller: str = ""):
             try:
                 import psycopg2
                 from psycopg2 import pool as _pg_pool
-                _pool = _pg_pool.SimpleConnectionPool(
+                _pool = _pg_pool.ThreadedConnectionPool(
                     1, 5, _DATABASE_URL, connect_timeout=10
                 )
                 _available = True
