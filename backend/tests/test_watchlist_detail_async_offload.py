@@ -44,9 +44,13 @@ def _reset_state():
     orig_building = set(wlr._BULK_LKG_BUILDING)
     orig_load_watchlist = wlr.load_watchlist
     orig_builder = wlr._build_watchlist_response
+    orig_rv_mem = dict(wlr._rv_mem)
+    orig_volmc_mem = dict(wlr._volmc_mem)
 
     wlr._BULK_LKG.clear()
     wlr._BULK_LKG_BUILDING.clear()
+    wlr._rv_mem.clear()
+    wlr._volmc_mem.clear()
     yield
     wlr._BULK_LKG.clear()
     wlr._BULK_LKG.update(orig_lkg)
@@ -54,6 +58,10 @@ def _reset_state():
     wlr._BULK_LKG_BUILDING.update(orig_building)
     wlr.load_watchlist = orig_load_watchlist
     wlr._build_watchlist_response = orig_builder
+    wlr._rv_mem.clear()
+    wlr._rv_mem.update(orig_rv_mem)
+    wlr._volmc_mem.clear()
+    wlr._volmc_mem.update(orig_volmc_mem)
 
 
 # ===========================================================================
@@ -568,6 +576,107 @@ def test_14_rank_snapshot_reads_run_concurrently_and_preserve_results(monkeypatc
     monkeypatch.setattr(wlr, "_rv_neon_load", _load_rv)
     monkeypatch.setattr(wlr, "_volmc_neon_load", _load_volmc)
 
-    result = asyncio.run(wlr._load_rank_snapshots_concurrently(WL_ID))
+    result = asyncio.run(
+        wlr._load_rank_snapshots_cache_first(WL_ID, timeout_s=0.5)
+    )
 
-    assert result == [expected_rv, expected_volmc]
+    assert result == (expected_rv, expected_volmc)
+
+
+def test_15_rank_snapshot_memory_hits_avoid_postgres(monkeypatch):
+    rv_current = {"AAPL": {"rank": 1, "rel_vol": 2.0}}
+    rv_previous = {"AAPL": {"rank": 2, "rel_vol": 1.5}}
+    vm_current = {"AAPL": {"rank": 1, "vol_mc_pct": 1.2}}
+    vm_previous = {"AAPL": {"rank": 3, "vol_mc_pct": 0.8}}
+    wlr._rv_mem[WL_ID] = {"current": rv_current, "previous": rv_previous}
+    wlr._volmc_mem[WL_ID] = {"current": vm_current, "previous": vm_previous}
+
+    def _must_not_read(_watchlist_id):
+        raise AssertionError("PostgreSQL must not be read on a memory-cache hit")
+
+    monkeypatch.setattr(wlr, "_rv_neon_load", _must_not_read)
+    monkeypatch.setattr(wlr, "_volmc_neon_load", _must_not_read)
+
+    result = asyncio.run(
+        wlr._load_rank_snapshots_cache_first(WL_ID, timeout_s=0.1)
+    )
+
+    assert result == (
+        (rv_current, rv_previous),
+        (vm_current, vm_previous),
+    )
+
+
+def test_16_fast_rank_snapshot_reads_preserve_postgres_results(monkeypatch):
+    expected_rv = (
+        {"AAPL": {"rank": 1, "rel_vol": 2.0}},
+        {"AAPL": {"rank": 2, "rel_vol": 1.5}},
+    )
+    expected_volmc = (
+        {"AAPL": {"rank": 1, "vol_mc_pct": 1.2}},
+        {"AAPL": {"rank": 3, "vol_mc_pct": 0.8}},
+    )
+    monkeypatch.setattr(wlr, "_rv_neon_load", lambda _wid: expected_rv)
+    monkeypatch.setattr(wlr, "_volmc_neon_load", lambda _wid: expected_volmc)
+
+    result = asyncio.run(
+        wlr._load_rank_snapshots_cache_first(WL_ID, timeout_s=0.5)
+    )
+
+    assert result == (expected_rv, expected_volmc)
+
+
+def test_17_bounded_rank_snapshot_miss_keeps_current_rank_contract(monkeypatch):
+    workers_finished = {"rv": threading.Event(), "volmc": threading.Event()}
+
+    def _slow_load(label):
+        def _load(_watchlist_id):
+            time.sleep(0.05)
+            workers_finished[label].set()
+            return ({"AAPL": {"rank": 9}}, {"AAPL": {"rank": 8}})
+        return _load
+
+    monkeypatch.setattr(wlr, "_rv_neon_load", _slow_load("rv"))
+    monkeypatch.setattr(wlr, "_volmc_neon_load", _slow_load("volmc"))
+
+    async def _run():
+        snapshots = await wlr._load_rank_snapshots_cache_first(
+            WL_ID, timeout_s=0.001
+        )
+        sections = [{
+            "name": "Other",
+            "tickers": [
+                {"symbol": "AAPL", "relative_volume": 2.0, "vol_mc_pct": 1.2},
+                {"symbol": "MSFT", "relative_volume": 1.0, "vol_mc_pct": 0.6},
+            ],
+        }]
+        sections = await wlr._apply_rv_rank_fields(
+            WL_ID, sections, ["AAPL", "MSFT"],
+            preloaded_snapshots=snapshots[0],
+        )
+        sections = await wlr._apply_volmc_rank_fields(
+            WL_ID, sections, ["AAPL", "MSFT"],
+            preloaded_snapshots=snapshots[1],
+        )
+        await asyncio.wait_for(
+            asyncio.gather(*(
+                asyncio.to_thread(event.wait)
+                for event in workers_finished.values()
+            )),
+            timeout=0.5,
+        )
+        return sections
+
+    rows = asyncio.run(_run())[0]["tickers"]
+
+    assert [row["rel_vol_rank"] for row in rows] == [1, 2]
+    assert [row["vol_mc_rank"] for row in rows] == [1, 2]
+    for row in rows:
+        assert row["rel_vol_prev_rank"] is None
+        assert row["rel_vol_rank_delta"] is None
+        assert row["rel_vol_trend"] == "unknown"
+        assert row["rel_vol_momentum_label"] == "unknown"
+        assert row["vol_mc_prev_rank"] is None
+        assert row["vol_mc_rank_delta"] is None
+        assert row["vol_mc_trend"] == "unknown"
+        assert row["vol_mc_momentum_label"] == "unknown"

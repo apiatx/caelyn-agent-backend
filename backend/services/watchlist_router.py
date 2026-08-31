@@ -92,6 +92,7 @@ _BULK_LKG_STALE_TTL = 20 * 60   # 20 min — serve stale while rebuild runs in b
 # and the canonical builder still owns the complete response contract.
 _WATCHLIST_DB_READ_TIMEOUT_S = 5.0
 _WATCHLIST_RESPONSE_BUDGET_S = 24.0  # leave several seconds for serialization/transfer
+_WATCHLIST_RANK_SNAPSHOT_TIMEOUT_S = 1.0
 _WATCHLIST_EARNINGS_MIN_REMAINING_S = 0.25
 
 # Per-watchlist taxonomy generation counter.
@@ -1351,12 +1352,63 @@ def _volmc_neon_save(watchlist_id: str, current_snap: dict) -> None:
         print(f"[VOLMC_RANK] pg save skipped: {exc}")
 
 
-async def _load_rank_snapshots_concurrently(watchlist_id: str) -> tuple[tuple, tuple]:
-    """Load the two independent persisted rank snapshots in parallel."""
-    loop = asyncio.get_event_loop()
-    return await asyncio.gather(
-        loop.run_in_executor(None, _rv_neon_load, watchlist_id),
-        loop.run_in_executor(None, _volmc_neon_load, watchlist_id),
+async def _load_rank_snapshots_cache_first(
+    watchlist_id: str,
+    timeout_s: float,
+) -> tuple[tuple, tuple]:
+    """Use process memory first; bound only missing detail-path reads."""
+    _rv_entry = _rv_mem.get(watchlist_id)
+    _vm_entry = _volmc_mem.get(watchlist_id)
+    _rv_cached = bool(_rv_entry and (
+        _rv_entry.get("previous") or _rv_entry.get("current")
+    ))
+    _vm_cached = bool(_vm_entry and (
+        _vm_entry.get("previous") or _vm_entry.get("current")
+    ))
+
+    _rv_result = (
+        (_rv_entry.get("current"), _rv_entry.get("previous"))
+        if _rv_cached else None
+    )
+    _vm_result = (
+        (_vm_entry.get("current"), _vm_entry.get("previous"))
+        if _vm_cached else None
+    )
+    _pending: list[tuple[str, asyncio.Future]] = []
+    _loop = asyncio.get_event_loop()
+    if not _rv_cached:
+        _pending.append((
+            "rv",
+            asyncio.ensure_future(_loop.run_in_executor(None, _rv_neon_load, watchlist_id)),
+        ))
+    if not _vm_cached:
+        _pending.append((
+            "volmc",
+            asyncio.ensure_future(_loop.run_in_executor(None, _volmc_neon_load, watchlist_id)),
+        ))
+
+    async def _read_bounded(_label: str, _future: asyncio.Future) -> tuple:
+        try:
+            return await asyncio.wait_for(asyncio.shield(_future), timeout=timeout_s)
+        except Exception as _exc:
+            if not isinstance(_exc, asyncio.TimeoutError):
+                print(f"[WATCHLIST_ENRICH] {_label} rank snapshot unavailable: {_exc}")
+            return (None, None)
+
+    if _pending:
+        _results = await asyncio.gather(*(
+            _read_bounded(_label, _future)
+            for _label, _future in _pending
+        ))
+        for (_label, _future), _result in zip(_pending, _results):
+            if _label == "rv":
+                _rv_result = _result
+            else:
+                _vm_result = _result
+
+    return (
+        _rv_result or (None, None),
+        _vm_result or (None, None),
     )
 
 
@@ -2088,8 +2140,9 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         if _skl_wl_id:
             _skl_rank_t0 = _time.monotonic()
             try:
-                _skl_rv_snaps, _skl_vm_snaps = await _load_rank_snapshots_concurrently(
-                    _skl_wl_id
+                _skl_rv_snaps, _skl_vm_snaps = await _load_rank_snapshots_cache_first(
+                    _skl_wl_id,
+                    timeout_s=_WATCHLIST_RANK_SNAPSHOT_TIMEOUT_S,
                 )
                 _skl_sections = await _apply_rv_rank_fields(
                     _skl_wl_id,
