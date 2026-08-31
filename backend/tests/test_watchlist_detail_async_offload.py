@@ -543,3 +543,31 @@ def test_13_earnings_fallback_shape_is_kept_when_budget_is_exhausted(monkeypatch
         "stale": True,
         "cache_status": "skipped",
     }
+
+
+def test_14_rank_snapshot_reads_run_concurrently_and_preserve_results(monkeypatch):
+    started = {"rv": threading.Event(), "volmc": threading.Event()}
+    release = threading.Event()
+    expected_rv = ({"AAPL": {"rank": 1}}, {"AAPL": {"rank": 2}})
+    expected_volmc = ({"AAPL": {"rank": 3}}, {"AAPL": {"rank": 4}})
+
+    def _load_rv(watchlist_id):
+        assert watchlist_id == WL_ID
+        started["rv"].set()
+        assert started["volmc"].wait(0.5)
+        assert release.wait(0.5)
+        return expected_rv
+
+    def _load_volmc(watchlist_id):
+        assert watchlist_id == WL_ID
+        started["volmc"].set()
+        assert started["rv"].wait(0.5)
+        release.set()
+        return expected_volmc
+
+    monkeypatch.setattr(wlr, "_rv_neon_load", _load_rv)
+    monkeypatch.setattr(wlr, "_volmc_neon_load", _load_volmc)
+
+    result = asyncio.run(wlr._load_rank_snapshots_concurrently(WL_ID))
+
+    assert result == [expected_rv, expected_volmc]

@@ -1019,6 +1019,7 @@ async def _apply_rv_rank_fields(
     watchlist_id: str,
     dedup_sections: list[dict],
     saved_normalized: list[str],
+    preloaded_snapshots: tuple | None = None,
 ) -> list[dict]:
     """
     Compute relative-volume ranks for the current enrichment pass, compare
@@ -1073,7 +1074,10 @@ async def _apply_rv_rank_fields(
         prev_snap = mem_entry.get("previous") or mem_entry.get("current")
 
     # Neon fallback (cross-restart persistence) — run in thread executor
-    if prev_snap is None:
+    if prev_snap is None and preloaded_snapshots is not None:
+        _cur, _prev = preloaded_snapshots
+        prev_snap = _prev or _cur
+    elif prev_snap is None:
         try:
             loop = asyncio.get_event_loop()
             _cur, _prev = await loop.run_in_executor(
@@ -1185,6 +1189,7 @@ async def _apply_volmc_rank_fields(
     watchlist_id: str,
     dedup_sections: list[dict],
     saved_normalized: list[str],
+    preloaded_snapshots: tuple | None = None,
 ) -> list[dict]:
     """
     Compute Vol/MC ranks for the current enrichment pass, compare against the
@@ -1240,7 +1245,10 @@ async def _apply_volmc_rank_fields(
     if mem_entry:
         prev_snap = mem_entry.get("previous") or mem_entry.get("current")
 
-    if prev_snap is None:
+    if prev_snap is None and preloaded_snapshots is not None:
+        _cur, _prev = preloaded_snapshots
+        prev_snap = _prev or _cur
+    elif prev_snap is None:
         try:
             loop = asyncio.get_event_loop()
             _cur, _prev = await loop.run_in_executor(
@@ -1341,6 +1349,15 @@ def _volmc_neon_save(watchlist_id: str, current_snap: dict) -> None:
         volmc_snapshot_save(watchlist_id, current_snap)
     except Exception as exc:
         print(f"[VOLMC_RANK] pg save skipped: {exc}")
+
+
+async def _load_rank_snapshots_concurrently(watchlist_id: str) -> tuple[tuple, tuple]:
+    """Load the two independent persisted rank snapshots in parallel."""
+    loop = asyncio.get_event_loop()
+    return await asyncio.gather(
+        loop.run_in_executor(None, _rv_neon_load, watchlist_id),
+        loop.run_in_executor(None, _volmc_neon_load, watchlist_id),
+    )
 
 
 # ── Weinstein Stage Analysis (cache-only, no live fetches) ───────────────────
@@ -2069,18 +2086,32 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
                 _skl_seen.add(_s2)
         _skl_wl_id = store.get("id") or ""
         if _skl_wl_id:
+            _skl_rank_t0 = _time.monotonic()
             try:
+                _skl_rv_snaps, _skl_vm_snaps = await _load_rank_snapshots_concurrently(
+                    _skl_wl_id
+                )
                 _skl_sections = await _apply_rv_rank_fields(
-                    _skl_wl_id, _skl_sections, _skl_saved_norm
+                    _skl_wl_id,
+                    _skl_sections,
+                    _skl_saved_norm,
+                    preloaded_snapshots=_skl_rv_snaps,
                 )
             except Exception as _skl_rv_err:
                 print(f"[WATCHLIST_ENRICH] skeleton rv_rank pass failed: {_skl_rv_err}")
             try:
                 _skl_sections = await _apply_volmc_rank_fields(
-                    _skl_wl_id, _skl_sections, _skl_saved_norm
+                    _skl_wl_id,
+                    _skl_sections,
+                    _skl_saved_norm,
+                    preloaded_snapshots=_skl_vm_snaps,
                 )
             except Exception as _skl_vm_err:
                 print(f"[WATCHLIST_ENRICH] skeleton volmc_rank pass failed: {_skl_vm_err}")
+            print(
+                f"[WATCHLIST_ENRICH] skeleton_rank_ms="
+                f"{round((_time.monotonic() - _skl_rank_t0) * 1000)}"
+            )
 
         return {
             **store,
