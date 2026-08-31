@@ -87,6 +87,13 @@ _BULK_LKG_BUILDING: set[str]        = set()
 _BULK_LKG_TTL       = 5 * 60    # 5 min — serve from cache without rebuild
 _BULK_LKG_STALE_TTL = 20 * 60   # 20 min — serve stale while rebuild runs in bg
 
+# Detail-only latency guards.  These do not change the normal path: a
+# responsive database read is still structurally validated before LKG serving,
+# and the canonical builder still owns the complete response contract.
+_WATCHLIST_DB_READ_TIMEOUT_S = 5.0
+_WATCHLIST_RESPONSE_BUDGET_S = 24.0  # leave several seconds for serialization/transfer
+_WATCHLIST_EARNINGS_MIN_REMAINING_S = 0.25
+
 # Per-watchlist taxonomy generation counter.
 # Incremented by invalidate_bulk_lkg_for_ticker() whenever a canonical taxonomy
 # mutation affects a cached watchlist.  _rebuild_bulk_lkg_bg() captures the
@@ -6784,6 +6791,7 @@ async def _build_watchlist_response(
     watchlist_id: str,
     store: dict,
     wl_load_ms: int = 0,
+    response_deadline: float | None = None,
 ) -> dict:
     """
     Internal canonical Watchlist enrichment pipeline.
@@ -6860,27 +6868,38 @@ async def _build_watchlist_response(
         )
         _wl_tickers_earn = [t.strip().upper() for t in (store.get("tickers") or []) if t.strip()]
         if _wl_tickers_earn:
-            try:
-                _fmp_key_build = os.getenv("FMP_API_KEY", "")
+            _earn_remaining = (
+                response_deadline - _time.monotonic()
+                if response_deadline is not None
+                else 1.5
+            )
+            if _earn_remaining >= _WATCHLIST_EARNINGS_MIN_REMAINING_S:
                 try:
-                    from config import FMP_API_KEY as _fmp_key_build  # type: ignore
-                except Exception:
-                    pass
-                _earn_payload = await _aio.wait_for(
-                    _gue_get(
-                        _wl_tickers_earn,
-                        fmp_key                 = _fmp_key_build,
-                        sync_on_miss            = False,   # non-blocking GET path
-                        background_sync_on_miss = True,
-                    ),
-                    timeout=1.5,
+                    _fmp_key_build = os.getenv("FMP_API_KEY", "")
+                    try:
+                        from config import FMP_API_KEY as _fmp_key_build  # type: ignore
+                    except Exception:
+                        pass
+                    _earn_payload = await _aio.wait_for(
+                        _gue_get(
+                            _wl_tickers_earn,
+                            fmp_key                 = _fmp_key_build,
+                            sync_on_miss            = False,   # non-blocking GET path
+                            background_sync_on_miss = True,
+                        ),
+                        timeout=min(1.5, _earn_remaining),
+                    )
+                    _upcoming_earnings = {"watchlist_id": watchlist_id, **_earn_payload}
+                except _aio.TimeoutError:
+                    _upcoming_earnings["cache_status"] = "timeout"
+                except Exception as _earn_err:
+                    _upcoming_earnings["cache_status"] = f"error:{type(_earn_err).__name__}"
+                    print(f"[WATCHLIST_GET] upcoming_earnings error (non-fatal): {_earn_err}")
+            else:
+                print(
+                    f"[WATCHLIST_GET] upcoming_earnings skipped — "
+                    f"response budget remaining={max(_earn_remaining, 0):.3f}s"
                 )
-                _upcoming_earnings = {"watchlist_id": watchlist_id, **_earn_payload}
-            except _aio.TimeoutError:
-                _upcoming_earnings["cache_status"] = "timeout"
-            except Exception as _earn_err:
-                _upcoming_earnings["cache_status"] = f"error:{type(_earn_err).__name__}"
-                print(f"[WATCHLIST_GET] upcoming_earnings error (non-fatal): {_earn_err}")
     except Exception as _earn_import_err:
         _upcoming_earnings["cache_status"] = f"import_error:{type(_earn_import_err).__name__}"
     _earn_ms = round((_t.monotonic() - _t3) * 1000)
@@ -7013,10 +7032,35 @@ async def get_by_id_endpoint(watchlist_id: str):
     import asyncio as _aio
     import time as _t_get
     _t0_get = _t_get.monotonic()
+    _response_deadline = _t0_get + _WATCHLIST_RESPONSE_BUDGET_S
 
     # Offload the synchronous Postgres/disk read so it never blocks the
     # event loop (matches the to_thread pattern used elsewhere in this file).
-    store = await _aio.to_thread(load_watchlist, watchlist_id)
+    # The shield keeps a running worker thread alive if the request-level wait
+    # expires; it must finish and return its checked-out DB connection.
+    _load_task = _aio.create_task(_aio.to_thread(load_watchlist, watchlist_id))
+    try:
+        store = await _aio.wait_for(
+            _aio.shield(_load_task),
+            timeout=_WATCHLIST_DB_READ_TIMEOUT_S,
+        )
+    except _aio.TimeoutError:
+        _lkg_entry_on_timeout = _BULK_LKG.get(watchlist_id)
+        _lkg_payload_on_timeout = (
+            _lkg_entry_on_timeout.get("payload")
+            if isinstance(_lkg_entry_on_timeout, dict)
+            else None
+        )
+        if isinstance(_lkg_payload_on_timeout, dict):
+            print(
+                f"[WATCHLIST_LKG] db_read_timeout wl={watchlist_id} "
+                f"timeout={_WATCHLIST_DB_READ_TIMEOUT_S:.1f}s — serving existing payload"
+            )
+            return _lkg_payload_on_timeout
+        # No complete response LKG exists.  Preserve the previous cold-path
+        # semantics and wait for the already-started store read; never
+        # fabricate or substitute another watchlist.
+        store = await _load_task
     if store is None:
         return {"empty": True}
     _wl_load_ms = round((_t_get.monotonic() - _t0_get) * 1000)
@@ -7054,7 +7098,12 @@ async def get_by_id_endpoint(watchlist_id: str):
         return _lkg_entry["payload"]
     # LKG absent or version mismatch (membership change) → rebuild inline.
 
-    store = await _build_watchlist_response(watchlist_id, store, _wl_load_ms)
+    store = await _build_watchlist_response(
+        watchlist_id,
+        store,
+        _wl_load_ms,
+        response_deadline=_response_deadline,
+    )
 
     _BULK_LKG[watchlist_id] = {
         "payload": store,

@@ -148,7 +148,7 @@ def test_03_found_store_response_schema_unchanged():
         assert watchlist_id == WL_ID
         return dict(fake_store)
 
-    async def _fake_builder(watchlist_id, store, wl_load_ms=0):
+    async def _fake_builder(watchlist_id, store, wl_load_ms=0, **kwargs):
         assert watchlist_id == WL_ID
         assert store["tickers"] == ["AAPL", "NVDA"]
         return dict(fake_response)
@@ -386,7 +386,7 @@ def test_09_saved_empty_watchlist_contract_unchanged(monkeypatch):
 
     monkeypatch.setattr(wlr, "load_watchlist", lambda _wid: dict(empty_store))
 
-    async def _builder(watchlist_id, store, wl_load_ms=0):
+    async def _builder(watchlist_id, store, wl_load_ms=0, **kwargs):
         seen["watchlist_id"] = watchlist_id
         seen["store"] = dict(store)
         return dict(expected)
@@ -400,3 +400,146 @@ def test_09_saved_empty_watchlist_contract_unchanged(monkeypatch):
     assert result == expected
     assert result != {"empty": True}
     assert wlr._BULK_LKG[WL_ID]["payload"] == expected
+
+
+# ===========================================================================
+# 10. A slow store read with no LKG preserves the real cold-path store
+# ===========================================================================
+
+def test_10_slow_db_read_without_lkg_does_not_fabricate_watchlist(monkeypatch):
+    store = {
+        "id": WL_ID,
+        "name": "Real",
+        "tickers": ["AAPL"],
+        "csv_data": [],
+        "analysis": {},
+    }
+    expected = {"id": WL_ID, "tickers": ["AAPL"], "_meta": {"rows": 1}}
+
+    def _slow_load(_watchlist_id):
+        time.sleep(0.05)
+        return dict(store)
+
+    async def _builder(watchlist_id, loaded, wl_load_ms=0, **kwargs):
+        assert watchlist_id == WL_ID
+        assert loaded == store
+        return dict(expected)
+
+    monkeypatch.setattr(wlr, "load_watchlist", _slow_load)
+    monkeypatch.setattr(wlr, "_build_watchlist_response", _builder)
+    monkeypatch.setattr(wlr, "_WATCHLIST_DB_READ_TIMEOUT_S", 0.001)
+
+    result = asyncio.run(wlr.get_by_id_endpoint(WL_ID))
+
+    assert result == expected
+    assert result["id"] == WL_ID
+    assert result != {"empty": True}
+
+
+# ===========================================================================
+# 11. A timed-out shielded read continues safely after serving the LKG
+# ===========================================================================
+
+def test_11_db_read_timeout_shields_worker_until_connection_work_finishes(monkeypatch):
+    started = threading.Event()
+    finished = threading.Event()
+    cached_payload = {"id": WL_ID, "tickers": ["AAPL"], "_meta": {"cached": True}}
+    wlr._BULK_LKG[WL_ID] = {
+        "payload": cached_payload,
+        "ts": time.monotonic(),
+        "version": "unvalidated",
+    }
+
+    def _slow_load(_watchlist_id):
+        started.set()
+        time.sleep(0.05)
+        finished.set()
+        return {"id": WL_ID, "tickers": ["AAPL"]}
+
+    async def _run():
+        monkeypatch.setattr(wlr, "load_watchlist", _slow_load)
+        monkeypatch.setattr(wlr, "_WATCHLIST_DB_READ_TIMEOUT_S", 0.001)
+        result = await wlr.get_by_id_endpoint(WL_ID)
+        assert started.is_set()
+        assert result == cached_payload
+        assert not finished.is_set()
+        await asyncio.wait_for(asyncio.to_thread(finished.wait), timeout=0.5)
+        return result
+
+    result = asyncio.run(_run())
+    assert result == cached_payload
+
+
+# ===========================================================================
+# 12. Earnings remains an optional overlay within the available budget
+# ===========================================================================
+
+def test_12_earnings_runs_when_response_budget_remains(monkeypatch):
+    import services.user_earnings_service as earnings_service
+
+    calls = {}
+    async def _fake_earnings(symbols, **kwargs):
+        calls["symbols"] = list(symbols)
+        calls["kwargs"] = kwargs
+        return {
+            "symbols_requested": ["AAPL"],
+            "events": [{"ticker": "AAPL"}],
+            "missing_symbols": [],
+            "source": "cached_earnings",
+            "last_updated": "2026-01-01T00:00:00+00:00",
+            "stale": False,
+            "cache_status": "hit",
+        }
+
+    async def _identity(store):
+        return store
+
+    monkeypatch.setattr(earnings_service, "get_upcoming_earnings_for_symbols", _fake_earnings)
+    monkeypatch.setattr(wlr, "_enrich_store_with_quotes", _identity)
+    store = {"id": WL_ID, "tickers": ["AAPL"], "csv_data": [], "analysis": {}}
+
+    result = asyncio.run(
+        wlr._build_watchlist_response(
+            WL_ID,
+            store,
+            response_deadline=time.monotonic() + 5.0,
+        )
+    )
+
+    assert calls["symbols"] == ["AAPL"]
+    assert calls["kwargs"]["sync_on_miss"] is False
+    assert calls["kwargs"]["background_sync_on_miss"] is True
+    assert result["upcoming_earnings"]["events"] == [{"ticker": "AAPL"}]
+
+
+def test_13_earnings_fallback_shape_is_kept_when_budget_is_exhausted(monkeypatch):
+    import services.user_earnings_service as earnings_service
+
+    async def _must_not_run(*args, **kwargs):
+        raise AssertionError("earnings overlay must not start with no budget")
+
+    async def _identity(store):
+        return store
+
+    monkeypatch.setattr(earnings_service, "get_upcoming_earnings_for_symbols", _must_not_run)
+    monkeypatch.setattr(wlr, "_enrich_store_with_quotes", _identity)
+    store = {"id": WL_ID, "tickers": ["AAPL"], "csv_data": [], "analysis": {}}
+
+    result = asyncio.run(
+        wlr._build_watchlist_response(
+            WL_ID,
+            store,
+            response_deadline=time.monotonic() - 1.0,
+        )
+    )
+
+    assert result["upcoming_earnings"] == {
+        "watchlist_id": WL_ID,
+        "symbols_requested": [],
+        "events": [],
+        "missing_symbols": [],
+        "source": "cached_earnings",
+        "last_updated": None,
+        "stale": True,
+        "cache_status": "skipped",
+    }
