@@ -33,6 +33,10 @@ import services.watchlist_router as wlr  # noqa: E402  (real import; env has all
 WL_ID = "test-wl-async-offload-001"
 
 
+async def _async_identity(_watchlist_id, sections, _saved_symbols):
+    return sections
+
+
 @pytest.fixture(autouse=True)
 def _reset_state():
     """Isolate LKG state across tests; restore any monkeypatched attrs after."""
@@ -206,3 +210,193 @@ def test_05_endpoint_is_still_async_get_by_id():
     assert inspect.iscoroutinefunction(wlr.get_by_id_endpoint), (
         "get_by_id_endpoint must remain an async def"
     )
+
+
+# ===========================================================================
+# 6. Cold quote refresh is not awaited by the detail enrichment path
+# ===========================================================================
+
+def test_06_detail_enrichment_requests_cache_first_quotes(monkeypatch):
+    """The detail GET must opt into non-waiting quotes without changing the
+    existing skeleton response contract."""
+    import services.watchlist_quote_cache as quote_cache
+
+    seen = {}
+
+    async def _fake_quotes(symbols, **kwargs):
+        seen["symbols"] = list(symbols)
+        seen.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(quote_cache, "get_watchlist_quotes", _fake_quotes)
+    monkeypatch.setattr(wlr, "_apply_rv_rank_fields", _async_identity)
+    monkeypatch.setattr(wlr, "_apply_volmc_rank_fields", _async_identity)
+
+    store = {
+        "id": WL_ID,
+        "tickers": ["AAPL"],
+        "csv_data": [{"Symbol": "AAPL", "Stock Price": "100"}],
+        "analysis": {},
+    }
+    result = asyncio.run(wlr._enrich_store_with_quotes(store))
+
+    assert seen == {"symbols": ["AAPL"], "wait_for_refresh": False}
+    assert result["analysis"]["_analysis_pending"] is True
+    assert result["analysis"]["_skeleton_reason"] == "analysis_not_yet_run"
+    section = result["analysis"]["sections"][0]
+    assert {
+        "name": section["name"],
+        "id": section["id"],
+        "subtitle": section["subtitle"],
+        "_analysis_pending": section["_analysis_pending"],
+    } == {
+        "name": "All Tickers",
+        "id": "all_tickers",
+        "subtitle": "Showing saved tickers — AI analysis running in background",
+        "_analysis_pending": True,
+    }
+    row = section["tickers"][0]
+    assert row["symbol"] == "AAPL"
+    assert row["price"] == 100.0
+    for field in (
+        "catalyst",
+        "sentiment",
+        "action_note",
+        "conviction",
+        "theme",
+        "canonical_theme_name",
+        "canonical_theme_id",
+        "theme_source",
+    ):
+        assert field in row
+
+
+# ===========================================================================
+# 7. The cache-only cold mode returns before a slow provider refresh completes
+# ===========================================================================
+
+def test_07_cold_quote_cache_mode_does_not_wait_for_provider(monkeypatch):
+    """The opt-in mode must schedule, not await, the first live refresh."""
+    import services.watchlist_quote_cache as quote_cache
+
+    quote_cache._quote_cache.clear()
+    original_loader = quote_cache._load_disk_lkg
+    original_refresh = quote_cache._locked_refresh
+    original_ts = quote_cache._cache_ts
+    refresh_started = asyncio.Event()
+
+    async def _slow_refresh(symbols):
+        refresh_started.set()
+        await asyncio.Event().wait()
+
+    def _empty_disk_lkg():
+        return {}
+
+    quote_cache._load_disk_lkg = _empty_disk_lkg
+    quote_cache._locked_refresh = _slow_refresh
+
+    async def _run():
+        started = time.monotonic()
+        result = await quote_cache.get_watchlist_quotes(
+            ["AAPL"], wait_for_refresh=False
+        )
+        elapsed = time.monotonic() - started
+        await asyncio.wait_for(refresh_started.wait(), timeout=0.5)
+        pending = [
+            task for task in asyncio.all_tasks()
+            if task is not asyncio.current_task() and not task.done()
+        ]
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        return result, elapsed
+
+    try:
+        result, elapsed = asyncio.run(_run())
+    finally:
+        quote_cache._load_disk_lkg = original_loader
+        quote_cache._locked_refresh = original_refresh
+        quote_cache._cache_ts = original_ts
+        quote_cache._quote_cache.clear()
+
+    assert result == {}
+    assert elapsed < 1.0, "Cold detail quote path must not await the provider refresh"
+
+
+# ===========================================================================
+# 8. Watchlist metadata listing does not block the event loop
+# ===========================================================================
+
+def test_08_list_endpoint_offloads_synchronous_db_read(monkeypatch):
+    """A slow list_watchlists DB read must run on a worker thread."""
+    loop_thread_id = {}
+    db_thread_id = {}
+    tick_count = {"n": 0}
+    expected = [{"id": WL_ID, "name": "Primary", "ticker_count": 1}]
+
+    def _slow_list_watchlists():
+        db_thread_id["id"] = threading.get_ident()
+        time.sleep(0.25)
+        return expected
+
+    monkeypatch.setattr(wlr, "list_watchlists", _slow_list_watchlists)
+
+    async def _ticker():
+        while True:
+            tick_count["n"] += 1
+            await asyncio.sleep(0.01)
+
+    async def _run():
+        loop_thread_id["id"] = threading.get_ident()
+        ticker = asyncio.create_task(_ticker())
+        try:
+            return await wlr.list_endpoint()
+        finally:
+            ticker.cancel()
+            await asyncio.gather(ticker, return_exceptions=True)
+
+    result = asyncio.run(_run())
+
+    assert result == expected, "List response contract must be unchanged"
+    assert db_thread_id["id"] != loop_thread_id["id"]
+    assert tick_count["n"] >= 5, "Event loop was blocked by list_watchlists"
+
+
+# ===========================================================================
+# 9. An existing saved watchlist with no tickers remains a normal found record
+# ===========================================================================
+
+def test_09_saved_empty_watchlist_contract_unchanged(monkeypatch):
+    """An existing empty watchlist is not the same as a missing watchlist."""
+    empty_store = {
+        "id": WL_ID,
+        "name": "Empty",
+        "tickers": [],
+        "csv_data": [],
+        "analysis": {"sections": []},
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "saved_at": "2026-01-01T00:00:00+00:00",
+    }
+    expected = {
+        **empty_store,
+        "_meta": {"rows": 0},
+        "upcoming_earnings": {"events": []},
+    }
+    seen = {}
+
+    monkeypatch.setattr(wlr, "load_watchlist", lambda _wid: dict(empty_store))
+
+    async def _builder(watchlist_id, store, wl_load_ms=0):
+        seen["watchlist_id"] = watchlist_id
+        seen["store"] = dict(store)
+        return dict(expected)
+
+    monkeypatch.setattr(wlr, "_build_watchlist_response", _builder)
+
+    result = asyncio.run(wlr.get_by_id_endpoint(WL_ID))
+
+    assert seen["watchlist_id"] == WL_ID
+    assert seen["store"] == empty_store
+    assert result == expected
+    assert result != {"empty": True}
+    assert wlr._BULK_LKG[WL_ID]["payload"] == expected

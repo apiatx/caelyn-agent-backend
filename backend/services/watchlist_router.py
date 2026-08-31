@@ -1527,7 +1527,7 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         from data.pg_storage import get_category_sector_overrides as _get_sector_overrides
         _loop = _aio_enrich.get_event_loop()
         _q_res, _n_res, _sec_res, _f_res, _m_res = await _aio_enrich.gather(
-            get_watchlist_quotes(tickers),
+            get_watchlist_quotes(tickers, wait_for_refresh=False),
             _loop.run_in_executor(None, _get_name_overrides, "default"),
             _loop.run_in_executor(None, _get_sector_overrides, "default"),
             _loop.run_in_executor(None, _get_fund_snaps_mc, tickers),
@@ -2435,7 +2435,7 @@ def _get_data_service():
 @router.get("/list")
 async def list_endpoint():
     """List all saved watchlists (metadata only)."""
-    return list_watchlists()
+    return await asyncio.to_thread(list_watchlists)
 
 
 @router.post("/save")

@@ -31,6 +31,22 @@ _BACKEND_DIR = os.path.dirname(os.path.dirname(__file__))
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
+_ISOLATED_MODULE_NAMES = (
+    "fastapi",
+    "fastapi.middleware.cors",
+    "pydantic",
+    "services.watchlist_service",
+    "services.watchlist_quote_cache",
+    "data.pg_storage",
+    "config",
+    "services.watchlist_router",
+)
+_MISSING_MODULE = object()
+_ORIGINAL_MODULES = {
+    name: sys.modules.get(name, _MISSING_MODULE)
+    for name in _ISOLATED_MODULE_NAMES
+}
+
 
 def _stub(name: str, **attrs):
     """Register a minimal stub module so downstream imports don't crash."""
@@ -101,6 +117,15 @@ if not hasattr(_wlr, "_build_watchlist_response"):
         """Stub: canonical pipeline extracted from get_by_id_endpoint."""
         return store
     _wlr._build_watchlist_response = _build_watchlist_response
+
+# Keep this module's private references to its lightweight test doubles, but do
+# not leak them into pytest's global import state for subsequently collected
+# Watchlist test modules.
+for _module_name, _original_module in _ORIGINAL_MODULES.items():
+    if _original_module is _MISSING_MODULE:
+        sys.modules.pop(_module_name, None)
+    else:
+        sys.modules[_module_name] = _original_module
 
 
 # ---------------------------------------------------------------------------

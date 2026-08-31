@@ -646,6 +646,7 @@ async def _locked_refresh(symbols: list[str]) -> None:
 async def get_watchlist_quotes(
     symbols: list[str],
     force_refresh: bool = False,
+    wait_for_refresh: bool = True,
 ) -> dict[str, dict]:
     """
     Return cached quotes dict
@@ -654,9 +655,10 @@ async def get_watchlist_quotes(
                 volume_is_stale, volume_source, price_is_stale, …}}.
 
     Behaviour:
-      - Empty cache after server start: hydrate from disk LKG first (fast,
-        synchronous), then schedule a background refresh and return immediately.
-        Only awaits a live Tradier call when no disk LKG exists at all.
+       - Empty cache after server start: hydrate from disk LKG first (fast,
+         synchronous), then schedule a background refresh and return immediately.
+         Only awaits a live Tradier call when no disk LKG exists at all, unless
+         wait_for_refresh=False requests cache-first behavior for a caller.
       - Stale cache (>10 min) or force_refresh=True: returns LKG immediately
         and kicks off a background refresh.
       - Fresh cache: returns immediately, no network call.
@@ -683,9 +685,19 @@ async def get_watchlist_quotes(
                 asyncio.create_task(_locked_refresh(symbols))
             _overlay_canonical_per_symbol(symbols)
         else:
-            # No disk LKG — must await inline once (first-ever run or file expired)
-            print("[WQ_CACHE] Cold-start: no disk LKG — awaiting live Tradier refresh")
-            await _locked_refresh(symbols)
+            # No disk LKG. Preserve the existing synchronous cold-start behavior
+            # by default, but allow the Watchlist GET path to return its cached/
+            # skeleton response while the same provider refresh runs in the
+            # background.
+            if wait_for_refresh:
+                print("[WQ_CACHE] Cold-start: no disk LKG — awaiting live Tradier refresh")
+                await _locked_refresh(symbols)
+            else:
+                print("[WQ_CACHE] Cold-start: no disk LKG — background refresh queued")
+                lock = _get_lock()
+                if not lock.locked():
+                    asyncio.create_task(_locked_refresh(symbols))
+                _overlay_canonical_per_symbol(symbols)
     elif is_stale or force_refresh:
         lock = _get_lock()
         if not lock.locked():
