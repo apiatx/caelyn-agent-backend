@@ -1,33 +1,5 @@
 [
   {
-    "scan_ts": "2026-07-26T14:52:49.044034+00:00",
-    "accounts_count": 16,
-    "batch_count": 2,
-    "batches_returned": 2,
-    "sections_ok": [
-      "_backend_ranked",
-      "_mention_data",
-      "consensus_picks",
-      "top_tickers"
-    ],
-    "sections_missing": [],
-    "lkg_sections_used": [],
-    "ticker_count": 50,
-    "mention_records": 12,
-    "consensus_picks": 10,
-    "top_tickers": 10,
-    "cache_write_status": "written_clean",
-    "error": null,
-    "phase1_cost_in_usd_ticks": 1555367500,
-    "phase2_cost_in_usd_ticks": 211231000,
-    "total_cost_in_usd_ticks": 1766598500,
-    "phase1_x_search_calls": 16,
-    "phase2_x_search_calls": 0,
-    "total_input_tokens": 57663,
-    "total_output_tokens": 12843,
-    "fresh_trades_fallback_used": false
-  },
-  {
     "scan_ts": "2026-07-27T15:26:34.289869+00:00",
     "accounts_count": 16,
     "batch_count": 2,
@@ -701,5 +673,33 @@
     "top_tickers": 0,
     "cache_write_status": "aborted_phase1_hard_timeout",
     "error": "Phase-1 asyncio.wait_for hard timeout after 135s"
+  },
+  {
+    "scan_ts": "2026-08-31T19:12:59.830525+00:00",
+    "accounts_count": 16,
+    "batch_count": 2,
+    "batches_returned": 2,
+    "sections_ok": [
+      "_backend_ranked",
+      "_mention_data",
+      "consensus_picks",
+      "top_tickers"
+    ],
+    "sections_missing": [],
+    "lkg_sections_used": [],
+    "ticker_count": 33,
+    "mention_records": 14,
+    "consensus_picks": 8,
+    "top_tickers": 8,
+    "cache_write_status": "written_clean",
+    "error": null,
+    "phase1_cost_in_usd_ticks": 1548130500,
+    "phase2_cost_in_usd_ticks": 199756000,
+    "total_cost_in_usd_ticks": 1747886500,
+    "phase1_x_search_calls": 16,
+    "phase2_x_search_calls": 0,
+    "total_input_tokens": 57691,
+    "total_output_tokens": 11973,
+    "fresh_trades_fallback_used": false
   }
 ]
