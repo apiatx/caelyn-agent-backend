@@ -2101,9 +2101,16 @@ async def _warmup_loop() -> None:
     """
     print("[THEME_RS] Warmup loop started")
 
-    # Initial kick: compute all timeframes in background
+    # Initial kick: refresh timeframes sequentially inside this background task.
+    #
+    # Do not launch all six rebuilds at once.  Historical timeframes share the
+    # same proxy and stock-history dependencies, so concurrent cold rebuilds
+    # duplicate hundreds of FMP-guard/yfinance operations and can starve the
+    # event loop that serves unrelated requests.  Sequential execution keeps
+    # the existing refresh path and cadence semantics while bounding startup
+    # pressure to one timeframe rebuild at a time.
     for tf in list(_TIMEFRAME_BARS.keys()):
-        asyncio.create_task(_locked_refresh(tf))
+        await _locked_refresh(tf)
 
     while True:
         await asyncio.sleep(15)   # check every 15s — lightweight
