@@ -18,6 +18,8 @@ import time
 import types
 import sys
 import os
+import ast
+import asyncio
 
 import pytest
 
@@ -336,15 +338,14 @@ def test_10_fresh_lkg_no_rebuild_scheduled():
 
 
 # ===========================================================================
-# 11. Version mismatch → structural miss (version key includes ticker count)
+# 11. Explicit invalidation, not request-time DB version validation, is the
+#     structural miss boundary.
 # ===========================================================================
 
-def test_11_version_mismatch_is_miss():
-    _put_lkg(version="2026-01-01|10")   # old version: 10 tickers
-    new_version = "2026-01-01|11"        # ticker added: 11 tickers
-    entry = _wlr._BULK_LKG.get(WL_ID)
-    is_hit = bool(entry and entry.get("version") == new_version)
-    assert not is_hit, "Version mismatch must cause a cache miss"
+def test_11_explicit_invalidation_is_structural_miss_boundary():
+    _put_lkg(version="2026-01-01|10")
+    _wlr._bulk_lkg_invalidate(WL_ID)
+    assert WL_ID not in _wlr._BULK_LKG
 
 
 # ===========================================================================
@@ -619,3 +620,208 @@ def test_25_high_frequency_writers_do_not_invalidate():
         "RSS / earnings background writers must not evict _BULK_LKG entries"
     )
     assert _wlr._BULK_LKG[WL_ID]["payload"] == PAYLOAD
+
+
+# ===========================================================================
+# 26-32. Execute the real GET endpoint source with controlled dependencies.
+# ===========================================================================
+
+_ROUTER_PATH = os.path.join(_BACKEND_DIR, "services", "watchlist_router.py")
+
+
+def _load_real_get_endpoint(**overrides):
+    """Compile only the production GET handler with isolated fake dependencies."""
+    source = open(_ROUTER_PATH, encoding="utf-8").read()
+    tree = ast.parse(source)
+    endpoint_node = next(
+        node for node in tree.body
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "get_by_id_endpoint"
+    )
+    endpoint_node.decorator_list = []
+    module = ast.fix_missing_locations(ast.Module(body=[endpoint_node], type_ignores=[]))
+    namespace = {
+        "_BULK_LKG": {},
+        "_BULK_LKG_BUILDING": set(),
+        "_BULK_LKG_TTL": 300,
+        "_BULK_LKG_STALE_TTL": 1200,
+        "_WATCHLIST_RESPONSE_BUDGET_S": 24.0,
+        "load_watchlist": lambda _wid: None,
+        "_rebuild_bulk_lkg_bg": lambda _wid: None,
+        "_build_watchlist_response": lambda _wid, store, *_a, **_kw: store,
+    }
+    namespace.update(overrides)
+    exec(compile(module, _ROUTER_PATH, "exec"), namespace)
+    return namespace["get_by_id_endpoint"], namespace
+
+
+def test_26_fresh_lkg_skips_load_and_rebuild():
+    calls = {"load": 0, "rebuild": 0}
+
+    def load(_wid):
+        calls["load"] += 1
+        raise AssertionError("fresh LKG must not call load_watchlist")
+
+    async def rebuild(_wid):
+        calls["rebuild"] += 1
+
+    endpoint, ns = _load_real_get_endpoint(
+        load_watchlist=load,
+        _rebuild_bulk_lkg_bg=rebuild,
+    )
+    ns["_BULK_LKG"][WL_ID] = {
+        "payload": PAYLOAD,
+        "ts": time.monotonic(),
+        "version": VERSION,
+    }
+
+    assert asyncio.run(endpoint(WL_ID)) is PAYLOAD
+    assert calls == {"load": 0, "rebuild": 0}
+
+
+def test_27_stale_lkg_returns_immediately_and_single_flights_rebuild():
+    calls = {"load": 0, "rebuild": 0}
+
+    def load(_wid):
+        calls["load"] += 1
+        raise AssertionError("stale LKG request must not synchronously load")
+
+    async def scenario():
+        release = asyncio.Event()
+
+        async def rebuild(_wid):
+            calls["rebuild"] += 1
+            await release.wait()
+
+        endpoint, ns = _load_real_get_endpoint(
+            load_watchlist=load,
+            _rebuild_bulk_lkg_bg=rebuild,
+        )
+        ns["_BULK_LKG"][WL_ID] = {
+            "payload": PAYLOAD,
+            "ts": time.monotonic() - ns["_BULK_LKG_TTL"] - 1,
+            "version": VERSION,
+        }
+        results = await asyncio.gather(*(endpoint(WL_ID) for _ in range(20)))
+        await asyncio.sleep(0)
+        assert all(result is PAYLOAD for result in results)
+        assert calls == {"load": 0, "rebuild": 1}
+        assert WL_ID in ns["_BULK_LKG_BUILDING"]
+        release.set()
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+
+
+def test_28_lkg_miss_loads_builds_and_caches_exact_response():
+    calls = {"load": 0, "build": 0}
+    canonical = {
+        "id": WL_ID,
+        "name": "Primary",
+        "tickers": ["AAPL"],
+        "updated_at": "2026-01-01T00:00:00+00:00",
+    }
+    built = {**canonical, "analysis": {"sections": []}, "_meta": {"response_ms": 1}}
+
+    def load(wid):
+        calls["load"] += 1
+        assert wid == WL_ID
+        return canonical
+
+    async def build(wid, store, *_args, **_kwargs):
+        calls["build"] += 1
+        assert wid == WL_ID
+        assert store is canonical
+        return built
+
+    endpoint, ns = _load_real_get_endpoint(
+        load_watchlist=load,
+        _build_watchlist_response=build,
+    )
+    result = asyncio.run(endpoint(WL_ID))
+
+    assert result is built
+    assert calls == {"load": 1, "build": 1}
+    assert ns["_BULK_LKG"][WL_ID]["payload"] is built
+    assert ns["_BULK_LKG"][WL_ID]["version"].endswith("|1")
+
+
+def test_29_concurrent_fresh_hits_do_not_read_database():
+    calls = {"load": 0}
+
+    def load(_wid):
+        calls["load"] += 1
+        raise AssertionError("concurrent fresh hits must not read the database")
+
+    async def scenario():
+        endpoint, ns = _load_real_get_endpoint(load_watchlist=load)
+        ns["_BULK_LKG"][WL_ID] = {
+            "payload": PAYLOAD,
+            "ts": time.monotonic(),
+            "version": VERSION,
+        }
+        results = await asyncio.gather(*(endpoint(WL_ID) for _ in range(50)))
+        assert all(result is PAYLOAD for result in results)
+
+    asyncio.run(scenario())
+    assert calls["load"] == 0
+
+
+def test_30_slow_database_cannot_delay_fresh_lkg():
+    calls = {"load": 0}
+
+    def slow_load(_wid):
+        calls["load"] += 1
+        time.sleep(0.2)
+        return {"id": WL_ID}
+
+    endpoint, ns = _load_real_get_endpoint(load_watchlist=slow_load)
+    ns["_BULK_LKG"][WL_ID] = {
+        "payload": PAYLOAD,
+        "ts": time.monotonic(),
+        "version": VERSION,
+    }
+    started = time.monotonic()
+    result = asyncio.run(endpoint(WL_ID))
+    elapsed = time.monotonic() - started
+
+    assert result is PAYLOAD
+    assert calls["load"] == 0
+    assert elapsed < 0.05
+
+
+def _function_source(name: str) -> str:
+    source = open(_ROUTER_PATH, encoding="utf-8").read()
+    tree = ast.parse(source)
+    node = next(
+        item for item in tree.body
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and item.name == name
+    )
+    return ast.get_source_segment(source, node) or ""
+
+
+def test_31_all_bulk_response_mutations_invalidate_lkg():
+    point_invalidators = (
+        "save_endpoint",
+        "rename_endpoint",
+        "add_ticker_endpoint",
+        "remove_ticker_endpoint",
+        "bulk_add_tickers_endpoint",
+        "patch_ticker_theme_endpoint",
+        "_priority_hydrate_symbols",
+    )
+    for function_name in point_invalidators:
+        assert "_bulk_lkg_invalidate(" in _function_source(function_name), function_name
+
+    assert "_BULK_LKG.clear()" in _function_source("patch_category_endpoint")
+    assert "_BULK_LKG.clear()" in _function_source("bulk_categories_endpoint")
+    assert "_bulk_lkg_invalidate(" in _function_source("invalidate_bulk_lkg_for_ticker")
+
+
+def test_32_fresh_fast_path_precedes_canonical_load_in_source():
+    source = _function_source("get_by_id_endpoint")
+    assert source.index("_BULK_LKG.get(") < source.index(
+        "to_thread(load_watchlist"
+    )
+    assert "shield(" not in source

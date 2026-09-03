@@ -87,10 +87,7 @@ _BULK_LKG_BUILDING: set[str]        = set()
 _BULK_LKG_TTL       = 5 * 60    # 5 min — serve from cache without rebuild
 _BULK_LKG_STALE_TTL = 20 * 60   # 20 min — serve stale while rebuild runs in bg
 
-# Detail-only latency guards.  These do not change the normal path: a
-# responsive database read is still structurally validated before LKG serving,
-# and the canonical builder still owns the complete response contract.
-_WATCHLIST_DB_READ_TIMEOUT_S = 5.0
+# Detail-only latency guards for the cold canonical build.
 _WATCHLIST_RESPONSE_BUDGET_S = 24.0  # leave several seconds for serialization/transfer
 _WATCHLIST_RANK_SNAPSHOT_TIMEOUT_S = 1.0
 _WATCHLIST_EARNINGS_MIN_REMAINING_S = 0.25
@@ -1710,7 +1707,6 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             f"[WATCHLIST_ENRICH] theme_resolver context build failed (non-fatal): "
             f"{_wl_ctx_err}"
         )
-
     def _build_ticker_row(sym: str, base_row: dict) -> dict:
         """Build one enriched ticker row from quote + CSV data."""
         sym = sym.strip().upper()
@@ -2490,7 +2486,6 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         dedup_sections = _apply_cat_overrides(dedup_sections, user_id="default")
     except Exception as _ov_err:
         print(f"[WATCHLIST_ENRICH] category overrides failed (non-fatal): {_ov_err}")
-
     return {
         **store,
         "analysis": {
@@ -6358,6 +6353,7 @@ async def rename_endpoint(watchlist_id: str, body: dict):
         if is_available():
             ok = watchlist_rename(watchlist_id, new_name)
             if ok:
+                _bulk_lkg_invalidate(watchlist_id)
                 return {"success": True, "name": new_name}
         return {"error": "Postgres unavailable"}
     except Exception as e:
@@ -6917,7 +6913,6 @@ async def _build_watchlist_response(
     except Exception as _enrich_err:
         print(f"[WATCHLIST] Quote enrichment failed (returning raw): {_enrich_err}")
     _enrich_ms = round((_t.monotonic() - _t1) * 1000)
-
     # ── FMP fundamentals overlay (weekly cache) ───────────────────────────────
     # fund_snaps were pre-loaded inside _enrich_store_with_quotes (parallel with
     # the quote+name fetch) to save a second Neon round-trip.  We pop the temp
@@ -7043,7 +7038,6 @@ async def _build_watchlist_response(
         f"relative_volume_coverage={_rv_cov:.0%} vol_mc_coverage={_vm_cov:.0%} "
         f"volume_stale_pct={_vol_stale:.0%} data_state={_data_state}"
     )
-
     store["_meta"] = {
         "data_state":               _data_state,
         "quotes_refreshing":        _q_refreshing,
@@ -7133,47 +7127,21 @@ async def get_by_id_endpoint(watchlist_id: str):
     _t0_get = _t_get.monotonic()
     _response_deadline = _t0_get + _WATCHLIST_RESPONSE_BUDGET_S
 
-    # Offload the synchronous Postgres/disk read so it never blocks the
-    # event loop (matches the to_thread pattern used elsewhere in this file).
-    # The shield keeps a running worker thread alive if the request-level wait
-    # expires; it must finish and return its checked-out DB connection.
-    _load_task = _aio.create_task(_aio.to_thread(load_watchlist, watchlist_id))
-    try:
-        store = await _aio.wait_for(
-            _aio.shield(_load_task),
-            timeout=_WATCHLIST_DB_READ_TIMEOUT_S,
-        )
-    except _aio.TimeoutError:
-        _lkg_entry_on_timeout = _BULK_LKG.get(watchlist_id)
-        _lkg_payload_on_timeout = (
-            _lkg_entry_on_timeout.get("payload")
-            if isinstance(_lkg_entry_on_timeout, dict)
-            else None
-        )
-        if isinstance(_lkg_payload_on_timeout, dict):
-            print(
-                f"[WATCHLIST_LKG] db_read_timeout wl={watchlist_id} "
-                f"timeout={_WATCHLIST_DB_READ_TIMEOUT_S:.1f}s — serving existing payload"
-            )
-            return _lkg_payload_on_timeout
-        # No complete response LKG exists.  Preserve the previous cold-path
-        # semantics and wait for the already-started store read; never
-        # fabricate or substitute another watchlist.
-        store = await _load_task
-    if store is None:
-        return {"empty": True}
-    _wl_load_ms = round((_t_get.monotonic() - _t0_get) * 1000)
-
-    # ── LKG-first: serve cached response when structural version matches ─────────
-    # "version" = updated_at|ticker_count — changes on any membership mutation.
-    # Stale-while-revalidate semantics: a valid-version entry is always served
-    # regardless of age; age only controls whether to schedule a background rebuild.
-    _wl_version = (
-        f"{store.get('updated_at') or store.get('saved_at')}|"
-        f"{len(store.get('tickers', []))}"
-    )
+    # ── LKG-first fast path ───────────────────────────────────────────────────
+    # Explicit mutation invalidation is the structural-validity boundary.  Do
+    # not start a canonical DB read merely to re-derive the version of an
+    # already-valid in-process response: that would make every cache hit wait
+    # on the default executor and PostgreSQL before it could return.
+    #
+    # Stale-while-revalidate semantics: any complete entry is served regardless
+    # of age; age only controls whether to schedule one background rebuild.
     _lkg_entry = _BULK_LKG.get(watchlist_id)
-    if _lkg_entry and _lkg_entry.get("version") == _wl_version:
+    _lkg_payload = (
+        _lkg_entry.get("payload")
+        if isinstance(_lkg_entry, dict)
+        else None
+    )
+    if isinstance(_lkg_payload, dict):
         _lkg_age_s = _t_get.monotonic() - _lkg_entry["ts"]
         _age_label = (
             "very_stale" if _lkg_age_s >= _BULK_LKG_STALE_TTL
@@ -7194,8 +7162,19 @@ async def get_by_id_endpoint(watchlist_id: str):
                 f"[WATCHLIST_LKG] {_age_label}_hit wl={watchlist_id} "
                 f"age={round(_lkg_age_s)}s"
             )
-        return _lkg_entry["payload"]
-    # LKG absent or version mismatch (membership change) → rebuild inline.
+        return _lkg_payload
+
+    # LKG absent or explicitly invalidated → load the canonical source and
+    # rebuild inline.  The DB read is offloaded so the event loop stays free,
+    # but it is not shielded or duplicated by a request timeout.
+    store = await _aio.to_thread(load_watchlist, watchlist_id)
+    if store is None:
+        return {"empty": True}
+    _wl_load_ms = round((_t_get.monotonic() - _t0_get) * 1000)
+    _wl_version = (
+        f"{store.get('updated_at') or store.get('saved_at')}|"
+        f"{len(store.get('tickers', []))}"
+    )
 
     store = await _build_watchlist_response(
         watchlist_id,
