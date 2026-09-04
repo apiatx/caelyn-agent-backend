@@ -76,10 +76,14 @@ def _init_postgres_chat_storage_on_startup(reason: str = "startup"):
     try:
         from data.pg_storage import startup_probe as _pg_probe, init_tables as _pg_init
 
+        _probe_started = time.monotonic()
         before = _pg_probe()
+        _probe_elapsed_ms = round((time.monotonic() - _probe_started) * 1000)
         print(
             f"[STARTUP][PG] connection={'OK' if before.get('connected') else 'FAILED'} "
-            f"database={before.get('database')} schema={before.get('schema')} tables_before={before.get('tables', [])}"
+            f"database={before.get('database')} schema={before.get('schema')} "
+            f"connectivity_probe_elapsed_ms={_probe_elapsed_ms} "
+            f"tables_before={before.get('tables', [])}"
         )
 
         print("[STARTUP][PG] table initialization start (schema=public)")
@@ -446,6 +450,7 @@ async def lifespan(app):
     # 200 before the health check deadline.  All the loops below have built-in
     # startup delays (30s–5min) so they handle a briefly uninitialized state.
     def _deferred_sync_startup() -> None:
+        _deferred_started = time.monotonic()
         # Wait for _do_init to complete so only one heavy-import daemon
         # thread runs at a time.  _do_init imports MarketDataService +
         # TradingAgent (~7s).  Running _deferred_sync_startup's PG init
@@ -573,7 +578,11 @@ async def lifespan(app):
             _init_screener_tbls()
         except Exception as _screener_tbl_err:
             print(f"[STARTUP] screener tables init error (deferred, non-fatal): {_screener_tbl_err}")
-        print("[STARTUP] _deferred_sync_startup complete")
+        _deferred_elapsed_ms = round((time.monotonic() - _deferred_started) * 1000)
+        print(
+            "[STARTUP] _deferred_sync_startup complete "
+            f"elapsed_ms={_deferred_elapsed_ms}"
+        )
 
     import threading
     threading.Thread(target=_deferred_sync_startup, daemon=True, name="startup-sync").start()
@@ -2100,7 +2109,6 @@ async def _ei_materials_loop():
 
 async def _wait_for_init():
     import asyncio
-    _init_postgres_chat_storage_on_startup("wait_for_init")
     if _init_done:
         return
     if _init_error:
