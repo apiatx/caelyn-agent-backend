@@ -1,0 +1,414 @@
+CONTINUE THE SAME PERFORMANCE INCIDENT — IMPLEMENT THE PROVEN WATCHLIST FIX NOW.
+
+The measurement phase is complete.
+
+Do NOT add more timing instrumentation before making this correction.
+Do NOT redesign the Watchlist.
+Do NOT create a new cache, endpoint, provider path, database path, scheduler, or source of truth.
+Do NOT touch the frontend.
+
+We have enough runtime evidence to fix the proven regression.
+
+PROVEN EVIDENCE
+===============
+
+Verified fresh-process Primary Watchlist requests:
+
+Request 1:
+- HTTP 200
+- TTFB 3.793s
+- total 3.817s
+- 6.90 MB
+- 489 rows
+
+Request 2:
+- HTTP 200
+- TTFB 12.476s
+- total 12.711s
+- same 6.90 MB cached payload
+- same 489 rows
+
+Request 3:
+- HTTP 200
+- TTFB 90.066s
+- total 90.097s
+- same 6.90 MB cached payload
+- same 489 rows
+
+The payload was already built before these requests.
+
+Transfer after TTFB was only:
+- ~24 ms
+- ~235 ms
+- ~31 ms
+
+Therefore:
+
+- serialization is not the 90-second bottleneck
+- response size is not the 90-second bottleneck
+- cold enrichment is not the 90-second bottleneck
+- quote hydration is not the 90-second bottleneck
+- taxonomy/rank/earnings assembly is not the 90-second bottleneck
+
+The dominant request delay occurs BEFORE the complete response LKG is returned.
+
+PROVEN REGRESSION
+=================
+
+Commit:
+
+f0b41157034aa39976a7480333fd7ec52a29ab89
+"Bound Watchlist detail latency"
+
+changed GET /api/watchlist/{watchlist_id} so that every request:
+
+1. creates a worker for load_watchlist(watchlist_id)
+2. waits on that canonical read
+3. only AFTER the read completes or times out checks/serves _BULK_LKG
+4. shields the load task, so timed-out reads continue running
+
+This was intended to bound DB latency but under shared executor/resource contention it
+does the opposite:
+
+- an already-complete cached response cannot return immediately
+- every browser request starts another unnecessary canonical read
+- timed-out reads continue consuming worker/DB resources
+- repeated requests can accumulate overlapping reads
+- the latency of cached responses becomes coupled to unrelated background resource pressure
+
+This is classified as:
+
+B — PROVEN WATCHLIST REGRESSION.
+
+KNOWN-GOOD TARGET
+=================
+
+Historical commit:
+
+09f416b4d833a9e11b189f65aee82b9dabcd6225
+"perf: make watchlist detail LKG-first"
+
+introduced the whole-response Watchlist LKG specifically so warm responses could be served
+near-instantly.
+
+Measured historical behavior:
+- warm LKG hit: effectively instant
+- full response still preserved
+- background rebuild for stale data
+- explicit invalidation on Watchlist mutations
+- GZip preserved
+
+We are restoring that PRODUCT BEHAVIOR, not blindly reverting code.
+
+CURRENT CACHE SAFETY THAT MUST BE PRESERVED
+===========================================
+
+Current code already has:
+
+- _BULK_LKG
+- _BULK_LKG_BUILDING
+- fresh/stale TTL semantics
+- single-flight background rebuild
+- _bulk_lkg_invalidate(watchlist_id)
+- invalidation on Watchlist membership mutations
+- invalidate_bulk_lkg_for_ticker(ticker)
+- taxonomy generation protection via _TAXONOMY_GEN
+
+Before editing, verify all current mutation routes that can change the cached bulk response
+correctly invalidate the affected LKG.
+
+At minimum audit:
+
+- POST /save
+- add single ticker
+- remove ticker
+- bulk add tickers
+- canonical taxonomy assignment/update
+- category override mutation if it affects Watchlist bulk response
+- any other existing route that alters Watchlist membership or fields represented inside
+  the bulk response
+
+Do NOT add new invalidation infrastructure if the existing hooks already cover them.
+
+IMPLEMENTATION INTENT
+=====================
+
+The complete LKG must once again be the fast path.
+
+Desired request behavior:
+
+CASE 1 — valid complete fresh LKG exists
+----------------------------------------
+Return it immediately.
+
+Do NOT start load_watchlist() first.
+Do NOT start a PostgreSQL worker merely to validate an already-valid fresh in-process LKG.
+Do NOT wait on canonical DB state before serving the fresh cache.
+
+Target: the endpoint itself should reach return in milliseconds, with total client latency
+dominated only by gzip/network transfer.
+
+CASE 2 — complete LKG exists but is stale
+------------------------------------------
+Return it immediately.
+
+Use the EXISTING single-flight background rebuild mechanism to validate/rebuild from the
+canonical Watchlist asynchronously.
+
+Only one rebuild per watchlist.
+
+Do not make the browser request wait for the rebuild.
+
+CASE 3 — LKG absent / explicitly invalidated
+---------------------------------------------
+Use the existing canonical load_watchlist() path.
+
+Then run the existing canonical builder.
+
+Then populate _BULK_LKG.
+
+Then return.
+
+The canonical database remains the source of truth.
+
+CASE 4 — Watchlist mutation
+----------------------------
+Existing mutation invalidation must force the next GET through Case 3 so membership and
+taxonomy changes cannot be hidden by an old response.
+
+NO STALE-MEMBERSHIP REGRESSION IS ACCEPTABLE.
+
+IMPORTANT VERSION-VALIDATION ISSUE
+==================================
+
+Do not preserve request-blocking canonical version validation merely because the current
+entry stores a DB-derived version.
+
+If determining the current DB version itself requires load_watchlist(), then using that
+version check before every fresh LKG hit defeats the purpose of the whole-response cache.
+
+Use the EXISTING explicit invalidation/generation mechanisms to determine whether the
+in-process entry remains usable where they already provide that guarantee.
+
+If repository evidence proves there is an existing mutation path that changes bulk-response
+content without invalidating the LKG, report that specific path and fix that invalidation
+within the existing architecture.
+
+Do not add a replacement versioning system.
+
+SHIELDED READ CLEANUP
+=====================
+
+The f0b41157 shielded read behavior must not remain on the fresh-LKG request path.
+
+A fresh cache hit must not create a load_watchlist thread at all.
+
+For cold/miss behavior, preserve canonical correctness and safe DB connection return.
+
+Do not cancel synchronous DB work in a way that can strand a checked-out connection.
+
+TESTS
+=====
+
+Update/add focused tests proving:
+
+1. FRESH LKG:
+   - load_watchlist is NOT called
+   - cached response returns immediately
+   - no background rebuild scheduled
+
+2. STALE LKG:
+   - cached response returns immediately
+   - canonical rebuild is scheduled in background
+   - single-flight prevents duplicate rebuilds
+
+3. LKG MISS:
+   - canonical load_watchlist is called
+   - canonical builder is called
+   - result is cached
+   - exact response contract remains intact
+
+4. INVALIDATION:
+   - add/remove/save/taxonomy mutation invalidates affected LKG
+   - next GET cannot serve stale membership/taxonomy
+
+5. CONCURRENT CACHE HITS:
+   - many simultaneous GETs against one valid LKG do not create many DB reads
+   - ideally zero canonical DB reads for fresh hits
+
+6. SLOW DB + EXISTING LKG:
+   - a slow canonical DB function cannot delay a valid fresh LKG request because it is never
+     invoked
+
+7. EXISTING Watchlist LKG regression suite still passes.
+
+TEMPORARY TIMING INSTRUMENTATION
+================================
+
+The timing-only edits currently uncommitted in:
+
+backend/services/watchlist_router.py
+
+may be used during validation.
+
+Do NOT include noisy temporary instrumentation in the final commit unless it provides clear,
+low-volume operational value.
+
+Before committing, remove purely diagnostic timing code that is no longer needed and verify
+the final diff contains the behavior fix rather than a pile of incident logging.
+
+RUNTIME VALIDATION
+==================
+
+Restart to a verified fresh PID.
+
+Allow normal bootstrap to run.
+
+Populate the Primary Watchlist LKG once if necessary.
+
+Then make at least FIVE consecutive Primary Watchlist requests while existing background
+jobs remain active.
+
+For every request report:
+
+- status
+- TTFB
+- total
+- payload bytes
+- row count
+- whether LKG was fresh/stale/miss
+- whether load_watchlist was called
+- PostgreSQL held connection count
+- pool exhaustion count
+
+Run concurrent /ping probes during the five-request sequence.
+
+SUCCESS TARGET FOR WARM WATCHLIST
+=================================
+
+A complete LKG hit should no longer vary from:
+
+3s -> 12s -> 90s
+
+because of unrelated executor/DB contention.
+
+The server-side cache lookup/return should be near-instant.
+
+If transfer of the ~6.9 MB uncompressed body still produces visible client latency, verify
+GZip is actually negotiated and report compressed wire bytes separately.
+
+Do NOT conflate server processing latency with network transfer.
+
+PRESERVE
+========
+
+Do not change:
+
+- canonical public.watchlist membership
+- quote provider behavior
+- Tradier limits
+- FMP limits
+- fundamentals refresh schedule
+- ranking semantics
+- taxonomy semantics
+- earnings semantics
+- response fields
+- frontend query behavior
+- GZip middleware
+- existing background refresh contract
+
+SHARED INCIDENT CONTINUES AFTER THIS FIX
+========================================
+
+This Watchlist correction is NOT permission to declare the entire performance incident done.
+
+Runtime evidence also proved remaining shared contention:
+
+- /ping experienced failures and multi-second stalls
+- Confluence retained snapshot: 554 symbols / ~270 seconds
+- RSS Watchlist sweeper: 489 tickers / ~1,087 seconds
+- numerous Yahoo/Google timeouts
+- Theme/history, Whale/SEC, earnings, and Tradier activity overlapping
+- Home endpoint latency changes dramatically depending on background activity
+
+After the Watchlist LKG fix is implemented and validated:
+
+DO NOT start optimizing those services individually.
+
+Instead perform one read-only SHARED BACKGROUND OVERLAP analysis answering:
+
+1. Which heavy jobs are active simultaneously?
+2. What are their existing startup delays and recurring schedules?
+3. Which use the default executor?
+4. Which use dedicated threads?
+5. Which consume PostgreSQL?
+6. Which consume Tradier/FMP/Yahoo/Google?
+7. Which perform large Python CPU/GIL loops?
+8. Which were historically staggered but now overlap?
+9. Did a recent commit/startup change cause multiple previously-separated jobs to run
+   concurrently?
+
+We are looking for the next SHARED scheduling/contention regression.
+
+If one shared startup/scheduling change explains the overlap, report it as the next same-
+incident cause.
+
+DO NOT fix the background overlap yet if doing so requires touching a second production file
+until you first report:
+
+- proven shared cause
+- exact existing path
+- exact file
+- exact proposed scheduling/concurrency correction
+
+GIT / SCOPE
+===========
+
+Current clean remote incident commit is:
+
+f7272dd4
+
+Preserve all unrelated runtime/generated dirty files.
+
+Do not stage generated caches, snapshots, attachments, reports, or runtime data.
+
+This task should require only:
+
+backend/services/watchlist_router.py
+and the existing focused Watchlist test file
+
+If another production file appears necessary for the Watchlist fix, STOP before editing it.
+
+After validation:
+
+- git diff --check
+- stage exact approved files only
+- verify staged diff
+- clean one incident commit
+- push only the clean commit
+- update the incident report
+
+FINAL REPORT
+============
+
+Report:
+
+1. exact code-path regression fixed
+2. why f0b41157 caused 12–90 second cached requests
+3. final LKG request ordering
+4. invalidation correctness proof
+5. tests and results
+6. five-request warm timing matrix
+7. compressed and uncompressed payload sizes if available
+8. concurrent /ping results
+9. PostgreSQL diagnostics
+10. whether any load_watchlist call occurred on fresh LKG hits
+11. exact files changed
+12. exact commit
+13. shared-background-overlap audit findings
+14. whether the broader incident is fully resolved or what single shared cause remains
+
+Do not stop at "tests pass."
+
+The product target is the behavior we already had:
+A warm Primary Watchlist should be effectively instant again.

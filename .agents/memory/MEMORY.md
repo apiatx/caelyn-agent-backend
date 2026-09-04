@@ -82,3 +82,5 @@
 - [Earnings monitor Part 2 timing](earnings-monitor-part2-timing.md) — FMP Starter returns time=amc/bmo/null + confirmed bool (no clock time); one batch calendar call per universe; get_due_targets() skips non-due rows
 - [Lifespan import event-loop block](lifespan-import-block.md) — insider_activity_service import (~8.5s) inside async lifespan blocked event loop; fix: asyncio.to_thread() for all three heavy services
 - [OTC FMP coverage architecture](otc-fmp-coverage.md) — OTC:BESIY canonical everywhere; bare BESIY only at FMP HTTP boundary; fmp_governor (not homemade limiter); fields absent from FMP stay null not zero
+- [Theme RS startup concurrency](theme-rs-startup-concurrency.md) — initial timeframe rebuilds must run sequentially; cold fanout duplicates history work and starves HTTP.
+- [GitHub push fallback](github-push-fallback.md) — when shell GitHub auth rejects pushes, use the authorized GitHub connection API for a non-force fast-forward.

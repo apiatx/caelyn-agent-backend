@@ -1,0 +1,261 @@
+FINAL PERFORMANCE INCIDENT CLOSURE — ONE LAST BACKEND PASS BEFORE REPUBLISH
+
+We are finishing this incident now.
+
+The Watchlist LKG regression is fixed and already exists on remote main:
+
+1a46296cde913f826516545b52f68cad10ef82bb
+perf: restore watchlist LKG-first detail path
+
+The prior Theme RS startup fanout fix is also already on remote main.
+
+DO NOT recreate, duplicate, cherry-pick, or re-push those commits.
+
+STEP 0 — GIT ALIGNMENT
+
+Before editing:
+
+1. fetch origin/main
+2. verify origin/main contains 1a46296c
+3. verify local main relationship to origin/main
+4. if local main still points to an equivalent local-only commit from the API-push workflow,
+   align local main to origin/main while preserving ALL unstaged runtime/generated files
+5. do not delete or stage generated caches, reports, attachments, memory files, or runtime data
+
+Do not continue until local source history is clean and aligned.
+
+CURRENT PROVEN STATE
+====================
+
+The Watchlist regression itself is fixed:
+
+- fresh LKG hits perform zero load_watchlist() calls
+- fresh response contains all 489 enriched rows
+- uncompressed payload ~6.91 MB
+- gzip wire payload ~1.14 MB
+- focused Watchlist tests: 32 passed
+
+However the SHARED performance incident is not closed:
+
+During active background work:
+
+- one warm Watchlist request still timed out
+- successful warm requests ranged ~1.16s to 7.54s
+- /ping averaged ~813ms
+- 18 ping probes failed
+
+Existing audit found the startup overlap:
+
+- earnings catch-up begins around 25s
+- earnings tick work begins around 30s
+- RSS Watchlist sweeper begins around 30s
+- Whale/SEC work begins around 30s
+- Theme RS startup work runs independently
+- Confluence startup work runs independently
+
+Observed heavy passes include:
+
+- Confluence retained snapshot: ~554 symbols / ~270s
+- RSS Watchlist sweeper: ~489 tickers / ~1087s
+- Yahoo / Google timeouts during RSS
+- Theme/history work
+- Whale/SEC activity
+- earnings activity
+- Tradier limiter pressure
+
+PostgreSQL pool exhaustion is NOT the dominant current problem.
+
+The remaining proven failure class is shared startup/background resource contention.
+
+TASK
+====
+
+Fix the UNCOORDINATED POST-YIELD STARTUP BURST using the EXISTING startup/background paths.
+
+Do not optimize six services independently.
+
+Do not create:
+- a new scheduler
+- a new worker architecture
+- a new queue
+- a new cache
+- a new provider path
+- a new persistence system
+- new endpoint contracts
+
+Prefer a startup-scheduling correction in backend/main.py if repository evidence confirms
+that is where these existing loops/tasks are launched.
+
+Preserve every job’s normal recurring cadence and semantics.
+
+The goal is to change INITIAL STARTUP COORDINATION, not business logic.
+
+REQUIRED STARTUP BEHAVIOR
+=========================
+
+Interactive serving must get priority after process startup.
+
+Heavy non-interactive catch-up jobs must no longer all begin in the same ~25-30 second window.
+
+Use the existing startup delays / freshness guards / task launch points.
+
+Rules:
+
+1. Do not start multiple heavyweight cold-start passes simultaneously.
+
+2. Stagger the INITIAL starts into separate waves.
+
+3. Do not await an 18-minute RSS sweep before permitting every other background service to run.
+   We want staggered starts, not one enormous serialized chain.
+
+4. If a job ALREADY has an existing canonical-cache/LKG freshness guard, honor it:
+   - fresh cache => skip unnecessary startup catch-up
+   - stale/missing => run the existing job later in its assigned startup wave
+
+5. Do not invent a new freshness/cache mechanism just for this fix.
+
+6. Recurring intervals AFTER each initial startup pass must remain unchanged.
+
+7. Preserve FMP, Tradier, Finnhub, Yahoo, Google, SEC, and all other provider rate-limit behavior.
+
+8. Preserve early-close / market-hours behavior.
+
+9. Do not increase DB connection counts merely to absorb the burst.
+
+10. Do not move provider calls into interactive request paths.
+
+11. Do not modify the frontend.
+
+12. Do not change the Watchlist LKG fix.
+
+SCHEDULING INTENT
+=================
+
+Do not have RSS + Whale + earnings + Theme RS + Confluence all kick off together.
+
+Use repository evidence to choose sensible offsets, but the first several minutes after boot
+must be deliberately staggered.
+
+As a design constraint:
+
+- core server / health / interactive endpoints: immediately
+- interactive cache hydration that is actually required: earliest priority
+- heavyweight analytics / RSS / SEC / retained-snapshot catch-up: later startup waves
+
+Do NOT mechanically use “every job starts 60 seconds apart” if existing freshness or workload
+evidence suggests a better sequence.
+
+Keep the correction narrow.
+
+If the coordination can be solved entirely in main.py / the existing startup launch site,
+do that.
+
+If a SECOND production file is genuinely necessary, STOP before editing it and report:
+- exact remaining bottleneck
+- exact file
+- why startup coordination alone cannot solve it
+
+RUNTIME PROOF
+=============
+
+After the correction:
+
+1. restart to a verified fresh PID
+2. let normal bootstrap/background activity proceed
+3. populate Primary Watchlist LKG once if needed
+4. keep the heavy background jobs active
+5. run 10 consecutive warm Primary Watchlist requests
+6. run continuous /ping probes during the same window
+7. test the main Home endpoints during that same active-background period
+
+Primary Watchlist acceptance:
+
+- 10/10 HTTP 200
+- ZERO timeouts
+- ZERO load_watchlist() calls on fresh LKG hits
+- 489 rows retained
+- gzip retained
+- no stale membership/taxonomy regression
+
+Server-side LKG lookup/return should remain effectively immediate.
+
+Measure client TTFB separately from body transfer.
+
+Shared-runtime acceptance:
+
+- /ping: ZERO failures
+- no multi-second event-loop starvation
+- health endpoint: ZERO failures
+- Home dashboard: no timeout / no multi-second starvation caused by startup background jobs
+- Daily Alpha Board: successful
+- theme endpoint: successful
+- prediction-markets endpoint: successful
+- news endpoint: successful
+- Risk Intelligence: successful
+
+Also capture:
+
+- process CPU
+- thread count
+- PostgreSQL held connections
+- pool exhaustion count
+- which heavyweight background jobs are active at each measurement point
+
+If /ping or cached Watchlist requests still experience multi-second stalls after the startup
+staggering change, DO NOT declare success.
+
+At that point identify the single dominant background job/resource causing the remaining
+stall and report it before making another architectural change.
+
+TESTS
+=====
+
+Add only focused regression coverage necessary to prove the startup launch ordering.
+
+Do not create a giant performance framework.
+
+Preserve all existing Watchlist and Theme RS tests.
+
+GIT
+===
+
+After runtime proof:
+
+- git diff --check
+- stage exact task files only
+- no generated/runtime/report/attachment files
+- one clean commit on main
+- push main
+- confirm origin/main points to the final clean commit
+
+Then report:
+
+READY_TO_REPUBLISH_BACKEND = YES
+
+only if all acceptance checks above pass.
+
+Do NOT republish from inside this task unless explicitly instructed.
+
+FINAL REPORT
+============
+
+Give me:
+
+- proven remaining shared cause
+- exact startup scheduling change
+- files changed
+- startup schedule before vs after
+- recurring behavior deliberately unchanged
+- 10-request Watchlist timing matrix
+- /ping results
+- Home endpoint matrix under background load
+- pool diagnostics
+- provider/rate-limit effects
+- focused tests
+- final commit SHA
+- whether frontend needs any deployment
+
+The goal is simple:
+
+After this report I should be able to republish the BACKEND ONCE and be done with this
+performance incident.

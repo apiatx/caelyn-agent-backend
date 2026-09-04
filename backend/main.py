@@ -578,8 +578,7 @@ async def lifespan(app):
     import threading
     threading.Thread(target=_deferred_sync_startup, daemon=True, name="startup-sync").start()
     threading.Thread(target=_do_init, daemon=True).start()
-    asyncio.create_task(_briefing_precompute_loop())
-    asyncio.create_task(_edgar_cache_loop())
+    print("[STARTUP] provider-heavy restart catch-up disabled; serving persisted state")
     # Continuous background classification loop for ETF vs stock resolution.
     # Runs a startup pass after 30 s, then repeats every 30 min to resolve any
     # symbols that were added to the required universe after startup.
@@ -664,14 +663,9 @@ async def lifespan(app):
             except Exception as _ityp_e:
                 print(f"[ITYPE_LOOP] classification pass error (non-fatal): {_ityp_e}")
             await asyncio.sleep(_PERIOD_S)
-    asyncio.create_task(_itype_classify_loop())
-    asyncio.create_task(_master_screener_loop())
-    asyncio.create_task(_sectors_fast_backfill_loop())
-    asyncio.create_task(_theme_options_supplement_loop())
-    # Tradier precompute loop removed — Options Flow now uses TradierFlowEngine directly
-    asyncio.create_task(_polygon_options_ingestion_loop())
-    asyncio.create_task(_macro_precompute_loop())
-    asyncio.create_task(_strategy_history_precompute_loop())
+    # Provider-heavy full-universe loops are intentionally not registered merely
+    # because the web process restarted. Persisted LKG/cache state serves reads;
+    # explicit/manual and wall-clock scheduled refresh paths remain available.
     # _sector_rotation_precompute_loop DISABLED (2025-05):
     # /api/themes/relative-strength?classification=sector now covers all 11 SPDR sector RS data
     # via theme_rs_service (warmup_theme_rs loop). Running both loops duplicated Tradier + yfinance
@@ -689,18 +683,6 @@ async def lifespan(app):
         except Exception as _e:
             print(f"[STARTUP] canonical history maintenance scheduler failed to start: {_e}")
     asyncio.create_task(_canon_maint_deferred())
-    asyncio.create_task(_hl_boot_and_run(_hl_state))
-    async def _bittensor_deferred():
-        def _import_bittensor():
-            from services.bittensor.router import _dashboard_refresh_loop as _bittensor_refresh_loop
-            return _bittensor_refresh_loop
-        try:
-            _loop_fn = await asyncio.to_thread(_import_bittensor)
-            asyncio.create_task(_loop_fn())
-        except Exception as _e:
-            print(f"[STARTUP] Bittensor refresh task error: {_e}")
-    asyncio.create_task(_bittensor_deferred())
-    asyncio.create_task(_x_consensus_loop())
     # Alert Signal Bus: periodic retention cleanup (every 12 h)
     async def _alert_bus_retention_loop():
         import asyncio as _aio
@@ -883,7 +865,6 @@ async def lifespan(app):
             await _aio.sleep(60)
 
     asyncio.create_task(_watchlist_fundamentals_weekly_loop())
-    asyncio.create_task(_ei_materials_loop())
 
     # Watchlist rank snapshot cadence — advances RV + vol/MC rank baselines every
     # ~5 minutes using warm quote-cache data.  GET path is read-only (never writes
@@ -1002,23 +983,8 @@ async def lifespan(app):
         except Exception as _e:
             print(f"[STARTUP] Thematic context warmup task error: {_e}")
     asyncio.create_task(_thematic_warmup_deferred())
-    # Dynamic thematic universe: build and refresh every 15 min.
-    asyncio.create_task(_dynamic_thematic_universe_loop())
-    # Themes by Relative Strength warmup: offloaded to worker thread so the
-    # synchronous import of theme_rs_service (heavy transitive deps) cannot
-    # starve the event loop.  The returned async callable is scheduled on the
-    # main loop after the import completes.
-    async def _theme_rs_warmup_deferred():
-        def _import_theme_rs():
-            from services.theme_rs_service import warmup_theme_rs as _theme_rs_warmup
-            return _theme_rs_warmup
-        try:
-            _warmup_fn = await asyncio.to_thread(_import_theme_rs)
-            asyncio.create_task(_warmup_fn())
-        except Exception as _e:
-            print(f"[STARTUP] Theme RS warmup error: {_e}")
-    asyncio.create_task(_theme_rs_warmup_deferred())
-    asyncio.create_task(_earnings_calendar_warmup())
+    # Theme RS, thematic-universe, and earnings provider refreshes are not
+    # restart catch-up work. Their persisted snapshots remain available.
 
     # ── Post-yield deferred bootstrap ────────────────────────────────────────
     # All synchronous disk reads and optional module imports that do NOT need
@@ -1045,14 +1011,7 @@ async def lifespan(app):
             app.include_router(_insider_router, prefix="/api")
             app.include_router(_cong_router, prefix="/api")
             app.include_router(_whale_router, prefix="/api")
-            asyncio.create_task(_insider_bg_loop())
-            asyncio.create_task(_cong_bg_loop())
-            try:
-                asyncio.create_task(_seed_whales_pv())
-            except Exception as _sw_err:
-                print(f"[BOOTSTRAP] Whale Watch seed task error: {_sw_err}")
-            asyncio.create_task(_whale_bg_loop())
-            print("[BOOTSTRAP] insider/congressional/whale routers + background loops registered post-yield")
+            print("[BOOTSTRAP] insider/congressional/whale routers registered; restart catch-up disabled")
         except Exception as _hv_err:
             print(f"[BOOTSTRAP] Heavy service import failed (non-fatal): {_hv_err}")
 
@@ -1065,16 +1024,6 @@ async def lifespan(app):
             print("[EARNINGS_MONITOR] tick loop registered (60s interval, 30s initial delay)")
         except Exception as _em_tick_err:
             print(f"[EARNINGS_MONITOR] tick loop init error (non-fatal): {_em_tick_err}")
-
-        # 0b. Earnings catch-up pass — runs ONCE per cold start (25s delay).
-        #     Fills missing/partial results for earnings from the past 4 days.
-        #     Makes one targeted FMP call per symbol; triggers EI refresh on hit.
-        try:
-            from services.earnings_monitor_service import _earnings_catchup_pass as _em_catchup
-            asyncio.create_task(_em_catchup())
-            print("[EARNINGS_MONITOR] startup catch-up pass registered (25s delay)")
-        except Exception as _em_catchup_err:
-            print(f"[EARNINGS_MONITOR] catch-up init error (non-fatal): {_em_catchup_err}")
 
         # 0c. Live Earnings Monitor — optional persistent loop (Reserved VM mode only).
         #     Use LIVE_EARNINGS_MONITOR_ENABLED=true for always-on VMs.
@@ -1099,16 +1048,6 @@ async def lifespan(app):
             )
             await asyncio.to_thread(_d2x_load_lkg)
 
-            async def _defiance_2x_daily_loop():
-                await asyncio.sleep(120)
-                while True:
-                    try:
-                        await _d2x_refresh_catalog()
-                    except Exception as _de:
-                        print(f"[DEFIANCE_2X] Daily refresh error: {_de}")
-                    await asyncio.sleep(20 * 3600)
-
-            asyncio.create_task(_defiance_2x_daily_loop())
             _BOOTSTRAP_STATE["steps"]["d2x"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
         except Exception as _e:
             print(f"[BOOTSTRAP] Defiance 2X catalog init error: {_e}")
@@ -1158,10 +1097,8 @@ async def lifespan(app):
         try:
             from services.watchlist_stage2_service import (
                 load_lkg                    as _wl_stage2_load,
-                warmup_stage2_all_watchlists as _wl_stage2_warmup,
             )
             await asyncio.to_thread(_wl_stage2_load)
-            asyncio.create_task(_wl_stage2_warmup(startup_delay_s=60.0))
             _BOOTSTRAP_STATE["steps"]["stage2_lkg"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
         except Exception as _e:
             print(f"[BOOTSTRAP] Watchlist Stage2 warmup error: {_e}")
@@ -1182,10 +1119,8 @@ async def lifespan(app):
         try:
             from services.earnings_clean_service import (
                 _load_all_earn_snaps_from_disk   as _load_earn_snaps,
-                _earnings_curated_precompute_loop as _earn_precompute_loop,
             )
             await asyncio.to_thread(_load_earn_snaps)
-            asyncio.create_task(_earn_precompute_loop())
             _BOOTSTRAP_STATE["steps"]["earn_snaps"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
         except Exception as _e:
             print(f"[BOOTSTRAP] Earnings curated precompute init error: {_e}")
@@ -1201,30 +1136,6 @@ async def lifespan(app):
         except Exception as _e:
             print(f"[BOOTSTRAP] Neon snapshot recovery error (non-fatal): {_e}")
             _BOOTSTRAP_STATE["steps"]["neon_recovery"] = {"ok": False, "error": str(_e)}
-
-        # 8. Retained Confluence snapshot — kick background rebuild if needed.
-        #    Moved after all sequential preloads so the Confluence daemon
-        #    thread (~60s) does not compound GIL pressure with the
-        #    asyncio.to_thread() steps above.
-        _t = _bst.monotonic()
-        try:
-            from services.confluence_v2_service import (
-                _RETAINED,
-                _RETAINED_LOCK,
-                _start_background_rebuild,
-            )
-            with _RETAINED_LOCK:
-                _have_snap = _RETAINED["snapshot"] is not None
-            if not _have_snap:
-                _started = _start_background_rebuild()
-                _msg = "started background rebuild" if _started else "warm skipped (build already in progress)"
-            else:
-                _msg = "warm skipped (snapshot already present)"
-            print(f"[BOOTSTRAP] Confluence: {_msg}")
-            _BOOTSTRAP_STATE["steps"]["confluence_warm"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
-        except Exception as _e:
-            print(f"[BOOTSTRAP] Confluence retained warm error (non-fatal): {_e}")
-            _BOOTSTRAP_STATE["steps"]["confluence_warm"] = {"ok": False, "error": str(_e)}
 
         # 9. Watchlist news LKG prewarm — hydrate _news_lkg from Neon archive.
         #    Moved after all sequential preloads so the async task (~77s Neon
@@ -1255,14 +1166,12 @@ async def lifespan(app):
         def _import_calendar():
             from services.calendar_snapshot_service import (
                 weekly_scheduler_loop as _calendar_snap_loop,
-                check_and_refresh_stale as _cal_stale_check,
             )
             from config import FMP_API_KEY as _fmp_key_for_snap
-            return _calendar_snap_loop, _cal_stale_check, _fmp_key_for_snap
+            return _calendar_snap_loop, _fmp_key_for_snap
         try:
-            _calendar_snap_loop, _cal_stale_check, _fmp_key_for_snap = await asyncio.to_thread(_import_calendar)
+            _calendar_snap_loop, _fmp_key_for_snap = await asyncio.to_thread(_import_calendar)
             asyncio.create_task(_calendar_snap_loop(lambda: _fmp_key_for_snap))
-            asyncio.create_task(_cal_stale_check(_fmp_key_for_snap or ""))
         except Exception as _e:
             print(f"[STARTUP] calendar snapshot scheduler init error: {_e}")
     asyncio.create_task(_calendar_snap_deferred())
@@ -1285,40 +1194,6 @@ async def lifespan(app):
         except Exception as _e:
             print(f"[STARTUP] Screener Hub scheduler init error: {_e}")
     asyncio.create_task(_screener_hub_deferred())
-    # Tracked Odds Registry: fetch → match → persist → delta → cache, every 30 min.
-    # Runs at 90 s so it beats the intelligence loop (120 s) on first cycle.
-    asyncio.create_task(_odds_scanner_loop())
-    # Predict page investor intelligence: pre-warm event-family payload every 30 min.
-    # Covers tracked macro odds, equity signals, watchlist-first ticker resolution.
-    asyncio.create_task(_investor_intelligence_loop())
-
-    # Pre-warm the Caelyn Terminal cache in the background so the portfolio
-    # dashboard is ready before the first user request arrives.
-    asyncio.create_task(_terminal_prewarm())
-
-    # ── Trading Dashboard background refresh scheduling ─────────────────────
-    # Lazy hydration from persisted LKG happens on first snapshot read
-    # (zero provider calls, zero delay).  The macro precompute loop
-    # (720s cadence) handles the provider-heavy fresh refresh.
-    # This task ensures a refresh is scheduled shortly after startup
-    # when the macro provider is ready, without blocking Home reads.
-
-    async def _trading_dashboard_startup():
-        await asyncio.sleep(60)
-        try:
-            from services.trading_dashboard_service import schedule_trading_dashboard_refresh
-            mp2 = _get_macro_provider()
-            if mp2:
-                fetch = _build_trading_fetch_fresh(mp2)
-                result = schedule_trading_dashboard_refresh(mode="swing", fetch_fresh_data=fetch)
-                print(f"[TD_STARTUP] initial refresh scheduled: {result.get('status')}")
-            else:
-                print("[TD_STARTUP] macro provider not ready — deferring to precompute loop")
-        except Exception as e:
-            print(f"[TD_STARTUP] refresh scheduling error (non-fatal): {e}")
-
-    asyncio.create_task(_trading_dashboard_startup())
-
     # Watchlist RSS sweeper — continuous ~2-min full-universe RSS archive sweep.
     # Import offloaded to worker thread so the synchronous import of
     # watchlist_rss_sweeper (news_major_service, httpx pool init) cannot starve
@@ -1331,7 +1206,7 @@ async def lifespan(app):
             return _rss_sweeper_loop
         try:
             _loop_fn = await asyncio.to_thread(_import_rss_sweeper)
-            asyncio.create_task(_loop_fn())
+            asyncio.create_task(_loop_fn(skip_initial=True))
             print("[STARTUP] Watchlist RSS sweeper loop registered")
         except Exception as _rss_err:
             print(f"[STARTUP] RSS sweeper loop registration error: {_rss_err}")
@@ -13228,21 +13103,25 @@ async def _master_screener_loop():
       - Stage 2 chain-fetches top-30 (~1.6 exp each → ~47 calls) at 115 req/min.
       - Polygon DB enrichment runs OUTSIDE the Stage-2 semaphore: all survivors
         enrich concurrently instead of being serialised 6-at-a-time.
-      - Inter-cycle sleep: 5s (down from 60s) — rate limiter controls throughput.
+      - Inter-cycle sleep: 60s — preserves shared provider/runtime headroom.
 
     Expected cycle times:
       Cold (first cycle / cache miss every 12 min):
         Stage 1: ~33s  Stage 2 chains: ~25s  DB: ~4s  misc: ~5s  → ~67s
       Hot (cache warm):
         Stage 1:  ~0s  Stage 2 chains: ~25s  DB: ~4s  misc: ~5s  → ~34s
-      Period (hot): 34s cycle + 5s sleep ≈ 39s between starts (vs 149s before)
+      Period (hot): 34s cycle + 60s sleep ≈ 94s between starts.
     """
     global _TRADIER_GLOBAL_SEM
 
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _init_event.wait, 90)
 
-    from data.unified_options_engine import UnifiedOptionsEngine
+    def _import_master_screener_dependencies():
+        from data.unified_options_engine import UnifiedOptionsEngine
+        return UnifiedOptionsEngine
+
+    UnifiedOptionsEngine = await asyncio.to_thread(_import_master_screener_dependencies)
 
     if data_service is None or not data_service.tradier:
         print("[MASTER_SCREENER] Tradier provider not available, skipping loop")
@@ -13269,7 +13148,7 @@ async def _master_screener_loop():
     # TTL enforced inside _inspect_shortlist (12 minutes).
     _master_expiry_cache: dict = {}
 
-    _MASTER_CYCLE_SLEEP = 5   # seconds between cycles; rate limiter controls Tradier throughput
+    _MASTER_CYCLE_SLEEP = 60  # seconds between cycles; preserve shared runtime/provider headroom
 
     from data.tradier_market_session import get_session as _get_ms_session
     import data.loop_diagnostics as _ld_ms
@@ -13363,7 +13242,7 @@ async def _master_screener_loop():
                         _cycle_seeds, tab="master",
                     )
                 cache.set(_OPTIONS_MASTER_PREFILTER_KEY, prefilter_data, _OPTIONS_PREFILTER_CACHE_TTL)
-                _save_master_prefilter_to_disk(prefilter_data)
+                await asyncio.to_thread(_save_master_prefilter_to_disk, prefilter_data)
                 n_pf = len(prefilter_data.get("candidates", []))
                 print(f"[MASTER_SCREENER] Prefilter built: {n_pf} candidates in {_time.time()-t_pf:.1f}s.")
 
@@ -13379,8 +13258,14 @@ async def _master_screener_loop():
                 )
             # ── Enrich rows with premium analytics, OTM metrics, heat_score ──
             try:
-                from data.options_enricher import enrich_ticker_rows
-                enrich_ticker_rows(screener_data.get("tickers", []))
+                def _enrich_master_rows(rows):
+                    from data.options_enricher import enrich_ticker_rows
+                    enrich_ticker_rows(rows)
+
+                await asyncio.to_thread(
+                    _enrich_master_rows,
+                    screener_data.get("tickers", []),
+                )
             except Exception as _enrich_exc:
                 print(f"[MASTER_SCREENER] Enrichment error (non-fatal): {_enrich_exc}")
 
@@ -13446,7 +13331,7 @@ async def _master_screener_loop():
             }
             cache.set(_OPTIONS_MASTER_CACHE_KEY, full_result, _OPTIONS_PRECOMPUTE_CACHE_TTL)
             cache.set(_OPTIONS_MASTER_LKG_KEY,   full_result, _OPTIONS_LKG_CACHE_TTL)
-            _save_master_lkg_to_disk(full_result)
+            await asyncio.to_thread(_save_master_lkg_to_disk, full_result)
 
             # ── Alert bus hook: master options screener ───────────────────────
             _ms_tickers = screener_data.get("tickers", [])

@@ -1,0 +1,331 @@
+FINAL PERFORMANCE FIX — MASTER OPTIONS SCREENER CONTENTION
+
+We have enough evidence now.
+
+Do NOT perform another broad performance audit.
+Do NOT touch Watchlist.
+Do NOT touch frontend.
+Do NOT add new architecture.
+
+The startup-wave changes in:
+
+backend/main.py
+backend/tests/test_startup_scheduling.py
+
+are currently uncommitted and should be PRESERVED unless this final correction proves they
+are unnecessary.
+
+PROVEN CURRENT FAILURE
+======================
+
+After startup staggering:
+
+- Primary Watchlist: 10/10 HTTP 200
+- 489 rows preserved
+- fresh LKG behavior preserved
+- but two warm hits still took 3.56s / 2.48s
+- /ping: 62 failures / 296
+- /health: 45 failures / 296
+- Risk Intelligence: 6.65s
+- max thread count: 168
+
+Therefore startup staggering alone is insufficient.
+
+The strongest remaining heavy path is the existing master options screener.
+
+REPOSITORY EVIDENCE
+===================
+
+Current _master_screener_loop() documents:
+
+Cold first cycle:
+~67 seconds
+
+Hot cycle:
+~34 seconds
+
+Current recurring sleep:
+_MASTER_CYCLE_SLEEP = 5
+
+Therefore once active, the master screener is almost continuously working during market hours.
+
+Historical commit:
+
+fbb8cefdb2bdc531219930e26e09e86964c9d0e6
+"perf: reduce master screener hot cycle from 89s to ~27s"
+
+explicitly changed:
+
+- inter-cycle sleep: 60s → 5s
+- Tradier scan limiter: 100 → 115 req/min
+- measured peak usage: ~103.9 req/min
+
+That optimization was made when the master screener was considered largely in isolation.
+
+The backend now has many additional Tradier/provider/database/background consumers.
+
+We are restoring SYSTEM HEADROOM, not redesigning Options Flow.
+
+TASK
+====
+
+Apply the narrowest correction necessary to stop the master screener from monopolizing shared
+runtime/provider capacity.
+
+Production scope should remain backend/main.py if possible.
+
+Do NOT edit UnifiedOptionsEngine, TradierFlowEngine, providers, databases, caches, or frontend
+unless runtime evidence proves main.py alone cannot solve it.
+
+PART 1 — RESTORE A SANE RECURRING CADENCE
+
+Change the master screener inter-cycle sleep from the aggressive 5-second setting back to a
+meaningful idle interval.
+
+Use the historical 60-second interval as the preferred restoration target unless repository
+evidence proves another EXISTING cadence is canonical.
+
+This is NOT a new scheduler.
+
+It is restoring headroom inside the existing loop.
+
+Do not change:
+
+- candidate counts
+- Stage 1 / Stage 2 semantics
+- ranking
+- options scoring
+- Tradier hard limits
+- master cache keys
+- LKG
+- endpoints
+- response contracts
+
+The options results already have:
+
+- hot cache TTL
+- LKG
+- disk LKG
+- expiry cache
+
+so users do not require a new 34-second scan immediately 5 seconds after the previous one
+finished.
+
+PART 2 — REMOVE SYNCHRONOUS EVENT-LOOP WORK INSIDE THIS LOOP
+
+Audit only synchronous operations executed directly by _master_screener_loop().
+
+At minimum inspect:
+
+1. cold import:
+   from data.unified_options_engine import UnifiedOptionsEngine
+
+2. enrichment:
+   enrich_ticker_rows(screener_data.get("tickers", []))
+
+3. synchronous disk persistence:
+   _save_master_prefilter_to_disk(...)
+   _save_master_lkg_to_disk(...)
+
+4. any synchronous DB/cache/thematic helper inside this loop that is measured as materially
+   blocking
+
+Do NOT blindly thread everything.
+
+Only offload operations proven or clearly known to perform blocking import / disk / DB /
+CPU work.
+
+Preferred existing pattern:
+asyncio.to_thread(...)
+
+The asynchronous Tradier/network scan itself should remain on the existing async path.
+
+PART 3 — INITIAL START
+
+Keep the master screener in a delayed startup wave.
+
+Do NOT simply hide the problem by delaying it beyond the validation period.
+
+The runtime test must include at least one FULL master screener cycle.
+
+Existing disk master LKG and prefilter snapshots should continue serving during the startup
+delay.
+
+PART 4 — TRADIER HEADROOM
+
+Do not change the vendor limit.
+
+Measure actual Tradier usage during the final validation.
+
+Confirm the master screener no longer consumes effectively all available background capacity
+continuously.
+
+Report:
+
+- master screener calls per completed cycle
+- cycle duration
+- idle interval
+- approximate effective requests/minute across cycle + idle period
+- remaining capacity for request-driven work
+
+Existing proactive reserve logic remains intact.
+
+Do NOT raise the limit or semaphore.
+
+PART 5 — VALIDATION
+
+Restart to a verified fresh PID.
+
+Run through startup and continue long enough to observe:
+
+- delayed background startup waves
+- one complete master screener live cycle
+- the restored idle interval after it
+- beginning of the next cycle if practical
+
+During this window continuously probe:
+
+/ping
+/health
+
+Acceptance:
+
+- ZERO /ping failures
+- ZERO /health failures
+- no multi-second event-loop starvation
+
+Warm Primary Watchlist:
+
+Run 10 consecutive requests while the MASTER SCREENER IS ACTIVELY RUNNING.
+
+Requirements:
+
+- 10/10 HTTP 200
+- zero timeouts
+- 489 rows
+- zero load_watchlist calls on fresh LKG hits
+- gzip retained
+- no request >2 seconds due to backend starvation
+
+Then repeat 5 warm requests DURING THE MASTER SCREENER IDLE INTERVAL for comparison.
+
+Home matrix during the active master cycle:
+
+- Home dashboard
+- Daily Alpha Board
+- Risk Intelligence
+- Trading Dashboard
+- Theme RS
+- Prediction Markets
+- News
+
+All must return successfully.
+
+Measure endpoint latency.
+
+Also record:
+
+- CPU
+- thread count
+- PostgreSQL held connections
+- pool exhaustion count
+- Tradier limiter utilization
+
+IMPORTANT DIAGNOSTIC
+
+If failures occur ONLY while the master screener is active, identify the exact blocking
+sub-stage from existing logs:
+
+- cold prefilter
+- Stage 1 expiry sweep
+- Stage 2 chains
+- Polygon enrichment
+- options row enrichment
+- thematic overlay
+- disk persistence
+
+Do not make another architectural change automatically.
+
+If one synchronous operation remains the blocker, fix only that operation using the existing
+offload pattern and repeat validation.
+
+PART 6 — STARTUP WAVES
+
+Keep the current startup-wave changes if the final runtime shows they improve startup
+availability.
+
+Do not discard them merely because the master screener was another bottleneck.
+
+The final clean commit may contain:
+
+backend/main.py
+backend/tests/test_startup_scheduling.py
+
+If another TEST file is needed specifically for master screener cadence/offload behavior,
+reuse the existing startup scheduling test file if reasonable.
+
+Do not touch another production file without stopping first.
+
+TEST COVERAGE
+=============
+
+Add focused assertions proving:
+
+- master screener initial launch remains delayed
+- recurring master screener sleep is no longer 5 seconds
+- recurring cadence remains unchanged after each cycle except for that restored idle interval
+- existing provider/session gates remain intact
+- startup waves remain staggered
+
+Preserve:
+
+- Watchlist LKG tests
+- Theme RS startup tests
+- existing options tests where applicable
+
+GIT
+===
+
+Nothing from this final pass has been committed yet.
+
+HEAD/origin/main currently remain:
+
+1a46296cde913f826516545b52f68cad10ef82bb
+
+After ALL acceptance checks pass:
+
+1. git diff --check
+2. stage only:
+   - backend/main.py
+   - backend/tests/test_startup_scheduling.py
+3. verify staged diff
+4. one clean commit
+5. push main
+6. verify origin/main
+
+Do NOT stage runtime caches, reports, memory files, attachments, or generated data.
+
+DO NOT REPUBLISH YET.
+
+FINAL RESPONSE MUST END WITH
+
+READY_TO_REPUBLISH_BACKEND = YES
+
+only if:
+
+- tests pass
+- 10/10 active-cycle Watchlist requests pass
+- ping has zero failures
+- health has zero failures
+- Home matrix succeeds
+- master screener completed a real live cycle during validation
+- recurring idle interval was observed
+- origin/main contains the clean commit
+
+If any one of those conditions fails:
+
+READY_TO_REPUBLISH_BACKEND = NO
+
+and report the exact remaining blocking sub-stage.
+
+This is the final performance closure pass.
