@@ -1029,8 +1029,20 @@ async def lifespan(app):
         #     Does NOT scan the full watchlist universe on each tick.
         try:
             from services.earnings_monitor_service import earnings_monitor_tick_loop as _em_tick
-            asyncio.create_task(_em_tick())
-            print("[EARNINGS_MONITOR] tick loop registered (60s interval, 30s initial delay)")
+
+            async def _register_earnings_tick_at_normal_cadence():
+                # earnings_monitor_tick_loop has its own 30s initial delay.
+                # Waiting 30s before registration makes its first automatic
+                # pass occur at the normal 60s cadence instead of during the
+                # post-yield startup window.
+                await asyncio.sleep(30)
+                await _em_tick()
+
+            asyncio.create_task(_register_earnings_tick_at_normal_cadence())
+            print(
+                "[EARNINGS_MONITOR] tick loop registration deferred 30s "
+                "(first automatic pass at normal 60s cadence)"
+            )
         except Exception as _em_tick_err:
             print(f"[EARNINGS_MONITOR] tick loop init error (non-fatal): {_em_tick_err}")
 
