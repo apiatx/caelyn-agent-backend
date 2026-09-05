@@ -36,6 +36,7 @@ _FRESH_TTL        = 30 * 24 * 3600   # 30 days — consider fresh
 _STALE_TTL        = 90 * 24 * 3600   # 90 days — max stale acceptable
 _MEM_CACHE_TTL    = _FRESH_TTL        # mirror fresh TTL in memory cache
 _RETRY_BACKOFF    = 6 * 3600          # 6 hours — min gap between failed refresh attempts
+ETF_HOLDINGS_MAX_LIVE_REFRESH_CONCURRENCY = 4
 
 _DISK_DIR = Path(__file__).parent.parent.parent / "data" / "etf_holdings"
 
@@ -54,6 +55,8 @@ _fmp_blocked_last_ts: Optional[float] = None
 
 # Tracks in-flight refresh tasks so we don't double-fetch the same symbol
 _refreshing: set[str] = set()
+_live_refresh_tasks: dict[str, asyncio.Task] = {}
+_live_refresh_semaphore = asyncio.Semaphore(ETF_HOLDINGS_MAX_LIVE_REFRESH_CONCURRENCY)
 
 # Tracks when a background refresh was last ATTEMPTED (even if it failed)
 # so we don't hammer the API on every call when FMP is returning 429s
@@ -245,19 +248,60 @@ async def _fetch_holdings(symbol: str) -> Optional[dict]:
     return await _fetch_from_finnhub(symbol)
 
 
-def _stamp_and_cache(symbol: str, data: dict) -> dict:
+async def _stamp_and_cache(symbol: str, data: dict) -> dict:
     """Add metadata, persist to disk and memory cache, return stamped dict."""
     now_iso = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
     data["updated_at"]  = now_iso
     data["_fetched_at"] = time.time()
     data["top_holdings"] = data["holdings"][:10]
 
-    _save_disk(symbol, data)
+    await asyncio.to_thread(_save_disk, symbol, data)
     cache.set(_mem_key(symbol), data, _MEM_CACHE_TTL)
     return data
 
 
-async def _background_refresh(symbol: str) -> None:
+async def _fetch_live_bounded(
+    symbol: str,
+    *,
+    live_gate: Optional[asyncio.Semaphore] = None,
+    live_observer=None,
+) -> Optional[dict]:
+    """Globally bound and coalesce live provider work by ETF symbol."""
+    existing = _live_refresh_tasks.get(symbol)
+    if existing is not None:
+        return await asyncio.shield(existing)
+
+    async def _run() -> Optional[dict]:
+        async with _live_refresh_semaphore:
+            if live_gate is None:
+                return await _fetch_holdings(symbol)
+            async with live_gate:
+                if live_observer is not None:
+                    live_observer(1)
+                try:
+                    return await _fetch_holdings(symbol)
+                finally:
+                    if live_observer is not None:
+                        live_observer(-1)
+
+    task = asyncio.create_task(_run())
+    _live_refresh_tasks[symbol] = task
+    task.add_done_callback(
+        lambda finished, sym=symbol: (
+            _live_refresh_tasks.pop(sym, None)
+            if _live_refresh_tasks.get(sym) is finished
+            else None
+        )
+    )
+    return await asyncio.shield(task)
+
+
+async def _background_refresh(
+    symbol: str,
+    *,
+    live_gate: Optional[asyncio.Semaphore] = None,
+    live_observer=None,
+) -> None:
     """Silently refresh holdings in the background — called for stale data."""
     if symbol in _refreshing:
         return
@@ -268,9 +312,13 @@ async def _background_refresh(symbol: str) -> None:
     _refreshing.add(symbol)
     _last_attempt_at[symbol] = time.time()
     try:
-        fresh = await _fetch_holdings(symbol)
+        fresh = await _fetch_live_bounded(
+            symbol,
+            live_gate=live_gate,
+            live_observer=live_observer,
+        )
         if fresh:
-            _stamp_and_cache(symbol, fresh)
+            await _stamp_and_cache(symbol, fresh)
             print(f"[ETF_HOLDINGS] Background refresh complete: {symbol}")
         else:
             print(f"[ETF_HOLDINGS] Background refresh failed (no data): {symbol}")
@@ -282,7 +330,13 @@ async def _background_refresh(symbol: str) -> None:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-async def get_etf_holdings(symbol: str) -> dict:
+async def get_etf_holdings(
+    symbol: str,
+    *,
+    diagnostics: Optional[dict] = None,
+    live_gate: Optional[asyncio.Semaphore] = None,
+    live_observer=None,
+) -> dict:
     """
     Return ETF holdings for `symbol`.
 
@@ -299,25 +353,50 @@ async def get_etf_holdings(symbol: str) -> dict:
     # 1. Memory cache (fastest)
     mem = cache.get(_mem_key(sym))
     if mem and _is_fresh(mem):
+        if diagnostics is not None:
+            diagnostics["cache_hits"] = diagnostics.get("cache_hits", 0) + 1
         return mem
 
     # 2. Disk cache
-    disk = _load_disk(sym)
+    disk = await asyncio.to_thread(_load_disk, sym)
 
     if disk and _is_fresh(disk):
         # Warm memory cache and return
         cache.set(_mem_key(sym), disk, _MEM_CACHE_TTL)
+        if diagnostics is not None:
+            diagnostics["cache_hits"] = diagnostics.get("cache_hits", 0) + 1
         return disk
 
     if disk and _is_usable(disk):
         # Stale — return immediately, refresh in background
         cache.set(_mem_key(sym), disk, _MEM_CACHE_TTL)
-        asyncio.create_task(_background_refresh(sym))
+        asyncio.create_task(
+            _background_refresh(
+                sym,
+                live_gate=live_gate,
+                live_observer=live_observer,
+            )
+        )
+        if diagnostics is not None:
+            diagnostics["stale_served"] = diagnostics.get("stale_served", 0) + 1
+            diagnostics["live_attempts"] = diagnostics.get("live_attempts", 0) + 1
         print(f"[ETF_HOLDINGS] Serving stale data for {sym}, background refresh queued")
         return disk
 
     # 3. No usable cache — fetch live, but respect the 6-hour backoff so a
     #    persistent 402/403/429 doesn't retry on every single call.
+    existing_live = _live_refresh_tasks.get(sym)
+    if existing_live is not None:
+        if diagnostics is not None:
+            diagnostics["live_attempts"] = diagnostics.get("live_attempts", 0) + 1
+        fresh = await _fetch_live_bounded(
+            sym,
+            live_gate=live_gate,
+            live_observer=live_observer,
+        )
+        if fresh:
+            return await _stamp_and_cache(sym, fresh)
+
     last = _last_attempt_at.get(sym, 0)
     if time.time() - last < _RETRY_BACKOFF:
         # Within backoff window — return empty rather than hammering the API
@@ -334,9 +413,15 @@ async def get_etf_holdings(symbol: str) -> dict:
 
     print(f"[ETF_HOLDINGS] Cache miss for {sym} — fetching live")
     _last_attempt_at[sym] = time.time()
-    fresh = await _fetch_holdings(sym)
+    if diagnostics is not None:
+        diagnostics["live_attempts"] = diagnostics.get("live_attempts", 0) + 1
+    fresh = await _fetch_live_bounded(
+        sym,
+        live_gate=live_gate,
+        live_observer=live_observer,
+    )
     if fresh:
-        return _stamp_and_cache(sym, fresh)
+        return await _stamp_and_cache(sym, fresh)
 
     # 4. Last resort: if we have anything on disk, return it even if >90 days
     if disk:

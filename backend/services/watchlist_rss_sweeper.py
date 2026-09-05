@@ -33,12 +33,14 @@ from services.watchlist_service import (
 
 # ── Sweeper configuration ─────────────────────────────────────────────────────
 
-_TARGET_INTERVAL_S   = 120    # target full-sweep interval seconds
-_SWEEP_SEM_SIZE      = 15     # max concurrent ticker workers
-_PRUNE_EVERY_N       = 10     # prune old rows every N sweeps
-_FETCH_TIMEOUT_S     = 8.0    # per-provider request timeout
-_RETAIN_HOURS        = 120    # archive retention: 96h comparison + 24h buffer
-_STARTUP_DELAY_S     = 30     # delay before first sweep
+_TARGET_INTERVAL_S       = 120    # target full-sweep interval seconds
+_MIN_POST_SWEEP_IDLE_S   = 60     # guaranteed breathing room after a full sweep
+_SWEEP_SEM_SIZE          = 8      # max concurrent ticker workers
+_DB_WRITE_SEM_SIZE       = 4      # max concurrent synchronous archive writes
+_PRUNE_EVERY_N           = 10     # prune old rows every N sweeps
+_FETCH_TIMEOUT_S         = 8.0    # per-provider request timeout
+_RETAIN_HOURS            = 120    # archive retention: 96h comparison + 24h buffer
+_STARTUP_DELAY_S         = 120    # delay before the default startup pass
 
 _USER_AGENT = "Mozilla/5.0 (compatible; CaelynAI/1.0)"
 
@@ -227,6 +229,7 @@ async def _sweep_ticker(
     ticker: str,
     client: httpx.AsyncClient,
     sem: asyncio.Semaphore,
+    db_write_sem: asyncio.Semaphore,
     sweep_diag: dict,
 ) -> dict:
     """
@@ -281,9 +284,10 @@ async def _sweep_ticker(
             try:
                 from data.rss_article_archive import upsert_with_cache
                 loop = asyncio.get_event_loop()
-                write_stats = await loop.run_in_executor(
-                    None, upsert_with_cache, ticker, merged
-                )
+                async with db_write_sem:
+                    write_stats = await loop.run_in_executor(
+                        None, upsert_with_cache, ticker, merged
+                    )
                 sweep_diag["articles_observed"]                    += write_stats.get("articles_observed", 0)
                 sweep_diag["db_insert_attempts"]                   += write_stats.get("db_insert_attempts", 0)
                 sweep_diag["db_update_attempts"]                   += write_stats.get("db_update_attempts", 0)
@@ -317,7 +321,7 @@ async def _sweep_ticker(
 
 # ── Full sweep ────────────────────────────────────────────────────────────────
 
-async def run_rss_sweep() -> dict:
+async def run_rss_sweep(*, await_hyperscaler_rebuild: bool = False) -> dict:
     """
     One full sweep of all active Watchlist RSS feeds.
     Guarded by _SWEEP_LOCK — never overlaps with itself.
@@ -369,13 +373,13 @@ async def run_rss_sweep() -> dict:
     all_tickers: set[str] = set()
     watchlists: list = []
     try:
-        watchlists = list_watchlists() or []
+        watchlists = await asyncio.to_thread(list_watchlists) or []
     except Exception as e:
         print(f"[RSS_SWEEPER] list_watchlists error: {e}")
 
     for wl_meta in watchlists:
         try:
-            wl = load_watchlist(wl_meta.get("id"))
+            wl = await asyncio.to_thread(load_watchlist, wl_meta.get("id"))
             if wl:
                 for t in (wl.get("tickers") or []):
                     if t and isinstance(t, str):
@@ -401,13 +405,17 @@ async def run_rss_sweep() -> dict:
 
     # ── 2. Bounded concurrent RSS sweep ─────────────────────────────────────
     sem = asyncio.Semaphore(_SWEEP_SEM_SIZE)
+    db_write_sem = asyncio.Semaphore(_DB_WRITE_SEM_SIZE)
 
     async with httpx.AsyncClient(
         follow_redirects=True,
         headers={"User-Agent": _USER_AGENT},
         timeout=_FETCH_TIMEOUT_S + 2.0,
     ) as client:
-        tasks      = [_sweep_ticker(t, client, sem, sweep_diag) for t in tickers]
+        tasks = [
+            _sweep_ticker(t, client, sem, db_write_sem, sweep_diag)
+            for t in tickers
+        ]
         raw_results = await asyncio.gather(*tasks, return_exceptions=True)
 
     results: list[dict] = [r for r in raw_results if isinstance(r, dict)]
@@ -482,7 +490,11 @@ async def run_rss_sweep() -> dict:
     try:
         from services import watchlist_router as _wr
         if hasattr(_wr, "_HYP_CACHE") and not getattr(_wr, "_HYP_CACHE_BUILDING", False):
-            asyncio.ensure_future(_wr._rebuild_hyperscaler_cache(tickers))
+            rebuild = _wr._rebuild_hyperscaler_cache(tickers)
+            if await_hyperscaler_rebuild:
+                await rebuild
+            else:
+                asyncio.ensure_future(rebuild)
     except Exception:
         pass
 
@@ -512,9 +524,8 @@ async def run_rss_sweep() -> dict:
     return sweep_diag
 
 
-# ── Main loop (registered exactly once in main.py lifespan) ──────────────────
-
-async def rss_sweeper_loop() -> None:
+# ── Main loop (registered once in main.py lifespan) ──────────────────────────
+async def rss_sweeper_loop(*, skip_initial: bool = False) -> None:
     """
     Continuous RSS archive sweep loop.
     Registered via asyncio.create_task(rss_sweeper_loop()) in main.py lifespan.
@@ -524,18 +535,33 @@ async def rss_sweeper_loop() -> None:
     _SWEEPER_DIAG["collector_started_at"] = time.time()
     _SWEEPER_DIAG["loop_registered"]      = True
 
-    await asyncio.sleep(_STARTUP_DELAY_S)   # let PG init settle
+    if not skip_initial:
+        await asyncio.sleep(_STARTUP_DELAY_S)
+        try:
+            from data.rss_article_archive import warm_seen_cache
+            n = await asyncio.to_thread(warm_seen_cache)
+            print(f"[RSS_SWEEPER] seen cache warmed: {n} rows loaded from Neon")
+        except Exception as e:
+            print(f"[RSS_SWEEPER] seen cache warm error (non-fatal): {e}")
+        startup_sweep_start = time.time()
+        async with _SWEEP_LOCK:
+            try:
+                await run_rss_sweep()
+            except Exception as exc:
+                print(f"[RSS_SWEEPER] unhandled sweep error: {exc}")
+        startup_elapsed = time.time() - startup_sweep_start
+        initial_wait = max(
+            _MIN_POST_SWEEP_IDLE_S,
+            _TARGET_INTERVAL_S - startup_elapsed,
+        )
+    else:
+        initial_wait = _TARGET_INTERVAL_S
 
-    # Warm in-memory seen cache from Neon before the first sweep.
-    # This prevents the first sweep from re-inserting rows that already exist
-    # in the archive from a previous process lifetime.
-    try:
-        from data.rss_article_archive import warm_seen_cache
-        loop = asyncio.get_event_loop()
-        n = await loop.run_in_executor(None, warm_seen_cache)
-        print(f"[RSS_SWEEPER] seen cache warmed: {n} rows loaded from Neon")
-    except Exception as e:
-        print(f"[RSS_SWEEPER] seen cache warm error (non-fatal): {e}")
+    next_ts = time.time() + initial_wait
+    _SWEEPER_DIAG["next_sweep_target_at"] = datetime.utcfromtimestamp(next_ts).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    await asyncio.sleep(initial_wait)
 
     while True:
         sweep_start = time.time()
@@ -552,7 +578,7 @@ async def rss_sweeper_loop() -> None:
                 print(f"[RSS_SWEEPER] unhandled sweep error: {exc}")
 
         elapsed = time.time() - sweep_start
-        wait    = max(0.0, _TARGET_INTERVAL_S - elapsed)
+        wait = max(_MIN_POST_SWEEP_IDLE_S, _TARGET_INTERVAL_S - elapsed)
         next_ts = time.time() + wait
         _SWEEPER_DIAG["next_sweep_target_at"] = datetime.utcfromtimestamp(next_ts).strftime(
             "%Y-%m-%dT%H:%M:%SZ"

@@ -108,6 +108,14 @@ _FMP_HIST_SEM = asyncio.Semaphore(25)
 # Semaphore for Tradier intraday timesales HTTP concurrency gate (≤20 simultaneous).
 # Must NOT be held while waiting for rate-limit admission — acquire only after admitted.
 _INTRADAY_SEM = asyncio.Semaphore(20)
+_THEME_RS_YF_SEM = asyncio.Semaphore(4)
+_THEME_RS_CANONICAL_BATCH_SEM = asyncio.Semaphore(1)
+_HISTORICAL_COMPUTE_GATE = asyncio.Semaphore(1)
+_THEME_RS_DIAG: dict[str, dict] = {}
+_THEME_RS_YF_ACTIVE = 0
+_THEME_RS_YF_MAX_ACTIVE = 0
+_HISTORICAL_COMPUTE_INFLIGHT = 0
+_HISTORICAL_COMPUTE_MAX_INFLIGHT = 0
 # In-flight coalescing for intraday requests is now handled at the provider level via
 # _TIMESALES_FUTURES in tradier_provider.py.  The service no longer maintains a
 # separate future registry — doing so created two independent registries for the
@@ -159,6 +167,100 @@ def _get_lock(tf: str) -> asyncio.Lock:
     if tf not in _refresh_locks:
         _refresh_locks[tf] = asyncio.Lock()
     return _refresh_locks[tf]
+
+
+def _canonical_history_batch(
+    symbols: list[str],
+) -> tuple[dict[str, list[dict]], list[str]]:
+    from services.canonical_history_service import get_bars
+
+    hits: dict[str, list[dict]] = {}
+    missing: list[str] = []
+    for symbol in symbols:
+        try:
+            result = get_bars(symbol, require_fresh=False)
+            bars = result.get("bars") if result else None
+            if bars and len(bars) >= 40:
+                hits[symbol] = bars
+            else:
+                missing.append(symbol)
+        except Exception:
+            missing.append(symbol)
+    return hits, missing
+
+
+async def _canonical_history_batch_offloop(
+    symbols: list[str],
+) -> tuple[dict[str, list[dict]], list[str]]:
+    async with _THEME_RS_CANONICAL_BATCH_SEM:
+        return await asyncio.to_thread(_canonical_history_batch, symbols)
+
+
+async def _theme_rs_yfinance_history(symbol: str, days: int) -> list[dict]:
+    global _THEME_RS_YF_ACTIVE, _THEME_RS_YF_MAX_ACTIVE
+    async with _THEME_RS_YF_SEM:
+        _THEME_RS_YF_ACTIVE += 1
+        _THEME_RS_YF_MAX_ACTIVE = max(
+            _THEME_RS_YF_MAX_ACTIVE, _THEME_RS_YF_ACTIVE
+        )
+        try:
+            return await fetch_etf_history(symbol, days=days)
+        finally:
+            _THEME_RS_YF_ACTIVE -= 1
+
+
+async def _theme_rs_heartbeat(tf: str, stop: asyncio.Event) -> None:
+    loop = asyncio.get_running_loop()
+    expected = loop.time() + 0.1
+    while not stop.is_set():
+        await asyncio.sleep(0.1)
+        now = loop.time()
+        diag = _THEME_RS_DIAG.setdefault(tf, {})
+        lag_ms = max(0.0, (now - expected) * 1000.0)
+        if lag_ms > diag.get("max_event_loop_lag_ms", 0.0):
+            diag["max_event_loop_lag_ms"] = lag_ms
+            diag["max_event_loop_lag_phase"] = diag.get("phase", "unknown")
+        expected = now + 0.1
+
+
+async def _run_compute_with_headroom(tf: str) -> list[dict]:
+    """Run historical full computes one-at-a-time; 1D retains existing behavior."""
+    global _HISTORICAL_COMPUTE_INFLIGHT, _HISTORICAL_COMPUTE_MAX_INFLIGHT
+    diag = _THEME_RS_DIAG.setdefault(tf, {})
+    diag.update(
+        compute_active=True,
+        max_event_loop_lag_ms=0.0,
+        max_event_loop_lag_phase="none",
+    )
+    heartbeat_stop = asyncio.Event()
+    heartbeat_task = asyncio.create_task(_theme_rs_heartbeat(tf, heartbeat_stop))
+    if tf == "1D":
+        try:
+            return await _compute(tf)
+        finally:
+            heartbeat_stop.set()
+            await heartbeat_task
+            diag["compute_active"] = False
+
+    diag["historical_gate_waiting"] = True
+    try:
+        async with _HISTORICAL_COMPUTE_GATE:
+            diag["historical_gate_waiting"] = False
+            _HISTORICAL_COMPUTE_INFLIGHT += 1
+            _HISTORICAL_COMPUTE_MAX_INFLIGHT = max(
+                _HISTORICAL_COMPUTE_MAX_INFLIGHT,
+                _HISTORICAL_COMPUTE_INFLIGHT,
+            )
+            diag["historical_compute_inflight"] = _HISTORICAL_COMPUTE_INFLIGHT
+            try:
+                return await _compute(tf)
+            finally:
+                _HISTORICAL_COMPUTE_INFLIGHT -= 1
+                diag["historical_compute_inflight"] = 0
+    finally:
+        heartbeat_stop.set()
+        await heartbeat_task
+        diag["compute_active"] = False
 
 
 # ── TTL helpers ────────────────────────────────────────────────────────────────
@@ -961,7 +1063,14 @@ async def _fetch_intraday_bars(sym: str) -> list[dict]:
     return bars_out
 
 
-async def _fetch_proxy_history(symbol: str, days: int = 400) -> tuple[list[dict], str]:
+async def _fetch_proxy_history(
+    symbol: str,
+    days: int = 400,
+    *,
+    canonical_checked: bool = False,
+    canonical_bars: Optional[list[dict]] = None,
+    skip_fmp: bool = False,
+) -> tuple[list[dict], str]:
     """
     Canonical disk cache (primary) → FMP → Tradier daily (unmanaged) → yfinance (emergency).
     Returns (bars, source_name).
@@ -984,23 +1093,28 @@ async def _fetch_proxy_history(symbol: str, days: int = 400) -> tuple[list[dict]
     sym = symbol.upper()
 
     # ── Step 0: Canonical 10Y disk cache (V4.2.5.5 — no provider call) ──────
-    try:
-        from services.canonical_history_service import get_bars as _get_canon
-        canon = _get_canon(sym, require_fresh=False)
-        if canon and canon.get("bars") and len(canon["bars"]) >= 40:
-            return canon["bars"], "canonical"
-    except Exception:
-        pass
+    if canonical_checked:
+        if canonical_bars:
+            return canonical_bars, "canonical"
+    else:
+        try:
+            from services.canonical_history_service import get_bars as _get_canon
+            canon = await asyncio.to_thread(_get_canon, sym, require_fresh=False)
+            if canon and canon.get("bars") and len(canon["bars"]) >= 40:
+                return canon["bars"], "canonical"
+        except Exception:
+            pass
 
-    bars = await _fetch_fmp_daily_history(symbol)
-    if bars:
-        return bars, "fmp"
+    if not skip_fmp:
+        bars = await _fetch_fmp_daily_history(symbol)
+        if bars:
+            return bars, "fmp"
 
     bars = await _fetch_tradier_daily_history(symbol, days=days)
     if bars:
         return bars, "tradier_hist"
 
-    bars = await fetch_etf_history(symbol, days=days)
+    bars = await _theme_rs_yfinance_history(symbol, days)
     if bars:
         return bars, "yfinance"
 
@@ -1456,6 +1570,16 @@ async def _build_theme_row(
     Build one theme row for the given timeframe.
     stock_perfs: pre-computed per-stock returns for the requested timeframe.
     """
+    _row_started = time.perf_counter()
+    _phase_started = _row_started
+    _phase_ms: dict[str, float] = {}
+
+    def _finish_phase(name: str) -> None:
+        nonlocal _phase_started
+        now = time.perf_counter()
+        _phase_ms[name] = (now - _phase_started) * 1000.0
+        _phase_started = now
+
     proxy_syms = meta["proxy_symbols"]
 
     # ── Resolve DRAM special handling for memory_storage ──────────────────────
@@ -1517,6 +1641,7 @@ async def _build_theme_row(
             return None
         # Custom theme: still include row even when price data is unavailable
         # (e.g. a custom basket with no standard ETF proxy).  Performance fields will be None.
+    _finish_phase("perf")
 
     # ── Representative price ───────────────────────────────────────────────────
     lead_sym   = None
@@ -1552,11 +1677,13 @@ async def _build_theme_row(
 
     pct_from_50d = round(statistics.median(pct50s), 2) if pct50s else None
     trend_accel  = round(statistics.median(accels), 2)  if accels else None
+    _finish_phase("representative_and_trend")
 
     # ── Dynamic leader/laggard universe ───────────────────────────────────────
     universe, disc_sources, universe_src_label = await _build_leader_universe(
         theme_id, meta, used_proxies
     )
+    _finish_phase("leader_universe")
 
     # ── Leaders/laggards ranked by selected timeframe return ───────────────────
     sym_perfs: list[tuple[str, float, str]] = []   # (sym, return_pct, disc_src)
@@ -1585,6 +1712,7 @@ async def _build_theme_row(
     if sym_perfs:
         up = sum(1 for _, r, _ in sym_perfs if r > 0)
         breadth = round(up / len(sym_perfs) * 100, 1)
+    _finish_phase("leader_ranking")
 
     # ── Performance curve (normalized daily series for the selected TF) ─────────
     if tf == "1D":
@@ -1609,9 +1737,16 @@ async def _build_theme_row(
         # Coverage: a symbol "has data" when its history list is non-empty.
         _covered    = [s for s in proxy_syms if (histories.get(s) or ([], ""))[0]]
         _missing    = [s for s in proxy_syms if not (histories.get(s) or ([], ""))[0]]
+    _finish_phase("performance_curve")
 
     # ── Weinstein Stage Analysis ───────────────────────────────────────────────
     stage_data: dict = {}
+    _diag = _THEME_RS_DIAG.setdefault(tf, {})
+    _diag.update(
+        phase="stage_analysis",
+        stage_analysis_active=True,
+        stage_analysis_theme=theme_id,
+    )
     try:
         from services.stage_analysis import analyze_theme_stage
         spy_daily, _ = histories.get("SPY", ([], ""))
@@ -1620,15 +1755,23 @@ async def _build_theme_row(
             bars, _ = histories.get(sym, ([], ""))
             if bars:
                 proxy_bars_map[sym] = bars
-        stage_data = analyze_theme_stage(
+        stage_data = await asyncio.to_thread(
+            analyze_theme_stage,
             proxy_type=meta["proxy_type"],
             proxy_daily_bars_map=proxy_bars_map,
             spy_daily_bars=spy_daily if spy_daily else None,
         )
     except Exception as _stage_err:
         print(f"[THEME_RS][stage] {theme_id}: {_stage_err}")
+    finally:
+        _diag.update(
+            phase="theme_row_computation",
+            stage_analysis_active=False,
+            stage_analysis_theme=None,
+        )
+    _finish_phase("stage_analysis")
 
-    return {
+    response = {
         "theme_id":              theme_id,
         "display_name":          meta["display_name"],
         "classification":        meta.get("classification", "theme"),
@@ -1725,6 +1868,21 @@ async def _build_theme_row(
         "stage_updated_at":      stage_data.get("stage_updated_at"),
         "stage_source":          stage_data.get("stage_source", "fallback"),
     }
+    _finish_phase("response_build")
+
+    _total_ms = (time.perf_counter() - _row_started) * 1000.0
+    if _total_ms >= 250.0:
+        print(
+            f"[THEME_RS_ROW_SLOW] theme={theme_id} total_ms={_total_ms:.3f} "
+            f"perf_ms={_phase_ms.get('perf', 0.0):.3f} "
+            f"representative_and_trend_ms={_phase_ms.get('representative_and_trend', 0.0):.3f} "
+            f"leader_universe_ms={_phase_ms.get('leader_universe', 0.0):.3f} "
+            f"leader_ranking_ms={_phase_ms.get('leader_ranking', 0.0):.3f} "
+            f"performance_curve_ms={_phase_ms.get('performance_curve', 0.0):.3f} "
+            f"stage_analysis_ms={_phase_ms.get('stage_analysis', 0.0):.3f} "
+            f"response_build_ms={_phase_ms.get('response_build', 0.0):.3f}"
+        )
+    return response
 
 
 # ── RS scoring ─────────────────────────────────────────────────────────────────
@@ -1804,8 +1962,104 @@ def _score_and_state(
 
 # ── Main compute pass ──────────────────────────────────────────────────────────
 
+async def _build_theme_rows(
+    tf: str,
+    quotes: dict[str, dict],
+    histories: dict[str, tuple[list[dict], str]],
+    stock_perfs: dict[str, Optional[float]],
+    stock_src_map: dict[str, str],
+    leaders: dict[str, dict],
+    intraday_bars: dict[str, list[dict]],
+) -> list[dict]:
+    """Build rows in registry order with an explicit cooperative yield per attempt."""
+    diag = _THEME_RS_DIAG.setdefault(tf, {})
+    rows: list[dict] = []
+    row_times: list[tuple[str, float]] = []
+    row_started = time.perf_counter()
+    yield_count = 0
+
+    for index, (theme_id, meta) in enumerate(THEME_RS_UNIVERSE.items(), start=1):
+        diag.update(
+            phase="theme_row_computation",
+            theme_row_phase_active=True,
+            theme_row_current_index=index,
+            theme_row_current_theme=theme_id,
+        )
+        one_started = time.perf_counter()
+        try:
+            row = await _build_theme_row(
+                theme_id, meta, quotes, histories, tf, stock_perfs, stock_src_map,
+                leaders=leaders,
+                intraday_bars=intraday_bars,
+            )
+            if row:
+                rows.append(row)
+            else:
+                print(f"[THEME_RS] No data for '{theme_id}' — skipped")
+        except Exception as e:
+            print(f"[THEME_RS] Row error '{theme_id}': {e}")
+        finally:
+            row_times.append(
+                (theme_id, (time.perf_counter() - one_started) * 1000.0)
+            )
+            yield_count += 1
+            await asyncio.sleep(0)
+
+    elapsed = time.perf_counter() - row_started
+    ordered_ms = sorted(ms for _, ms in row_times)
+    p95_index = max(
+        0, min(len(ordered_ms) - 1, int((len(ordered_ms) * 0.95) + 0.999999) - 1)
+    )
+    slowest_theme, max_row_ms = max(
+        row_times, key=lambda item: item[1], default=("", 0.0)
+    )
+    diag.update(
+        theme_row_phase_active=False,
+        theme_row_count=len(row_times),
+        theme_row_total_elapsed_s=round(elapsed, 3),
+        theme_row_max_single_row_ms=round(max_row_ms, 3),
+        theme_row_p95_single_row_ms=round(
+            ordered_ms[p95_index] if ordered_ms else 0.0, 3
+        ),
+        theme_row_slowest_theme=slowest_theme,
+        theme_row_yield_count=yield_count,
+        theme_row_max_event_loop_lag_ms=round(
+            diag.get("max_event_loop_lag_ms", 0.0), 3
+        ),
+    )
+    print(
+        f"[THEME_RS_ROWS] tf={tf} count={len(row_times)} "
+        f"elapsed_s={elapsed:.3f} max_row_ms={max_row_ms:.1f} "
+        f"p95_row_ms={diag['theme_row_p95_single_row_ms']:.1f} "
+        f"slowest_theme={slowest_theme or 'none'} yields={yield_count} "
+        f"max_event_loop_lag_ms={diag['theme_row_max_event_loop_lag_ms']:.1f}"
+    )
+    return rows
+
+
 async def _compute(tf: str) -> list[dict]:
     """Full compute pass → quoted + history → scored theme rows."""
+    diag = _THEME_RS_DIAG.setdefault(tf, {})
+    diag.update(
+        phase="theme_plan",
+        symbol_count=0,
+        canonical_hits=0,
+        canonical_misses=0,
+        fmp_blocked_skipped=0,
+        yf_attempts=0,
+        proxy_symbols=0,
+        proxy_canonical_hits=0,
+        proxy_canonical_misses=0,
+        proxy_canonical_total_ms=0.0,
+        proxy_fallback_total_ms=0.0,
+        dynamic_universe_total_ms=0.0,
+        dynamic_canonical_total_ms=0.0,
+        dynamic_yfinance_total_ms=0.0,
+        dynamic_quotes_total_ms=0.0,
+        leader_db_total_ms=0.0,
+        stage_analysis_active=False,
+        stage_analysis_theme=None,
+    )
     print(f"[THEME_RS] Computing fresh data (tf={tf}) …")
 
     # ── 1. Collect all symbols needed ─────────────────────────────────────────
@@ -1892,17 +2146,52 @@ async def _compute(tf: str) -> list[dict]:
     else:
         proxy_hist_days = 1900 if tf == "5Y" else 400
         print(f"[THEME_RS] Fetching proxy history for {len(proxy_syms_with_dram)} symbols (days={proxy_hist_days}) …")
-        hist_tasks = [_fetch_proxy_history(s, days=proxy_hist_days) for s in proxy_syms_with_dram]
+        diag["phase"] = "proxy_canonical"
+        diag["proxy_symbols"] = len(proxy_syms_with_dram)
+        _phase_started = time.perf_counter()
+        proxy_canonical, proxy_missing = await _canonical_history_batch_offloop(
+            proxy_syms_with_dram
+        )
+        diag["proxy_canonical_total_ms"] = round(
+            (time.perf_counter() - _phase_started) * 1000.0, 3
+        )
+        diag["proxy_canonical_hits"] = len(proxy_canonical)
+        diag["proxy_canonical_misses"] = len(proxy_missing)
+        from services.fmp_full_guard import is_full_historical_blocked
+        fmp_blocked = is_full_historical_blocked()
+        if fmp_blocked:
+            diag["fmp_blocked_skipped"] += len(proxy_missing)
+            print(
+                "[THEME_RS] FMP historical blocked globally; "
+                f"skipped {len(proxy_missing)} guaranteed-blocked attempts"
+            )
+        diag["phase"] = "proxy_provider_fallback"
+        _phase_started = time.perf_counter()
+        hist_tasks = [
+            _fetch_proxy_history(
+                s,
+                days=proxy_hist_days,
+                canonical_checked=True,
+                canonical_bars=proxy_canonical.get(s),
+                skip_fmp=fmp_blocked,
+            )
+            for s in proxy_syms_with_dram
+        ]
         hist_results = await asyncio.gather(*hist_tasks, return_exceptions=True)
         for sym, result in zip(proxy_syms_with_dram, hist_results):
             if isinstance(result, tuple):
                 histories[sym] = result
             else:
                 histories[sym] = ([], "unavailable")
+        diag["proxy_fallback_total_ms"] = round(
+            (time.perf_counter() - _phase_started) * 1000.0, 3
+        )
 
     # ── 4. Discover all dynamic universe stocks across all themes ─────────────
     # We need ETF holdings per theme's primary proxy — gather now to dedup
     print("[THEME_RS] Discovering dynamic leader universes …")
+    diag["phase"] = "dynamic_universe_discovery"
+    _phase_started = time.perf_counter()
     primary_proxies = []
     for meta in THEME_RS_UNIVERSE.values():
         proxies = meta["proxy_symbols"]
@@ -1922,6 +2211,10 @@ async def _compute(tf: str) -> list[dict]:
     all_dynamic_stocks.update(ALL_CANDIDATE_SYMBOLS)
     all_dynamic_stocks -= set(proxy_syms_with_dram)   # already have proxy history
     all_dynamic_stocks_list = sorted(all_dynamic_stocks)
+    diag["symbol_count"] = len(all_dynamic_stocks_list)
+    diag["dynamic_universe_total_ms"] = round(
+        (time.perf_counter() - _phase_started) * 1000.0, 3
+    )
 
     # ── 5. Fetch history for all dynamic universe stocks ──────────────────────
     # For 1D: Tradier batch quotes sufficient — skip heavy history.
@@ -1941,16 +2234,16 @@ async def _compute(tf: str) -> list[dict]:
         # bars is identical to 400 bars for 7D/30D/1Y scoring.
         canonical_stock_hits: dict[str, list[dict]] = {}
         yf_needed: list[str] = []
-        try:
-            from services.canonical_history_service import get_bars as _get_canon_stk
-            for _s in all_dynamic_stocks_list:
-                _c = _get_canon_stk(_s, require_fresh=False)
-                if _c and _c.get("bars") and len(_c["bars"]) >= 40:
-                    canonical_stock_hits[_s] = _c["bars"]
-                else:
-                    yf_needed.append(_s)
-        except Exception:
-            yf_needed = list(all_dynamic_stocks_list)
+        diag["phase"] = "dynamic_canonical"
+        _phase_started = time.perf_counter()
+        canonical_stock_hits, yf_needed = await _canonical_history_batch_offloop(
+            all_dynamic_stocks_list
+        )
+        diag["dynamic_canonical_total_ms"] = round(
+            (time.perf_counter() - _phase_started) * 1000.0, 3
+        )
+        diag["canonical_hits"] = len(canonical_stock_hits)
+        diag["canonical_misses"] = len(yf_needed)
 
         for _s, _bars in canonical_stock_hits.items():
             histories[_s] = (_bars, "canonical")
@@ -1960,19 +2253,30 @@ async def _compute(tf: str) -> list[dict]:
             f"yf_needed={len(yf_needed)} (yf_days={yf_days})"
         )
         if yf_needed:
-            yf_tasks = [fetch_etf_history(s, days=yf_days) for s in yf_needed]
+            diag["phase"] = "dynamic_yfinance"
+            diag["yf_attempts"] = len(yf_needed)
+            _phase_started = time.perf_counter()
+            yf_tasks = [_theme_rs_yfinance_history(s, yf_days) for s in yf_needed]
             yf_results = await asyncio.gather(*yf_tasks, return_exceptions=True)
             for sym, result in zip(yf_needed, yf_results):
                 if isinstance(result, list) and result:
                     histories[sym] = (result, "yfinance")
                 else:
                     histories[sym] = ([], "unavailable")
+            diag["dynamic_yfinance_total_ms"] = round(
+                (time.perf_counter() - _phase_started) * 1000.0, 3
+            )
 
     # Fetch quotes for dynamic stocks not yet covered
     missing_quotes = [s for s in all_dynamic_stocks_list if s not in quotes]
     if missing_quotes:
+        diag["phase"] = "dynamic_quotes"
+        _phase_started = time.perf_counter()
         extra_quotes = await _fetch_all_quotes(missing_quotes)
         quotes.update(extra_quotes)
+        diag["dynamic_quotes_total_ms"] = round(
+            (time.perf_counter() - _phase_started) * 1000.0, 3
+        )
 
     # ── 6. Pre-compute per-stock tf returns for leader/laggard ranking ────────
     # Cap at ±500% to filter yfinance adjusted-price anomalies from spin-offs etc.
@@ -1994,24 +2298,18 @@ async def _compute(tf: str) -> list[dict]:
     leaders: dict[str, dict] = {}
     try:
         from data.pg_storage import get_theme_leaders_map
-        leaders = get_theme_leaders_map()
+        diag["phase"] = "leader_db"
+        _phase_started = time.perf_counter()
+        leaders = await asyncio.to_thread(get_theme_leaders_map)
+        diag["leader_db_total_ms"] = round(
+            (time.perf_counter() - _phase_started) * 1000.0, 3
+        )
     except Exception as _ldr_err:
         print(f"[THEME_RS] Warning: could not load theme leaders: {_ldr_err}")
 
-    rows: list[dict] = []
-    for theme_id, meta in THEME_RS_UNIVERSE.items():
-        try:
-            row = await _build_theme_row(
-                theme_id, meta, quotes, histories, tf, stock_perfs, stock_src_map,
-                leaders=leaders,
-                intraday_bars=intraday_bars,
-            )
-            if row:
-                rows.append(row)
-            else:
-                print(f"[THEME_RS] No data for '{theme_id}' — skipped")
-        except Exception as e:
-            print(f"[THEME_RS] Row error '{theme_id}': {e}")
+    rows = await _build_theme_rows(
+        tf, quotes, histories, stock_perfs, stock_src_map, leaders, intraday_bars
+    )
 
     # ── 8. Score and sort ──────────────────────────────────────────────────────
     rows = _score_and_state(rows, tf, histories, quotes)
@@ -2053,9 +2351,12 @@ async def _locked_refresh(tf: str, force: bool = False) -> None:
 
     async with lock:
         t0 = time.time()
+        diag = _THEME_RS_DIAG.setdefault(tf, {})
+        diag.update(active=True, phase="starting", started_at=t0,
+                    max_event_loop_lag_ms=0.0)
         print(f"[THEME_RS] {tf} refresh started")
         try:
-            rows = await _compute(tf)
+            rows = await _run_compute_with_headroom(tf)
             if rows:
                 # ── Count guard: never write a partial result to TTL cache or LKG ──
                 # Partial results occur when FMP is blocked/rate-limited/outaged.
@@ -2087,11 +2388,39 @@ async def _locked_refresh(tf: str, force: bool = False) -> None:
             import traceback
             traceback.print_exc()
             print(f"[THEME_RS] {tf} refresh error: {exc}")
+        finally:
+            diag.update(
+                active=False,
+                phase="idle",
+                elapsed_s=round(time.time() - t0, 3),
+                yf_max_inflight=_THEME_RS_YF_MAX_ACTIVE,
+            )
+            print(
+                f"[THEME_RS_HEADROOM] tf={tf} elapsed_s={diag['elapsed_s']} "
+                f"symbols={diag.get('symbol_count', 0)} "
+                f"canonical_hits={diag.get('canonical_hits', 0)} "
+                f"canonical_misses={diag.get('canonical_misses', 0)} "
+                f"fmp_blocked_skipped={diag.get('fmp_blocked_skipped', 0)} "
+                f"yf_attempts={diag.get('yf_attempts', 0)} "
+                f"yf_max_inflight={diag['yf_max_inflight']} "
+                f"proxy_symbols={diag.get('proxy_symbols', 0)} "
+                f"proxy_canonical_hits={diag.get('proxy_canonical_hits', 0)} "
+                f"proxy_canonical_misses={diag.get('proxy_canonical_misses', 0)} "
+                f"proxy_canonical_ms={diag.get('proxy_canonical_total_ms', 0.0):.1f} "
+                f"proxy_fallback_ms={diag.get('proxy_fallback_total_ms', 0.0):.1f} "
+                f"dynamic_universe_ms={diag.get('dynamic_universe_total_ms', 0.0):.1f} "
+                f"dynamic_canonical_ms={diag.get('dynamic_canonical_total_ms', 0.0):.1f} "
+                f"dynamic_yfinance_ms={diag.get('dynamic_yfinance_total_ms', 0.0):.1f} "
+                f"dynamic_quotes_ms={diag.get('dynamic_quotes_total_ms', 0.0):.1f} "
+                f"leader_db_ms={diag.get('leader_db_total_ms', 0.0):.1f} "
+                f"max_event_loop_lag_ms={diag.get('max_event_loop_lag_ms', 0.0):.1f} "
+                f"max_lag_phase={diag.get('max_event_loop_lag_phase', 'unknown')}"
+            )
 
 
 # ── Warmup & background loop ───────────────────────────────────────────────────
 
-async def _warmup_loop() -> None:
+async def _warmup_loop(skip_initial: bool = False) -> None:
     """
     Background loop that keeps theme RS caches fresh.
     - Market hours: 1D every ~60s (Tradier real-time).
@@ -2101,16 +2430,27 @@ async def _warmup_loop() -> None:
     """
     print("[THEME_RS] Warmup loop started")
 
-    # Initial kick: refresh timeframes sequentially inside this background task.
-    #
-    # Do not launch all six rebuilds at once.  Historical timeframes share the
-    # same proxy and stock-history dependencies, so concurrent cold rebuilds
-    # duplicate hundreds of FMP-guard/yfinance operations and can starve the
-    # event loop that serves unrelated requests.  Sequential execution keeps
-    # the existing refresh path and cadence semantics while bounding startup
-    # pressure to one timeframe rebuild at a time.
-    for tf in list(_TIMEFRAME_BARS.keys()):
-        await _locked_refresh(tf)
+    startup_not_before: dict[str, float] = {}
+    if skip_initial:
+        started_at = time.time()
+        startup_not_before["1D"] = started_at + _TTL_1D_MARKET
+        for tf in ("7D", "30D", "YTD", "1Y", "5Y"):
+            startup_not_before[tf] = started_at + _HIST_FETCH_CADENCE
+        print(
+            "[THEME_RS] Initial historical refresh skipped by web-process policy; "
+            "persisted LKG serves until normal timeframe cadences"
+        )
+    else:
+        # Initial kick: refresh timeframes sequentially inside this background task.
+        #
+        # Do not launch all six rebuilds at once.  Historical timeframes share the
+        # same proxy and stock-history dependencies, so concurrent cold rebuilds
+        # duplicate hundreds of FMP-guard/yfinance operations and can starve the
+        # event loop that serves unrelated requests.  Sequential execution keeps
+        # the existing refresh path and cadence semantics while bounding startup
+        # pressure to one timeframe rebuild at a time.
+        for tf in list(_TIMEFRAME_BARS.keys()):
+            await _locked_refresh(tf)
 
     while True:
         await asyncio.sleep(15)   # check every 15s — lightweight
@@ -2120,18 +2460,24 @@ async def _warmup_loop() -> None:
             continue   # rely on long off-hours TTL
 
         # 1D: target 60s since last successful compute
-        if now - _last_computed.get("1D", 0) >= _TTL_1D_MARKET:
+        if (
+            now >= startup_not_before.get("1D", 0)
+            and now - _last_computed.get("1D", 0) >= _TTL_1D_MARKET
+        ):
             asyncio.create_task(_locked_refresh("1D"))
 
         # Historical: target _HIST_FETCH_CADENCE (24h) since last successful compute.
         # _locked_refresh() also enforces this guard internally; the loop check
         # just avoids creating unnecessary tasks.
         for tf in ("7D", "30D", "YTD", "1Y", "5Y"):
-            if now - _last_computed.get(tf, 0) >= _HIST_FETCH_CADENCE:
+            if (
+                now >= startup_not_before.get(tf, 0)
+                and now - _last_computed.get(tf, 0) >= _HIST_FETCH_CADENCE
+            ):
                 asyncio.create_task(_locked_refresh(tf))
 
 
-async def warmup_theme_rs() -> None:
+async def warmup_theme_rs(skip_initial: bool = False) -> None:
     """
     Called once at startup (non-blocking).
     Loads LKG into all timeframe caches immediately so the first user request
@@ -2241,7 +2587,7 @@ async def warmup_theme_rs() -> None:
     # LKG / cache will serve users until the next eligible window.
     _load_refresh_ts()
 
-    asyncio.create_task(_warmup_loop())
+    asyncio.create_task(_warmup_loop(skip_initial=skip_initial))
     print("[THEME_RS] Warmup task created (non-blocking)")
 
 
@@ -2475,7 +2821,7 @@ async def _get_theme_rs_data_raw(
 
         print(f"[THEME_RS] {tf} cold compute (force={force})")
         try:
-            rows = await _compute(tf)
+            rows = await _run_compute_with_headroom(tf)
             if rows:
                 # ── Count guard: partial result must not be cached or returned ────
                 if len(rows) < _MIN_LKG_THEME_FLOOR:
@@ -2642,4 +2988,11 @@ def get_theme_rs_status() -> dict:
         "refresh_ts_path":          str(_REFRESH_TS_PATH),
         "refresh_ts_exists":        _REFRESH_TS_PATH.exists(),
         "timeframes":               tf_status,
+        "headroom": {
+            "yfinance_active": _THEME_RS_YF_ACTIVE,
+            "yfinance_max_inflight": _THEME_RS_YF_MAX_ACTIVE,
+            "historical_compute_inflight": _HISTORICAL_COMPUTE_INFLIGHT,
+            "historical_compute_max_inflight": _HISTORICAL_COMPUTE_MAX_INFLIGHT,
+            "refreshes": {tf: dict(diag) for tf, diag in _THEME_RS_DIAG.items()},
+        },
     }

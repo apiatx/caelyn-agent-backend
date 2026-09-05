@@ -40,8 +40,8 @@ from services.calendar_snapshot_service import (
     HORIZON_TABS as _HORIZON_TABS,
     TARGET_TABS as _SNAPSHOT_TABS,
     get_read_source as _get_read_source,
-    get_snapshot as _get_snapshot,
-    get_snapshot_window as _get_snapshot_window,
+    get_snapshot_async as _get_snapshot,
+    get_snapshot_window_async as _get_snapshot_window,
 )
 from services.calendar_curation import (
     CURATED_TABS as _CURATED_TABS,
@@ -220,7 +220,7 @@ async def catalyst_events(
         # requested window the existing full envelope is served unchanged.
         window_requested = bool(view or date or from_date or to_date)
         if window_requested and tab in _HORIZON_TABS:
-            snap = _get_snapshot_window(
+            snap = await _get_snapshot_window(
                 tab,
                 view=view,
                 date=date,
@@ -228,7 +228,7 @@ async def catalyst_events(
                 to_date=to_date,
             )
         else:
-            snap = _get_snapshot(tab)
+            snap = await _get_snapshot(tab)
         # Display-layer curation. Raw Neon storage is unchanged; this only
         # trims/dedupes/re-ranks the response payload. Uses already-cached
         # event fields only — no FMP, no profile enrichment, no DB lookups

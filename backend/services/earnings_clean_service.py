@@ -3941,7 +3941,7 @@ async def build_curated_week_snapshot(
     return result
 
 
-async def _earnings_curated_precompute_loop() -> None:
+async def _earnings_curated_precompute_loop(skip_initial: bool = False) -> None:
     """
     Background loop that pre-builds curated weekly snapshots so page loads never trigger
     live FMP enrichment.
@@ -3949,6 +3949,7 @@ async def _earnings_curated_precompute_loop() -> None:
     Schedule:
       • Startup: waits 3 minutes (lets Theme RS / Sectors / Macro finish FMP warmup),
         then builds any missing snapshots for the current week + next 5 weeks.
+        With skip_initial=True, the first scan instead waits the normal 6-hour cadence.
       • Every 6 hours (or 5 minutes if weeks are still missing): rescan and build.
       • Saturdays (ET): force-rebuilds all upcoming 6 weeks (full Saturday-night batch).
       • 30-second stagger between week builds to avoid FMP burst.
@@ -3968,7 +3969,7 @@ async def _earnings_curated_precompute_loop() -> None:
 
     # Initial delay: let Theme RS, Sectors, Macro, and other startup FMP jobs finish
     # before earnings precompute starts hammering the same API key.
-    _STARTUP_DELAY_S = 180   # 3 minutes
+    _STARTUP_DELAY_S = 6 * 3600 if skip_initial else 180
     print(f"[earn_precompute] Waiting {_STARTUP_DELAY_S}s before first build cycle…")
     await asyncio.sleep(_STARTUP_DELAY_S)
     print("[earn_precompute] Starting earnings curated precompute loop")

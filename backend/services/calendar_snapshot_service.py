@@ -46,6 +46,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import statistics
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -103,6 +104,16 @@ _MACRO_TABS: frozenset[str] = frozenset({"economic_releases", "treasury_macro"})
 # concurrent callers await the same result.
 _macro_cycle_tasks: dict[str, asyncio.Task] = {}
 _macro_cycle_lock = asyncio.Lock()
+
+# Async request-path boundary for persisted Calendar reads.  PostgreSQL remains
+# the source of truth; this only prevents psycopg2 work from blocking the event
+# loop or consuming more than two pool connections at once.
+CALENDAR_SNAPSHOT_MAX_PG_INFLIGHT = 2
+_calendar_read_semaphore = asyncio.Semaphore(CALENDAR_SNAPSHOT_MAX_PG_INFLIGHT)
+_calendar_read_inflight = 0
+_calendar_read_max_inflight = 0
+_calendar_read_durations_ms: list[float] = []
+_calendar_read_calls = 0
 
 
 # ── Neon-backed primary persistence ─────────────────────────────────────────
@@ -1507,6 +1518,71 @@ async def _refresh_macro_sources_core(fmp_key: str) -> dict:
     }
 
 
+async def _run_snapshot_read_async(reader, *args, **kwargs) -> dict:
+    """Run one persisted snapshot read off-loop with bounded PG concurrency."""
+    global _calendar_read_calls, _calendar_read_inflight, _calendar_read_max_inflight
+    started = time.perf_counter()
+    async with _calendar_read_semaphore:
+        _calendar_read_inflight += 1
+        _calendar_read_max_inflight = max(
+            _calendar_read_max_inflight, _calendar_read_inflight
+        )
+        try:
+            return await asyncio.to_thread(reader, *args, **kwargs)
+        finally:
+            _calendar_read_inflight -= 1
+            _calendar_read_calls += 1
+            _calendar_read_durations_ms.append(
+                (time.perf_counter() - started) * 1000.0
+            )
+            if len(_calendar_read_durations_ms) > 1000:
+                del _calendar_read_durations_ms[:-1000]
+
+
+async def get_snapshot_async(tab: str) -> dict:
+    """Async request-path equivalent of get_snapshot()."""
+    return await _run_snapshot_read_async(get_snapshot, tab)
+
+
+async def get_snapshot_window_async(
+    tab: str,
+    *,
+    view: Optional[str] = None,
+    date: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+) -> dict:
+    """Async request-path equivalent of get_snapshot_window()."""
+    return await _run_snapshot_read_async(
+        get_snapshot_window,
+        tab,
+        view=view,
+        date=date,
+        from_date=from_date,
+        to_date=to_date,
+    )
+
+
+def get_calendar_read_diagnostics() -> dict:
+    """Return low-noise process-local diagnostics for async Calendar reads."""
+    durations = sorted(_calendar_read_durations_ms)
+
+    def _percentile(fraction: float) -> float:
+        if not durations:
+            return 0.0
+        index = min(len(durations) - 1, int((len(durations) - 1) * fraction))
+        return round(durations[index], 3)
+
+    return {
+        "calls": _calendar_read_calls,
+        "inflight": _calendar_read_inflight,
+        "max_pg_inflight": _calendar_read_max_inflight,
+        "p50_ms": round(statistics.median(durations), 3) if durations else 0.0,
+        "p95_ms": _percentile(0.95),
+        "max_ms": round(max(durations), 3) if durations else 0.0,
+    }
+
+
 async def _refresh_tab_core(tab: str, fmp_key: str) -> dict:
     """
     Core refresh implementation for `tab`.  Do not call directly; use
@@ -1909,7 +1985,10 @@ async def check_and_refresh_stale(fmp_key: str, delay_secs: int = 45) -> None:
             print(f"[calendar_snapshot] startup stale-check error tab={tab}: {e}")
 
 
-async def weekly_scheduler_loop(fmp_key_provider) -> None:
+async def weekly_scheduler_loop(
+    fmp_key_provider,
+    skip_startup_stale_check: bool = False,
+) -> None:
     """
     Background loop. Pass a callable returning the FMP key (so a missing key
     at startup can still recover later without restart).
@@ -1924,8 +2003,12 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
        one coordinated cycle when any macro tab is stale.  Uses a
        "stale:<week>" marker so each tab is refreshed at most once per week
        outside the Sunday window.
+
+    ``skip_startup_stale_check=True`` suppresses only the first Mon–Sat stale
+    scan.  Sunday wall-clock slots and every later scheduled scan are unchanged.
     """
     print(f"[calendar_snapshot] scheduler loop started; tabs={TARGET_TABS}")
+    first_iteration = True
 
     while True:
         try:
@@ -2028,7 +2111,7 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
                         print(f"[calendar_snapshot] scheduler error tab={tab}: {e}")
 
             # ── Mon–Sat: stale-tab check (hourly cadence via sleep below) ────
-            else:
+            elif not (first_iteration and skip_startup_stale_check):
                 stale_marker = f"stale:{week_marker}"
                 macro_stale: list[str] = []
                 other_stale: list[tuple[str, dict]] = []
@@ -2081,6 +2164,8 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
 
         except Exception as e:
             print(f"[calendar_snapshot] scheduler loop error: {e}")
+        finally:
+            first_iteration = False
 
         # Sleep ~60 minutes Mon–Sat, ~1 min on Sunday (to hit hourly slots).
         try:

@@ -92,6 +92,13 @@ The user is the pilot and final decision-maker.
 Perform only the requested task. Do not expand scope, redesign adjacent systems,
 perform opportunistic cleanup, or fix unrelated issues.
 
+## Web process startup contract
+
+A process restart is not a data-refresh event. Provider-heavy, full-universe,
+backfill, analytics, or page-prewarm work must not execute solely because the
+FastAPI process restarted. Persisted state serves startup; recurring work waits
+its existing normal cadence. Any exception requires explicit user approval.
+
 Assume the existing architecture, providers, endpoints, stores, caches,
 background jobs, schedules, database relationships, and contracts exist for
 deliberate reasons unless direct repository evidence proves otherwise.

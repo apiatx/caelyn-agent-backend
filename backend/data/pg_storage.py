@@ -8,6 +8,7 @@ Auto-creates tables on first use. Survives all deploys and autoscale events.
 import json
 import os
 import time
+import threading
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 
@@ -44,6 +45,52 @@ _pool = None
 _available = False
 # Track last connection error for diagnostics
 _last_conn_error: str | None = None
+
+# init_tables() may be reached by startup and legacy callers. Keep it
+# single-flight per process and cache only successful completion.
+_init_tables_condition = threading.Condition()
+_init_tables_running = False
+_init_tables_succeeded = False
+
+# Manifest derived from the historical CREATE/ALTER suite below. One catalog
+# query checks the whole prerequisite schema before deciding whether DDL is
+# necessary.
+_INIT_REQUIRED_TABLES = frozenset({
+    "calendar_snapshots",
+    "chart_radar_views",
+    "chat_conversations",
+    "conversations",
+    "data_retention_rules",
+    "earnings_event_reads",
+    "earnings_live_events",
+    "earnings_monitor_targets",
+    "messages",
+    "options_fetch_progress",
+    "options_flow_snapshots",
+    "options_history",
+    "options_net_premium_daily",
+    "prompt_history",
+    "stock_technicals",
+    "strategy_hist_snapshots",
+    "theme_leader_overrides",
+    "theme_ticker_overrides",
+    "ticker_alert_events",
+    "ticker_mentions",
+    "ticker_name_overrides",
+    "ticker_signal_snapshots",
+    "user_earnings_cache",
+    "watchlist",
+    "watchlist_category_overrides",
+    "watchlist_favorites",
+    "watchlist_fundamentals_cache",
+    "watchlist_rv_snapshots",
+    "watchlist_volmc_snapshots",
+})
+_INIT_REQUIRED_COLUMNS = frozenset({
+    ("watchlist", "name"),
+    ("calendar_snapshots", "events"),
+    ("watchlist_category_overrides", "sector_id"),
+})
 def _to_jsonb(value):
     if not isinstance(value, dict):
         return None
@@ -291,13 +338,85 @@ def startup_probe() -> dict:
     finally:
         _put_conn(conn)
     return info
+
+
+def _schema_current_status(conn) -> tuple[bool, list[str]]:
+    """Return whether the existing init_tables schema prerequisites exist."""
+    started = time.monotonic()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT table_name, column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = ANY(%s)
+        """, (list(_INIT_REQUIRED_TABLES),))
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+
+    present_tables = {row[0] for row in rows}
+    present_columns = {(row[0], row[1]) for row in rows}
+    missing = [
+        *(f"table:{name}" for name in sorted(_INIT_REQUIRED_TABLES - present_tables)),
+        *(
+            f"column:{table}.{column}"
+            for table, column in sorted(_INIT_REQUIRED_COLUMNS - present_columns)
+        ),
+    ]
+    elapsed_ms = round((time.monotonic() - started) * 1000)
+    print(
+        f"[PG_STORAGE] schema_current={str(not missing).lower()} "
+        f"check_elapsed_ms={elapsed_ms}"
+        + (f" missing={missing}" if missing else "")
+    )
+    return not missing, missing
+
+
 def init_tables():
-    """Create tables if they don't exist. Safe to call multiple times."""
+    """Single-flight schema check; run historical DDL only for real drift."""
+    global _init_tables_running, _init_tables_succeeded
+    started = time.monotonic()
+
+    with _init_tables_condition:
+        while _init_tables_running:
+            _init_tables_condition.wait()
+        if _init_tables_succeeded:
+            print("[PG_STORAGE] init_tables already_succeeded=true action=skip")
+            return True
+        _init_tables_running = True
+
+    result = False
+    try:
+        result = _init_tables_once(started)
+        return result
+    finally:
+        with _init_tables_condition:
+            _init_tables_running = False
+            if result:
+                _init_tables_succeeded = True
+            _init_tables_condition.notify_all()
+
+
+def _init_tables_once(started: float | None = None):
+    """Check schema once, preserving the historical DDL body as fallback."""
+    if started is None:
+        started = time.monotonic()
     print("[PG_STORAGE] init_tables starting (target schema=public)")
     conn = _get_conn()
     if conn is None:
         return False
     try:
+        schema_current, _missing = _schema_current_status(conn)
+        if schema_current:
+            conn.rollback()
+            elapsed_ms = round((time.monotonic() - started) * 1000)
+            print(
+                "[PG_STORAGE] init_tables schema_current=true "
+                f"action=skip_ddl elapsed_ms={elapsed_ms}"
+            )
+            return True
+
         cur = conn.cursor()
         cur.execute("""
             CREATE TABLE IF NOT EXISTS public.prompt_history (
@@ -970,10 +1089,15 @@ def init_tables():
 
         conn.commit()
         cur.close()
-        print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        print(
+            "[PG_STORAGE] init_tables schema_current=false "
+            f"action=ddl_complete elapsed_ms={elapsed_ms}"
+        )
         return True
     except Exception as e:
-        print(f"[PG_STORAGE] Table creation error: {e}")
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        print(f"[PG_STORAGE] Table creation error after {elapsed_ms}ms: {e}")
         conn.rollback()
         return False
     finally:

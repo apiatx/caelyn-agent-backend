@@ -1137,7 +1137,7 @@ async def run_missing_symbols_catchup(
 
 # ── Nightly maintenance scheduler ────────────────────────────────────────────
 
-async def _canon_maintenance_loop() -> None:
+async def _canon_maintenance_loop(skip_initial: bool = False) -> None:
     """
     Off-hours maintenance loop: runs missing_symbols_catchup then
     incremental_daily_append each check cycle.
@@ -1145,6 +1145,9 @@ async def _canon_maintenance_loop() -> None:
     Safety:
       - Only fires when _is_active_session() is False (market closed / weekend).
       - Checks every 30 minutes; does nothing if market is open.
+      - ``skip_initial`` is accepted as a restart-safe boot-contract control.
+        This loop already waits one full check cadence before its first cycle,
+        so enabling it does not add a second 30-minute delay.
       - Respects CANONICAL_HISTORY_MISSING_CATCHUP_ENABLED and
         CANONICAL_HISTORY_INCREMENTAL_APPEND_ENABLED flags.
       - Requires CANONICAL_HISTORY_BACKFILL_ENABLED=true for catchup step.
@@ -1155,6 +1158,8 @@ async def _canon_maintenance_loop() -> None:
     global _MAINTENANCE_STATE
     _MAINTENANCE_STATE["scheduler_running"] = True
     _CHECK_INTERVAL_S = 1800  # 30-minute check cadence
+    if skip_initial:
+        print("[CANON_MAINT] Restart-safe startup requested; first cycle remains deferred to normal cadence")
 
     while True:
         try:
@@ -1210,7 +1215,7 @@ async def _canon_maintenance_loop() -> None:
             await asyncio.sleep(300)  # back-off 5 min on unexpected error
 
 
-def start_maintenance_scheduler() -> None:
+def start_maintenance_scheduler(skip_initial: bool = False) -> None:
     """
     Wire the nightly canonical-history maintenance loop into the running event loop.
     Call once from the FastAPI lifespan after yield.
@@ -1218,7 +1223,7 @@ def start_maintenance_scheduler() -> None:
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            loop.create_task(_canon_maintenance_loop())
+            loop.create_task(_canon_maintenance_loop(skip_initial=skip_initial))
             print("[CANON_MAINT] Nightly maintenance scheduler started (30-min check interval, off-hours only)")
     except Exception as exc:
         print(f"[CANON_MAINT] Scheduler start failed: {exc}")

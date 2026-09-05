@@ -53,6 +53,7 @@ _XC_MAX_AGE = 8 * 24 * 3600   # X consensus usable for 8 days
 
 _FMP_PEERS_URL = "https://financialmodelingprep.com/stable/stock-peers"
 _FMP_TIMEOUT   = 6.0
+_MAX_PROVIDER_CONCURRENCY = 4
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -150,33 +151,107 @@ async def _build_dynamic_universe(
     tier3_x:        list[str] = []   # X consensus picks
     tier4_static:   list[str] = []   # related_tickers fallback
 
+    # Build-local registries coalesce repeated physical work while preserving
+    # per-theme attribution and logical expansion order.
+    provider_gate = asyncio.Semaphore(_MAX_PROVIDER_CONCURRENCY)
+    etf_tasks: dict[str, asyncio.Task] = {}
+    peer_tasks: dict[str, asyncio.Task] = {}
+    diagnostics = {
+        "themes": len(themes_to_process),
+        "raw_etf_refs": 0,
+        "unique_etfs": 0,
+        "raw_anchor_refs": 0,
+        "unique_anchors": 0,
+        "etf_cache_hits": 0,
+        "etf_stale_served": 0,
+        "etf_live_attempts": 0,
+        "peer_live_attempts": 0,
+        "provider_inflight": 0,
+        "max_provider_inflight": 0,
+    }
+
+    async def _provider_call(awaitable):
+        async with provider_gate:
+            diagnostics["provider_inflight"] += 1
+            diagnostics["max_provider_inflight"] = max(
+                diagnostics["max_provider_inflight"],
+                diagnostics["provider_inflight"],
+            )
+            try:
+                return await awaitable
+            finally:
+                diagnostics["provider_inflight"] -= 1
+
+    def _observe_etf_live(delta: int) -> None:
+        diagnostics["provider_inflight"] += delta
+        diagnostics["max_provider_inflight"] = max(
+            diagnostics["max_provider_inflight"],
+            diagnostics["provider_inflight"],
+        )
+
+    theme_plans: list[tuple[dict, str, float, list[str], list[str]]] = []
+    for theme, state, score in [
+        *((t, "active", 0.8) for t in active_themes),
+        *((t, "emerging", 0.5) for t in emerging_themes if include_emerging),
+    ]:
+        rel_etfs = _augment_etfs_from_universe(
+            theme.get("name", ""),
+            (theme.get("related_etfs") or [])[:_MAX_ETF_PER_THEME],
+        )
+        anchors = [
+            str(a).upper()
+            for a in (theme.get("related_tickers") or [])[:_MAX_PEER_ANCHORS]
+        ]
+        theme_plans.append((theme, state, score, rel_etfs, anchors))
+
+    diagnostics["raw_etf_refs"] = sum(len(plan[3]) for plan in theme_plans)
+    diagnostics["unique_etfs"] = len({
+        etf.upper() for plan in theme_plans for etf in plan[3]
+    })
+    diagnostics["raw_anchor_refs"] = sum(len(plan[4]) for plan in theme_plans)
+    diagnostics["unique_anchors"] = len({
+        anchor for plan in theme_plans for anchor in plan[4]
+    })
+    build_started = time.monotonic()
+    build_started_at = time.time()
+
     # ── Source 1 + 2: ETF holdings & FMP peers (concurrent per theme) ─────────
     etf_health_ok  = False
     peer_health_ok = False
 
-    async def _expand_theme(theme: dict, state: str, score: float) -> list[str]:
+    async def _expand_theme(
+        theme: dict,
+        state: str,
+        score: float,
+        rel_etfs: list[str],
+        anchors: list[str],
+        peer_client,
+    ) -> tuple[list[str], dict[str, list[str]], dict[str, dict]]:
         nonlocal etf_health_ok, peer_health_ok
 
-        name     = theme.get("name", "")
-        rel_etfs = (theme.get("related_etfs") or [])[:_MAX_ETF_PER_THEME]
-        anchors  = (theme.get("related_tickers") or [])[:_MAX_PEER_ANCHORS]
-
-        # Enrich from THEME_ETF_UNIVERSE for more ETF symbols
-        rel_etfs = _augment_etfs_from_universe(name, rel_etfs)
+        name = theme.get("name", "")
 
         discovered: list[str] = []
+        local_sources: dict[str, list[str]] = {}
+        local_assignments: dict[str, dict] = {}
 
         # 1a. ETF holdings
-        etf_tickers, etf_src = await _etf_holdings_tickers(rel_etfs)
+        etf_tickers, etf_src = await _etf_holdings_tickers(
+            rel_etfs,
+            task_registry=etf_tasks,
+            provider_gate=provider_gate,
+            live_observer=_observe_etf_live,
+            diagnostics=diagnostics,
+        )
         if etf_tickers:
             etf_health_ok = True
         for sym, sources in etf_src.items():
-            sources_by_ticker.setdefault(sym, [])
+            local_sources.setdefault(sym, [])
             for s in sources:
-                if s not in sources_by_ticker[sym]:
-                    sources_by_ticker[sym].append(s)
-            if sym not in theme_assignment:
-                theme_assignment[sym] = {
+                if s not in local_sources[sym]:
+                    local_sources[sym].append(s)
+            if sym not in local_assignments:
+                local_assignments[sym] = {
                     "theme_name":             name,
                     "theme_state":            state,
                     "regime_alignment_score": score,
@@ -188,12 +263,12 @@ async def _build_dynamic_universe(
         # 1b. Static anchor tickers (always available, no API call)
         for sym in anchors:
             s = sym.upper()
-            sources_by_ticker.setdefault(s, [])
+            local_sources.setdefault(s, [])
             src = f"static_anchor:{name}"
-            if src not in sources_by_ticker[s]:
-                sources_by_ticker[s].append(src)
-            if s not in theme_assignment:
-                theme_assignment[s] = {
+            if src not in local_sources[s]:
+                local_sources[s].append(src)
+            if s not in local_assignments:
+                local_assignments[s] = {
                     "theme_name":             name,
                     "theme_state":            state,
                     "regime_alignment_score": score * 0.9,
@@ -203,16 +278,22 @@ async def _build_dynamic_universe(
                 discovered.append(s)
 
         # 1c. FMP peers from anchor tickers
-        peer_tickers, peer_src = await _fmp_peers_tickers(anchors)
+        peer_tickers, peer_src = await _fmp_peers_tickers(
+            anchors,
+            task_registry=peer_tasks,
+            provider_call=_provider_call,
+            client=peer_client,
+            diagnostics=diagnostics,
+        )
         if peer_tickers:
             peer_health_ok = True
         for sym, sources in peer_src.items():
-            sources_by_ticker.setdefault(sym, [])
+            local_sources.setdefault(sym, [])
             for s in sources:
-                if s not in sources_by_ticker[sym]:
-                    sources_by_ticker[sym].append(s)
-            if sym not in theme_assignment:
-                theme_assignment[sym] = {
+                if s not in local_sources[sym]:
+                    local_sources[sym].append(s)
+            if sym not in local_assignments:
+                local_assignments[sym] = {
                     "theme_name":             name,
                     "theme_state":            state,
                     "regime_alignment_score": score * 0.7,
@@ -221,29 +302,49 @@ async def _build_dynamic_universe(
             if sym not in discovered:
                 discovered.append(sym)
 
-        return discovered
+        return discovered, local_sources, local_assignments
 
-    # Run theme expansion concurrently
-    active_tasks   = [_expand_theme(t, "active",   0.8) for t in active_themes]
-    emerging_tasks = [_expand_theme(t, "emerging", 0.5) for t in emerging_themes] if include_emerging else []
+    import httpx
+    async with httpx.AsyncClient(timeout=_FMP_TIMEOUT) as peer_client:
+        expansion_tasks = [
+            _expand_theme(theme, state, score, etfs, anchors, peer_client)
+            for theme, state, score, etfs, anchors in theme_plans
+        ]
+        expansion_results = await asyncio.gather(
+            *expansion_tasks,
+            return_exceptions=True,
+        )
 
-    active_results   = await asyncio.gather(*active_tasks,   return_exceptions=True)
-    emerging_results = await asyncio.gather(*emerging_tasks, return_exceptions=True)
+    # Merge in canonical theme-plan order, never provider completion order.
+    for result in expansion_results:
+        if not isinstance(result, tuple):
+            continue
+        _, local_sources, local_assignments = result
+        for sym, sources in local_sources.items():
+            sources_by_ticker.setdefault(sym, [])
+            for source in sources:
+                if source not in sources_by_ticker[sym]:
+                    sources_by_ticker[sym].append(source)
+        for sym, assignment in local_assignments.items():
+            theme_assignment.setdefault(sym, assignment)
+
+    active_results = expansion_results[:len(active_themes)]
+    emerging_results = expansion_results[len(active_themes):]
 
     for r in active_results:
-        if isinstance(r, list):
-            for sym in r:
+        if isinstance(r, tuple):
+            for sym in r[0]:
                 if sym not in tier1_active:
                     tier1_active.append(sym)
 
     for r in emerging_results:
-        if isinstance(r, list):
-            for sym in r:
+        if isinstance(r, tuple):
+            for sym in r[0]:
                 if sym not in tier2_emerging:
                     tier2_emerging.append(sym)
 
     # ── Source 3: X consensus tickers ─────────────────────────────────────────
-    xc_tickers, xc_health = _x_consensus_tickers()
+    xc_tickers, xc_health = await _x_consensus_tickers()
     source_health["x_consensus"] = xc_health
     for sym in xc_tickers[:_MAX_X_CONSENSUS]:
         sources_by_ticker.setdefault(sym, [])
@@ -308,6 +409,23 @@ async def _build_dynamic_universe(
         f"[DTU] Built: {len(ordered)} tickers "
         f"(active={n_active} emerging={n_emerging} x_consensus={n_xc} static={len(tier4_static)}) "
         f"status={snapshot_status}"
+    )
+    print(
+        "[DTU_BUILD] "
+        f"themes={diagnostics['themes']} "
+        f"raw_etf_refs={diagnostics['raw_etf_refs']} "
+        f"unique_etfs={diagnostics['unique_etfs']} "
+        f"raw_anchor_refs={diagnostics['raw_anchor_refs']} "
+        f"unique_anchors={diagnostics['unique_anchors']} "
+        f"etf_cache_hits={diagnostics['etf_cache_hits']} "
+        f"etf_stale_served={diagnostics['etf_stale_served']} "
+        f"etf_live_attempts={diagnostics['etf_live_attempts']} "
+        f"peer_live_attempts={diagnostics['peer_live_attempts']} "
+        f"max_provider_inflight={diagnostics['max_provider_inflight']} "
+        f"started_at={build_started_at:.3f} "
+        f"finished_at={time.time():.3f} "
+        f"elapsed_s={time.monotonic() - build_started:.2f} "
+        f"ticker_count={len(ordered)}"
     )
 
     return {
@@ -446,6 +564,11 @@ def _augment_etfs_from_universe(theme_name: str, rel_etfs: list[str]) -> list[st
 
 async def _etf_holdings_tickers(
     proxy_etfs: list[str],
+    *,
+    task_registry: Optional[dict[str, asyncio.Task]] = None,
+    provider_gate: Optional[asyncio.Semaphore] = None,
+    live_observer=None,
+    diagnostics: Optional[dict] = None,
 ) -> tuple[list[str], dict[str, list[str]]]:
     """
     Fetch top holdings from each proxy ETF.
@@ -457,15 +580,34 @@ async def _etf_holdings_tickers(
 
     from services.sector_rotation.etf_holdings_service import get_etf_holdings
 
+    registry = task_registry if task_registry is not None else {}
+
     async def _one_etf(etf_sym: str) -> tuple[str, list[dict]]:
         try:
-            data = await asyncio.wait_for(get_etf_holdings(etf_sym), timeout=10.0)
+            etf_diagnostics: dict = {}
+            request = get_etf_holdings(
+                etf_sym,
+                diagnostics=etf_diagnostics,
+                live_gate=provider_gate,
+                live_observer=live_observer,
+            )
+            data = await asyncio.wait_for(request, timeout=10.0)
+            if diagnostics is not None:
+                diagnostics["etf_cache_hits"] += etf_diagnostics.get("cache_hits", 0)
+                diagnostics["etf_stale_served"] += etf_diagnostics.get("stale_served", 0)
+                diagnostics["etf_live_attempts"] += etf_diagnostics.get("live_attempts", 0)
             return etf_sym, (data.get("holdings") or [])[:_ETF_HOLDINGS_TOP_N]
         except Exception as e:
             print(f"[DTU] ETF holdings error {etf_sym}: {e}")
             return etf_sym, []
 
-    results = await asyncio.gather(*[_one_etf(e) for e in proxy_etfs])
+    tasks = []
+    for etf in proxy_etfs:
+        key = etf.upper()
+        if key not in registry:
+            registry[key] = asyncio.create_task(_one_etf(key))
+        tasks.append(registry[key])
+    results = await asyncio.gather(*tasks)
 
     tickers: list[str]             = []
     sources: dict[str, list[str]]  = {}
@@ -490,6 +632,11 @@ async def _etf_holdings_tickers(
 
 async def _fmp_peers_tickers(
     anchor_tickers: list[str],
+    *,
+    task_registry: Optional[dict[str, asyncio.Task]] = None,
+    provider_call=None,
+    client=None,
+    diagnostics: Optional[dict] = None,
 ) -> tuple[list[str], dict[str, list[str]]]:
     """
     Fetch FMP stock peers for each anchor ticker.
@@ -503,15 +650,17 @@ async def _fmp_peers_tickers(
     if not api_key:
         return [], {}
 
-    import httpx
+    registry = task_registry if task_registry is not None else {}
 
     async def _one_peer(anchor: str) -> tuple[str, list[str]]:
         try:
-            async with httpx.AsyncClient(timeout=_FMP_TIMEOUT) as client:
-                resp = await client.get(
-                    _FMP_PEERS_URL,
-                    params={"symbol": anchor.upper(), "apikey": api_key},
-                )
+            request = client.get(
+                _FMP_PEERS_URL,
+                params={"symbol": anchor.upper(), "apikey": api_key},
+            )
+            if diagnostics is not None:
+                diagnostics["peer_live_attempts"] += 1
+            resp = await (provider_call(request) if provider_call is not None else request)
             if resp.status_code != 200:
                 return anchor, []
             raw = resp.json()
@@ -539,7 +688,13 @@ async def _fmp_peers_tickers(
             print(f"[DTU] FMP peers error {anchor}: {e}")
             return anchor, []
 
-    results = await asyncio.gather(*[_one_peer(a) for a in anchor_tickers[:_MAX_PEER_ANCHORS]])
+    tasks = []
+    for anchor in anchor_tickers[:_MAX_PEER_ANCHORS]:
+        key = anchor.upper()
+        if key not in registry:
+            registry[key] = asyncio.create_task(_one_peer(key))
+        tasks.append(registry[key])
+    results = await asyncio.gather(*tasks)
 
     tickers: list[str]            = []
     sources: dict[str, list[str]] = {}
@@ -558,15 +713,20 @@ async def _fmp_peers_tickers(
     return tickers, sources
 
 
-def _x_consensus_tickers() -> tuple[list[str], str]:
+async def _x_consensus_tickers() -> tuple[list[str], str]:
     """
     Read X/Grok consensus tickers from the disk snapshot.
     Returns (tickers, health_status).
     """
     try:
-        if not _XC_PATH.exists():
+        def _read_snapshot():
+            if not _XC_PATH.exists():
+                return None
+            return json.loads(_XC_PATH.read_text())
+
+        raw = await asyncio.to_thread(_read_snapshot)
+        if raw is None:
             return [], "missing"
-        raw = json.loads(_XC_PATH.read_text())
         # Check age
         saved_at = float(raw.get("_saved_at", raw.get("generated_at_ts", 0)))
         if saved_at and time.time() - saved_at > _XC_MAX_AGE:

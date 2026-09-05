@@ -3,6 +3,108 @@ import httpx
 from bs4 import BeautifulSoup
 from data.cache import cache, FINVIZ_TTL
 
+_FINVIZ_PARSE_DIAG = {"active": 0, "max_active": 0}
+
+
+def get_finviz_parse_diagnostics() -> dict:
+    return dict(_FINVIZ_PARSE_DIAG)
+
+
+async def _parse_offloop(parser, html: str) -> list:
+    _FINVIZ_PARSE_DIAG["active"] += 1
+    _FINVIZ_PARSE_DIAG["max_active"] = max(
+        _FINVIZ_PARSE_DIAG["max_active"], _FINVIZ_PARSE_DIAG["active"]
+    )
+    try:
+        return await asyncio.to_thread(parser, html)
+    finally:
+        _FINVIZ_PARSE_DIAG["active"] -= 1
+
+
+def _parse_screener_html(html: str) -> list:
+    soup = BeautifulSoup(html, "html.parser")
+    rows = soup.select("tr.styled-row")
+    if not rows:
+        rows = soup.select("table.screener_table tr.screener-body-table-nw")
+    results = []
+    for row in rows[:60]:
+        cols = row.find_all("td")
+        if len(cols) >= 10:
+            results.append({
+                "ticker": cols[1].text.strip(),
+                "company": cols[2].text.strip(),
+                "sector": cols[3].text.strip(),
+                "market_cap": cols[6].text.strip(),
+                "price": cols[8].text.strip(),
+                "change": cols[9].text.strip(),
+            })
+    return results
+
+
+def _parse_custom_screen_html(html: str) -> list:
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.find("table", class_="screener_table") or soup.find(
+        "table", {"id": "screener-views-table"}
+    )
+    if not table:
+        for candidate in soup.find_all("table"):
+            if candidate.find("td", class_="screener-body-table-nw"):
+                table = candidate
+                break
+    if not table:
+        for candidate in soup.find_all("table"):
+            rows = candidate.find_all("tr")
+            if len(rows) > 1:
+                first_row_cells = rows[0].find_all("td")
+                if any("Ticker" in (cell.get_text(strip=True) or "") for cell in first_row_cells):
+                    table = candidate
+                    break
+    if not table:
+        title = soup.find("title")
+        page_title = title.get_text(strip=True) if title else "unknown"
+        print(f"[Finviz] No screener table found. Page title: {page_title}. HTML length: {len(html)}")
+        body_text = soup.get_text()[:500] if soup.body else ""
+        if "No matches" in body_text or "0 Total" in body_text:
+            print("[Finviz] Page indicates no matches for this filter combination")
+        return []
+
+    header_row = table.find("tr")
+    headers = [
+        cell.get_text(strip=True).lower()
+        for cell in header_row.find_all("td")
+    ] if header_row else []
+    is_technical = "rsi" in headers or "sma20" in headers
+    header_map = {header: index for index, header in enumerate(headers)}
+    results = []
+    for row in table.find_all("tr")[1:61]:
+        cells = row.find_all("td")
+        if len(cells) < 8:
+            continue
+        ticker_idx = header_map.get("ticker", 1)
+        ticker = cells[ticker_idx].get_text(strip=True) if len(cells) > ticker_idx else ""
+        if not ticker or len(ticker) > 6:
+            continue
+        indexes = {key: header_map.get(key, default) for key, default in [
+            ("company", 2), ("sector", 3), ("industry", 4),
+            ("market cap", 6), ("price", 8), ("change", 9),
+        ]}
+        item = {
+            "ticker": ticker,
+            "company": cells[indexes["company"]].get_text(strip=True) if len(cells) > indexes["company"] else "",
+            "sector": cells[indexes["sector"]].get_text(strip=True) if len(cells) > indexes["sector"] else "",
+            "industry": cells[indexes["industry"]].get_text(strip=True) if len(cells) > indexes["industry"] else "",
+            "market_cap": cells[indexes["market cap"]].get_text(strip=True) if len(cells) > indexes["market cap"] else "",
+            "price": cells[indexes["price"]].get_text(strip=True) if len(cells) > indexes["price"] else "",
+            "change": cells[indexes["change"]].get_text(strip=True) if len(cells) > indexes["change"] else "",
+            "volume": cells[header_map["volume"]].get_text(strip=True) if "volume" in header_map and len(cells) > header_map["volume"] else "",
+        }
+        if is_technical:
+            for field in ["rsi", "sma20", "sma50", "sma200", "rel volume", "avg volume", "perf week", "perf month", "perf quart", "perf half", "perf year", "volatility"]:
+                if field in header_map and len(cells) > header_map[field]:
+                    item[field.replace(" ", "_")] = cells[header_map[field]].get_text(strip=True)
+        results.append(item)
+    return results
+
 
 
 
@@ -39,29 +141,7 @@ class FinvizScraper:
                     headers=self.HEADERS,
                     timeout=10,
                 )
-            soup = BeautifulSoup(resp.text, "html.parser")
-
-            # Finviz table structure — find screener rows
-            rows = soup.select("tr.styled-row")
-            if not rows:
-                rows = soup.select(
-                    "table.screener_table tr.screener-body-table-nw"
-                )
-
-            results = []
-            for row in rows[:60]:
-                cols = row.find_all("td")
-                if len(cols) >= 10:
-                    results.append(
-                        {
-                            "ticker": cols[1].text.strip(),
-                            "company": cols[2].text.strip(),
-                            "sector": cols[3].text.strip(),
-                            "market_cap": cols[6].text.strip(),
-                            "price": cols[8].text.strip(),
-                            "change": cols[9].text.strip(),
-                        }
-                    )
+            results = await _parse_offloop(_parse_screener_html, resp.text)
             cache.set(cache_key, results, FINVIZ_TTL)
             return results
         except Exception as e:
@@ -167,81 +247,7 @@ class FinvizScraper:
                 print(f"[Finviz] Custom screen HTTP {resp.status_code}")
                 return []
 
-            soup = BeautifulSoup(resp.text, "html.parser")
-
-            table = soup.find("table", class_="screener_table") or soup.find(
-                "table", {"id": "screener-views-table"}
-            )
-
-            if not table:
-                tables = soup.find_all("table")
-                for t in tables:
-                    if t.find("td", class_="screener-body-table-nw"):
-                        table = t
-                        break
-
-            if not table:
-                for t in soup.find_all("table"):
-                    rows = t.find_all("tr")
-                    if len(rows) > 1:
-                        first_row_cells = rows[0].find_all("td")
-                        if any("Ticker" in (c.get_text(strip=True) or "") for c in first_row_cells):
-                            table = t
-                            break
-
-            if not table:
-                title = soup.find("title")
-                page_title = title.get_text(strip=True) if title else "unknown"
-                print(f"[Finviz] No screener table found. Page title: {page_title}. HTML length: {len(resp.text)}")
-                body_text = soup.get_text()[:500] if soup.body else ""
-                if "No matches" in body_text or "0 Total" in body_text:
-                    print("[Finviz] Page indicates no matches for this filter combination")
-                return []
-
-            header_row = table.find("tr")
-            headers = []
-            if header_row:
-                for cell in header_row.find_all("td"):
-                    headers.append(cell.get_text(strip=True).lower())
-
-            is_technical = "rsi" in headers or "sma20" in headers
-
-            header_map = {}
-            for i, h in enumerate(headers):
-                header_map[h] = i
-
-            rows = table.find_all("tr")[1:]
-            results = []
-            for row in rows[:60]:
-                cells = row.find_all("td")
-                if len(cells) >= 8:
-                    ticker_idx = header_map.get("ticker", 1)
-                    ticker = cells[ticker_idx].get_text(strip=True) if len(cells) > ticker_idx else ""
-                    if not ticker or len(ticker) > 6:
-                        continue
-
-                    _ci = {k: header_map.get(k, d) for k, d in [
-                        ("company", 2), ("sector", 3), ("industry", 4),
-                        ("market cap", 6), ("price", 8), ("change", 9),
-                    ]}
-                    item = {
-                        "ticker": ticker,
-                        "company": cells[_ci["company"]].get_text(strip=True) if len(cells) > _ci["company"] else "",
-                        "sector": cells[_ci["sector"]].get_text(strip=True) if len(cells) > _ci["sector"] else "",
-                        "industry": cells[_ci["industry"]].get_text(strip=True) if len(cells) > _ci["industry"] else "",
-                        "market_cap": cells[_ci["market cap"]].get_text(strip=True) if len(cells) > _ci["market cap"] else "",
-                        "price": cells[_ci["price"]].get_text(strip=True) if len(cells) > _ci["price"] else "",
-                        "change": cells[_ci["change"]].get_text(strip=True) if len(cells) > _ci["change"] else "",
-                        "volume": cells[header_map.get("volume", 10)].get_text(strip=True) if "volume" in header_map and len(cells) > header_map["volume"] else "",
-                    }
-
-                    if is_technical:
-                        for tech_field in ["rsi", "sma20", "sma50", "sma200", "rel volume", "avg volume", "perf week", "perf month", "perf quart", "perf half", "perf year", "volatility"]:
-                            if tech_field in header_map and len(cells) > header_map[tech_field]:
-                                key = tech_field.replace(" ", "_")
-                                item[key] = cells[header_map[tech_field]].get_text(strip=True)
-
-                    results.append(item)
+            results = await _parse_offloop(_parse_custom_screen_html, resp.text)
             print(f"[Finviz] Custom screen returned {len(results)} results")
             cache.set(cache_key, results, FINVIZ_TTL)
             return results
