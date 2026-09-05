@@ -718,6 +718,18 @@ class MacroProvider:
         snap_w = snap.get("week_ago", {})
         snap_m = snap.get("month_ago", {})
 
+        history = await asyncio.to_thread(
+            lambda: {
+                "us_10y": self.get_history("10y-yield", 24).get("data", []),
+                "us_2y": self.get_history("2y-yield", 24).get("data", []),
+                "us_5y": self.get_history("5y-yield", 24).get("data", []),
+                "us_30y": self.get_history("30y-yield", 24).get("data", []),
+                "spread_2s10s": self.get_history("2s10s-spread", 24).get("data", []),
+                "spread_10y3m": self.get_history("10y3m-spread", 24).get("data", []),
+                "mortgage_30y": self.get_history("mortgage-30y", 24).get("data", []),
+            }
+        )
+
         result = {
             "last_updated": datetime.utcnow().isoformat() + "Z",
             "data_source": "FMP (real-time)" if fmp_treasury else "FRED (1-2 day lag)",
@@ -768,15 +780,7 @@ class MacroProvider:
                 "dxy_year_low": _round(_safe(yahoo_dxy.get("year_low")), 3),
                 "dxy_prev_close": _round(_safe(yahoo_dxy.get("prev_close")), 3),
             },
-            "history": {
-                "us_10y":         self.get_history("10y-yield",   24).get("data", []),
-                "us_2y":          self.get_history("2y-yield",    24).get("data", []),
-                "us_5y":          self.get_history("5y-yield",    24).get("data", []),
-                "us_30y":         self.get_history("30y-yield",   24).get("data", []),
-                "spread_2s10s":   self.get_history("2s10s-spread",24).get("data", []),
-                "spread_10y3m":   self.get_history("10y3m-spread",24).get("data", []),
-                "mortgage_30y":   self.get_history("mortgage-30y",24).get("data", []),
-            },
+            "history": history,
         }
 
         cache.set(cache_key, result, _MACRO_DASHBOARD_TTL)
@@ -971,6 +975,14 @@ class MacroProvider:
             "date": comp_data.get("oil_date"),
         }
 
+        history_raw = await asyncio.to_thread(
+            lambda: {
+                "cpi": self.get_history("cpi", 36).get("data", []),
+                "core_pce": self.get_history("core-pce", 36).get("data", []),
+                "breakeven_5y": self.get_history("breakeven-5y", 36).get("data", []),
+            }
+        )
+
         result = {
             "last_updated": datetime.utcnow().isoformat() + "Z",
             "headline": {
@@ -1011,11 +1023,7 @@ class MacroProvider:
             # YoY history — used by trend chart ({month, headline_yoy, core_yoy})
             "history": yoy_hist,
             # Raw index history kept for backward compatibility
-            "history_raw": {
-                "cpi":         self.get_history("cpi", 36).get("data", []),
-                "core_pce":    self.get_history("core-pce", 36).get("data", []),
-                "breakeven_5y":self.get_history("breakeven-5y", 36).get("data", []),
-            },
+            "history_raw": history_raw,
             "cpi_components_detail": cpi_components_detail,
             "oil": oil,
         }
@@ -1358,6 +1366,15 @@ class MacroProvider:
             ),
         ]
 
+        history = await asyncio.to_thread(
+            lambda: {
+                "unemployment": self.get_history("unemployment", 36).get("data", []),
+                "nfp": self.get_history("nfp", 36).get("data", []),
+                "wages": self.get_history("wages", 36).get("data", []),
+                "jobless_claims": self.get_history("jobless-claims", 24).get("data", []),
+            }
+        )
+
         result = {
             "last_updated": datetime.utcnow().isoformat() + "Z",
             "employment": {
@@ -1404,12 +1421,7 @@ class MacroProvider:
                 f"NFP added {nfp:+,} jobs last month (3-mo avg: {nfp_3m:,}). "
                 f"Labor market {labor_status}."
             ),
-            "history": {
-                "unemployment": self.get_history("unemployment", 36).get("data", []),
-                "nfp": self.get_history("nfp", 36).get("data", []),
-                "wages": self.get_history("wages", 36).get("data", []),
-                "jobless_claims": self.get_history("jobless-claims", 24).get("data", []),
-            },
+            "history": history,
         }
 
         cache.set(cache_key, result, _MACRO_DASHBOARD_TTL)

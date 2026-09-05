@@ -447,6 +447,7 @@ async def _build_universe() -> list[str]:
     """Collect distinct eligible symbols from watchlist + favorites + portfolio."""
     import asyncio as _aio
     from data.earnings_monitor_store import get_universe_symbols
+    from services.fmp_cache_service import get_company_profiles_bulk_cached
 
     symbols: set[str] = set()
 
@@ -468,12 +469,21 @@ async def _build_universe() -> list[str]:
     except Exception as exc:
         print(f"[EarnMon] portfolio holdings error: {exc}")
 
-    # Filter ETFs/funds via FMP profile cache (best-effort)
+    # Filter ETFs/funds via one bulk FMP profile-cache read. Keep DB/cache work
+    # off the event loop; a missing profile remains eligible (best-effort).
     eligible: list[str] = []
-    for sym in sorted(symbols):
+    sorted_symbols = sorted(symbols)
+    profiles = await _aio.to_thread(
+        get_company_profiles_bulk_cached,
+        sorted_symbols,
+    )
+    print(
+        f"[EarnMon] universe profile filter: symbols={len(sorted_symbols)} "
+        f"bulk_profile_reads=1 profiles_found={len(profiles)}"
+    )
+    for sym in sorted_symbols:
         try:
-            from services.fmp_cache_service import get_company_profile_cached
-            prof = get_company_profile_cached(sym) or {}
+            prof = profiles.get(sym) or {}
             if prof.get("is_etf") or prof.get("is_fund"):
                 continue
             if _is_etf_by_name(prof.get("company_name") or prof.get("name")):

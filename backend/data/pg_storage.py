@@ -46,16 +46,15 @@ _available = False
 # Track last connection error for diagnostics
 _last_conn_error: str | None = None
 
-# init_tables() is called from startup and may also be reached by legacy
-# request paths.  Keep it single-flight within a worker process and remember a
-# successful result so later callers never repeat catalog checks or migrations.
+# init_tables() may be reached by startup and legacy callers. Keep it
+# single-flight per process and cache only successful completion.
 _init_tables_condition = threading.Condition()
 _init_tables_running = False
 _init_tables_succeeded = False
 
-# Manifest derived from the CREATE TABLE / ALTER TABLE statements in
-# init_tables().  A single information_schema query loads the current public
-# schema; comparison happens in-process without one round-trip per table.
+# Manifest derived from the historical CREATE/ALTER suite below. One catalog
+# query checks the whole prerequisite schema before deciding whether DDL is
+# necessary.
 _INIT_REQUIRED_TABLES = frozenset({
     "calendar_snapshots",
     "chart_radar_views",
@@ -375,7 +374,7 @@ def _schema_current_status(conn) -> tuple[bool, list[str]]:
 
 
 def init_tables():
-    """Single-flight schema check; run the existing DDL only for real drift."""
+    """Single-flight schema check; run historical DDL only for real drift."""
     global _init_tables_running, _init_tables_succeeded
     started = time.monotonic()
 
@@ -400,7 +399,7 @@ def init_tables():
 
 
 def _init_tables_once(started: float | None = None):
-    """Check schema once, preserving the historical DDL body as the fallback."""
+    """Check schema once, preserving the historical DDL body as fallback."""
     if started is None:
         started = time.monotonic()
     print("[PG_STORAGE] init_tables starting (target schema=public)")
@@ -410,8 +409,6 @@ def _init_tables_once(started: float | None = None):
     try:
         schema_current, _missing = _schema_current_status(conn)
         if schema_current:
-            # End the read-only catalog transaction before returning this
-            # pooled connection; never leave an idle transaction behind.
             conn.rollback()
             elapsed_ms = round((time.monotonic() - started) * 1000)
             print(

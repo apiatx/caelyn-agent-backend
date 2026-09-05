@@ -2011,12 +2011,16 @@ def _load_all_whales() -> list[dict]:
 
 # ── Background loop ───────────────────────────────────────────────────────────
 
-async def whale_watch_background_loop() -> None:
+async def whale_watch_background_loop(skip_initial: bool = False) -> None:
     """
     On cold start, checks if any whale's last_updated is older than 24 hours.
     If so, runs refresh_all_whales(). Then sleeps 24 hours and repeats.
+    With ``skip_initial=True``, defer that first check to the normal 24-hour
+    cadence so a web restart cannot trigger seeding or provider work.
     """
-    await asyncio.sleep(30)   # let the app fully start first
+    # A restart-safe web boot must not turn the old 30-second stale check into
+    # an immediate seed/provider pass.  Defer it to the established 24h cadence.
+    await asyncio.sleep(_REFRESH_INTERVAL if skip_initial else 30)
 
     while True:
         try:

@@ -325,7 +325,6 @@ class CaelynTerminalProvider:
         self.fmp        = fmp
         self.yahoo      = yahoo
         self.coingecko  = coingecko
-        self._background_history_stats: dict[str, Any] = {}
 
     @staticmethod
     def cache_key_for(portfolio_file: Path) -> str:
@@ -353,7 +352,7 @@ class CaelynTerminalProvider:
             if h.get("ticker")
         )
         return hashlib.md5(json.dumps(parts).encode()).hexdigest()[:16]
-    async def get(self, portfolio_file: Path, *, background_prewarm: bool = False) -> dict:
+    async def get(self, portfolio_file: Path) -> dict:
         cache_key = self.cache_key_for(portfolio_file)
         cached = cache.get(cache_key)
         if cached is not None:
@@ -385,27 +384,11 @@ class CaelynTerminalProvider:
             f"source={'user_file' if portfolio_file.exists() else 'legacy_fallback'}"
         )
 
-        self._background_history_stats = {}
-        result = await self._build(
-            portfolio_file,
-            background_prewarm=background_prewarm,
-        )
-        deferred = int(self._background_history_stats.get("deferred", 0))
-        if background_prewarm and deferred:
-            print(
-                f"[TERMINAL_PREWARM] cache=SKIP deferred_histories={deferred} "
-                "reason=background_capacity"
-            )
-        else:
-            cache.set(cache_key, result, 300)
+        result = await self._build(portfolio_file)
+        cache.set(cache_key, result, 300)
         return result
 
-    async def _build(
-        self,
-        portfolio_file: Path,
-        *,
-        background_prewarm: bool = False,
-    ) -> dict:
+    async def _build(self, portfolio_file: Path) -> dict:
         # 1. Load holdings ────────────────────────────────────────────────
         holdings_raw = self._load_holdings(portfolio_file)
         if not holdings_raw:
@@ -479,11 +462,7 @@ class CaelynTerminalProvider:
             "tradier_quotes":    self._fetch_tradier_quotes(tradier_tickers),
             "crypto_quotes":     self._fetch_crypto_quotes(crypto_tickers),
             "commodity_quotes":  self._fetch_commodity_quotes(yf_commodity),
-            "tradier_history":   self._fetch_tradier_histories(
-                tradier_tickers,
-                hist_start,
-                background_prewarm=background_prewarm,
-            ),
+            "tradier_history":   self._fetch_tradier_histories(tradier_tickers, hist_start),
             "crypto_history":    self._fetch_crypto_histories(crypto_tickers),
             "commodity_history": self._fetch_commodity_histories(yf_commodity),
             "spy_history":       _yf_history("SPY", "2y"),
@@ -515,11 +494,8 @@ class CaelynTerminalProvider:
         _yf_fb_q: dict[str, dict] = {}
         _yf_fb_h: dict[str, list[dict]] = {}
         _tdr_miss_q = [t for t in tradier_tickers if t not in tradier_quotes]
-        _tdr_miss_h = self._history_fallback_symbols(
-            tradier_tickers,
-            tradier_history,
-            background_prewarm=background_prewarm,
-        )
+        _tdr_miss_h = [t for t in tradier_tickers
+                       if not tradier_history.get(t) or len(tradier_history[t]) < 5]
         _yf_miss_all = sorted(set(_tdr_miss_q) | set(_tdr_miss_h))
         if _yf_miss_all:
             print(f"[CAELYN] YF fallback needed  miss_quotes={_tdr_miss_q}  miss_hist={_tdr_miss_h}")
@@ -1275,89 +1251,10 @@ class CaelynTerminalProvider:
         return result
 
     async def _fetch_tradier_histories(
-        self,
-        syms: list[str],
-        start: str,
-        *,
-        background_prewarm: bool = False,
+        self, syms: list[str], start: str
     ) -> dict[str, list[dict]]:
         if not syms or not self.tradier:
             return {}
-        if background_prewarm:
-            import time as _time
-
-            limit = 4
-            sem = asyncio.Semaphore(limit)
-            active = 0
-            max_active = 0
-            cache_hits = 0
-            admissions = 0
-            deferred = 0
-            started = _time.monotonic()
-            end = date.today().isoformat()
-
-            async def _fetch_one(sym: str) -> list[dict]:
-                nonlocal active, max_active, cache_hits, admissions, deferred
-                cache_key = f"tradier:history:{sym.upper()}:daily:{start}:{end}"
-                cached = cache.get(cache_key)
-                if cached is not None:
-                    cache_hits += 1
-                    return cached
-
-                async with sem:
-                    active += 1
-                    max_active = max(max_active, active)
-                    try:
-                        bars = await self.tradier.get_history_background(
-                            sym,
-                            "daily",
-                            start,
-                            end,
-                            lane="maintenance",
-                            reserve=5,
-                        )
-                    finally:
-                        active -= 1
-
-                if bars:
-                    admissions += 1
-                    return bars
-
-                # get_history_background intentionally returns [] when background
-                # capacity is unavailable.  Treat all empty prewarm results
-                # conservatively as deferred: do not trigger Yahoo history fanout
-                # and do not publish a normal complete-cache entry.
-                deferred += 1
-                return []
-
-            results = await asyncio.gather(
-                *[_fetch_one(sym) for sym in syms],
-                return_exceptions=True,
-            )
-            histories = {
-                sym: (res if not isinstance(res, Exception) else [])
-                for sym, res in zip(syms, results)
-            }
-            deferred += sum(isinstance(res, Exception) for res in results)
-            self._background_history_stats = {
-                "symbols": len(syms),
-                "cache_hits": cache_hits,
-                "admissions": admissions,
-                "deferred": deferred,
-                "max_concurrency": max_active,
-                "yahoo_fallbacks_from_deferrals": 0,
-                "elapsed_ms": round((_time.monotonic() - started) * 1000),
-            }
-            print(
-                "[TERMINAL_PREWARM] history "
-                f"symbols={len(syms)} cache_hits={cache_hits} "
-                f"admissions={admissions} deferred={deferred} "
-                f"max_concurrency={max_active}/{limit} "
-                "yahoo_from_deferrals=0 "
-                f"duration_ms={self._background_history_stats['elapsed_ms']}"
-            )
-            return histories
-
         from data.tradier_budget import lane as _hist_lane
         with _hist_lane("maintenance"):
             tasks = [self.tradier.get_history(sym, "daily", start) for sym in syms]
@@ -1366,21 +1263,6 @@ class CaelynTerminalProvider:
             sym: (res if not isinstance(res, Exception) else [])
             for sym, res in zip(syms, results)
         }
-
-    @staticmethod
-    def _history_fallback_symbols(
-        syms: list[str],
-        histories: dict[str, list[dict]],
-        *,
-        background_prewarm: bool = False,
-    ) -> list[str]:
-        if background_prewarm:
-            return []
-        return [
-            sym
-            for sym in syms
-            if not histories.get(sym) or len(histories[sym]) < 5
-        ]
 
     async def _fetch_crypto_histories(self, tickers: list[str]) -> dict[str, list[dict]]:
         """Fetch 1Y+ history for crypto via Yahoo Finance (BTC-USD, ETH-USD …)."""

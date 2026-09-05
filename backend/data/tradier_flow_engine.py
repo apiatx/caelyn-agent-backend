@@ -481,9 +481,8 @@ class TradierFlowEngine(OptionsFlowEngine):
         """
         Enrich a scored ticker result with Polygon historical DB data.
 
-        Designed to be called OUTSIDE the Stage-2 semaphore so all Stage-2
-        survivors can have their DB enrichment run fully concurrently (instead
-        of serialised 6-at-a-time through the Tradier semaphore).
+        Designed to be called OUTSIDE the Stage-2 Tradier semaphore. The caller
+        applies the options-history DB concurrency bound.
 
         Non-fatal: if any DB call fails the result is returned unmodified.
         """
@@ -491,15 +490,27 @@ class TradierFlowEngine(OptionsFlowEngine):
 
         polygon_vol_summary: dict = {}
         polygon_technicals: dict = {}
+        volume_result: dict = {}
+        technicals_result: dict = {}
+        initial_read_failed = False
         try:
-            polygon_vol_summary, polygon_technicals = await asyncio.gather(
-                asyncio.to_thread(get_options_volume_summary, symbol, 30),
-                asyncio.to_thread(get_latest_technicals, symbol),
+            volume_result = await asyncio.to_thread(
+                get_options_volume_summary,
+                symbol,
+                30,
             )
-            polygon_vol_summary = polygon_vol_summary or {}
-            polygon_technicals = polygon_technicals or {}
         except Exception:
-            pass  # Non-fatal — Polygon data is enrichment, not required
+            initial_read_failed = True
+        try:
+            technicals_result = await asyncio.to_thread(
+                get_latest_technicals,
+                symbol,
+            )
+        except Exception:
+            initial_read_failed = True
+        if not initial_read_failed:
+            polygon_vol_summary = volume_result or {}
+            polygon_technicals = technicals_result or {}
 
         # Attach Polygon historical data to the result
         if polygon_technicals and len(polygon_technicals) > 1:
@@ -523,7 +534,9 @@ class TradierFlowEngine(OptionsFlowEngine):
                 except Exception:
                     return None
 
-            histories = await asyncio.gather(*[_fetch_polygon_history(s) for s in occ_syms])
+            histories = []
+            for occ_sym in occ_syms:
+                histories.append(await _fetch_polygon_history(occ_sym))
             for contract_resp, polygon_history in zip(top_contracts_data, histories):
                 if polygon_history:
                     contract_resp["polygon_history"] = polygon_history

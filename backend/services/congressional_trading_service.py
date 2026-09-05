@@ -792,17 +792,22 @@ def _query_trades(
 
 # ── Background Loop ────────────────────────────────────────────────────────────
 
-async def congressional_trading_background_loop():
-    """Fetches congressional trades every 4 hours."""
+async def congressional_trading_background_loop(skip_initial: bool = False):
+    """Fetch congressional trades every 4 hours.
+
+    With ``skip_initial=True``, retain DB setup/cleanup but defer the first
+    provider fetch to that normal cadence.
+    """
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(_executor, _create_table)
     await loop.run_in_executor(_executor, _cleanup_expired)
 
-    # Initial fetch on startup
-    try:
-        await fetch_congressional_trades()
-    except Exception as e:
-        logger.error("[CONG_TRADE] Initial fetch error: %s", e)
+    # Initial fetch on startup (optional for restart-safe web boots).
+    if not skip_initial:
+        try:
+            await fetch_congressional_trades()
+        except Exception as e:
+            logger.error("[CONG_TRADE] Initial fetch error: %s", e)
 
     while True:
         await asyncio.sleep(_FETCH_INTERVAL)

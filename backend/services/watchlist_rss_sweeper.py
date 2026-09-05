@@ -6,8 +6,7 @@ Runs a full sweep of all active Watchlist tickers approximately every 120 second
 
 Architecture:
   - Yahoo Finance RSS and Google News RSS fetched concurrently per ticker
-  - Bounded ticker concurrency: asyncio.Semaphore(_SWEEP_SEM_SIZE=8)
-  - Independent archive-write concurrency: asyncio.Semaphore(_DB_WRITE_SEM_SIZE=4)
+  - Bounded concurrency: asyncio.Semaphore(_SWEEP_SEM_SIZE=15)
   - Results merged and cross-feed deduplicated using _cluster_key from news_major_service
   - diff-aware upsert_with_cache: new → INSERT, provider changed → UPDATE, unchanged → skip
   - Rows older than 72 hours pruned every _PRUNE_EVERY_N sweeps
@@ -326,8 +325,6 @@ async def run_rss_sweep(*, await_hyperscaler_rebuild: bool = False) -> dict:
     """
     One full sweep of all active Watchlist RSS feeds.
     Guarded by _SWEEP_LOCK — never overlaps with itself.
-    By default, trigger the hyperscaler rebuild in the background as before.
-    Startup callers may await that rebuild for deterministic completion.
     Returns the per-sweep diagnostic dict.
     """
     sweep_id    = str(uuid.uuid4())[:8]
@@ -534,15 +531,12 @@ async def rss_sweeper_loop(*, skip_initial: bool = False) -> None:
     Registered via asyncio.create_task(rss_sweeper_loop()) in main.py lifespan.
     Never starts a second sweep while one is running (_SWEEP_LOCK).
     Target interval: ~120 seconds.
-
-    When skip_initial=True, process restart does not trigger a full-universe
-    catch-up; recurring work waits the normal target interval before first use.
     """
     _SWEEPER_DIAG["collector_started_at"] = time.time()
     _SWEEPER_DIAG["loop_registered"]      = True
 
     if not skip_initial:
-        await asyncio.sleep(_STARTUP_DELAY_S)   # let PG init settle
+        await asyncio.sleep(_STARTUP_DELAY_S)
         try:
             from data.rss_article_archive import warm_seen_cache
             n = await asyncio.to_thread(warm_seen_cache)

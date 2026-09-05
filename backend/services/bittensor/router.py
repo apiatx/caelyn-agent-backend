@@ -776,7 +776,7 @@ async def _fetch_dashboard_data() -> dict:
     return result
 
 
-async def _dashboard_refresh_loop() -> None:
+async def _dashboard_refresh_loop(skip_initial: bool = False) -> None:
     """
     Background coroutine that refreshes the dashboard cache every 5 minutes.
 
@@ -785,7 +785,14 @@ async def _dashboard_refresh_loop() -> None:
     After every successful fetch the result is also written to disk so it
     survives restarts and redeploys.
     """
-    await asyncio.sleep(10)  # let server fully start; disk cache already serves data
+    if skip_initial:
+        print(
+            "[bittensor] initial dashboard refresh skipped by web-process policy; "
+            "disk cache serves until the normal 300s interval"
+        )
+        await asyncio.sleep(_DASHBOARD_REFRESH_INTERVAL)
+    else:
+        await asyncio.sleep(10)  # let server fully start; disk cache already serves data
     while True:
         try:
             async with _dashboard_refresh_lock:

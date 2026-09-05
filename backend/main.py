@@ -181,7 +181,7 @@ class JWTAuthMiddleware:
         await self.app(scope, receive, send)
 
 
-async def _x_consensus_loop():
+async def _x_consensus_loop(skip_initial_catchup: bool = False):
     """Background loop: refresh X Select Trader Consensus once daily at 10:00 AM Chicago.
 
     Sleeps until the next 10:00 AM America/Chicago, fires the Grok/XAI refresh,
@@ -226,35 +226,41 @@ async def _x_consensus_loop():
     # Fix: on startup, if the disk cache is stale AND we're within business
     # hours (08:00–20:00 CT, not Saturday), fire immediately before entering
     # the daily sleep/fire loop.
-    _now_ct_su  = datetime.now(_CT)
-    _in_window  = 8 <= _now_ct_su.hour < 20
-    _not_sat    = _now_ct_su.weekday() != 5  # Saturday = 5
-
-    if _CACHE_PATH.exists():
-        _cache_age  = _xc_time.time() - _CACHE_PATH.stat().st_mtime
-    else:
-        _cache_age  = float("inf")  # file missing → treat as infinitely stale
-
-    _is_stale   = _cache_age > _CACHE_TTL_SECONDS
-
-    if _is_stale and _in_window and _not_sat:
+    if skip_initial_catchup:
         print(
-            f"[X_CONSENSUS_LOOP] Startup catch-up: cache is "
-            f"{_cache_age / 3600:.1f}h old (TTL={_CACHE_TTL_SECONDS / 3600:.0f}h), "
-            f"within business hours — firing refresh now instead of waiting until tomorrow"
+            "[X_CONSENSUS_LOOP] Startup catch-up skipped by web-process policy; "
+            "persisted cache serves until the normal 10:00 AM CT schedule"
         )
-        try:
-            await _run_refresh(data_service)
-        except Exception as _su_exc:
-            print(f"[X_CONSENSUS_LOOP] Startup catch-up error: {_su_exc}")
-        await _asyncio.sleep(90)  # buffer before computing next target
     else:
-        print(
-            f"[X_CONSENSUS_LOOP] Startup catch-up skipped: "
-            f"cache_age={_cache_age / 3600:.1f}h "
-            f"ttl={_CACHE_TTL_SECONDS / 3600:.0f}h "
-            f"stale={_is_stale} in_window={_in_window} not_saturday={_not_sat}"
-        )
+        _now_ct_su  = datetime.now(_CT)
+        _in_window  = 8 <= _now_ct_su.hour < 20
+        _not_sat    = _now_ct_su.weekday() != 5  # Saturday = 5
+
+        if _CACHE_PATH.exists():
+            _cache_age  = _xc_time.time() - _CACHE_PATH.stat().st_mtime
+        else:
+            _cache_age  = float("inf")  # file missing → treat as infinitely stale
+
+        _is_stale   = _cache_age > _CACHE_TTL_SECONDS
+
+        if _is_stale and _in_window and _not_sat:
+            print(
+                f"[X_CONSENSUS_LOOP] Startup catch-up: cache is "
+                f"{_cache_age / 3600:.1f}h old (TTL={_CACHE_TTL_SECONDS / 3600:.0f}h), "
+                f"within business hours — firing refresh now instead of waiting until tomorrow"
+            )
+            try:
+                await _run_refresh(data_service)
+            except Exception as _su_exc:
+                print(f"[X_CONSENSUS_LOOP] Startup catch-up error: {_su_exc}")
+            await _asyncio.sleep(90)  # buffer before computing next target
+        else:
+            print(
+                f"[X_CONSENSUS_LOOP] Startup catch-up skipped: "
+                f"cache_age={_cache_age / 3600:.1f}h "
+                f"ttl={_CACHE_TTL_SECONDS / 3600:.0f}h "
+                f"stale={_is_stale} in_window={_in_window} not_saturday={_not_sat}"
+            )
 
     while True:
         now_ct = datetime.now(_CT)
@@ -351,9 +357,7 @@ async def _odds_scanner_loop():
     registry families, writes snapshots to Neon/Postgres (7-day retention),
     computes 1h/24h/7d deltas from stored history, and caches the live payload.
 
-    Runs 90 s after startup so the Polymarket cache is warm but before the
-    investor intelligence loop (120 s) fires — ensuring get_intelligence()
-    sees a populated odds_scanner on its first call.
+    Runs 30 minutes after startup, then follows the normal 30-minute cadence.
 
     Kill switch: set ODDS_SCANNER_ENABLED=false to disable entirely.
     """
@@ -362,7 +366,7 @@ async def _odds_scanner_loop():
         print("[ODDS_SCANNER] disabled via ODDS_SCANNER_ENABLED=false — loop not started")
         return
 
-    await asyncio.sleep(90)    # let Polymarket cache warm; beat intelligence loop
+    await asyncio.sleep(1800)
     while True:
         try:
             from services.predict.odds_scanner import odds_scanner as _os
@@ -380,10 +384,9 @@ async def _investor_intelligence_loop():
     Builds: tracked macro odds families, event-family-centric equity signals,
     watchlist-first ticker resolution, and diagnostics.
 
-    Uses a 2-min startup delay so the Polymarket scored-markets cache is already
-    warm before the first intelligence build fires.
+    Uses the normal 30-minute cadence before the first intelligence build.
     """
-    await asyncio.sleep(120)   # let Polymarket scored-markets cache warm first
+    await asyncio.sleep(1800)
     while True:
         try:
             from services.predict.investor.investor_intel import investor_intel as _ii
@@ -578,18 +581,18 @@ async def lifespan(app):
             _init_screener_tbls()
         except Exception as _screener_tbl_err:
             print(f"[STARTUP] screener tables init error (deferred, non-fatal): {_screener_tbl_err}")
-        _deferred_elapsed_ms = round((time.monotonic() - _deferred_started) * 1000)
         print(
             "[STARTUP] _deferred_sync_startup complete "
-            f"elapsed_ms={_deferred_elapsed_ms}"
+            f"elapsed_s={time.monotonic() - _deferred_started:.3f}"
         )
 
     import threading
     threading.Thread(target=_deferred_sync_startup, daemon=True, name="startup-sync").start()
     threading.Thread(target=_do_init, daemon=True).start()
-    print("[STARTUP] provider-heavy restart catch-up disabled; serving persisted state")
+    asyncio.create_task(_briefing_precompute_loop(skip_initial=True))
+    asyncio.create_task(_edgar_cache_loop(skip_initial=True))
     # Continuous background classification loop for ETF vs stock resolution.
-    # Runs a startup pass after 30 s, then repeats every 30 min to resolve any
+    # Runs a first pass after 30 min, then repeats every 30 min to resolve any
     # symbols that were added to the required universe after startup.
     # Only processes symbols that are still "unknown" (or newly required) —
     # already-classified symbols are skipped.
@@ -597,7 +600,7 @@ async def lifespan(app):
         """
         Periodic instrument-type classification + display-name enrichment loop.
 
-        Startup pass: 30 s after boot.
+        First pass: after the normal 30-minute cadence.
         Repeat cadence: every 30 min.
 
         Pass 1 — instrument type:
@@ -612,7 +615,7 @@ async def lifespan(app):
           max_per_pass=60 per cycle; remaining gaps are filled on next cycle.
         """
         _PERIOD_S = 1800   # 30 min between passes
-        await asyncio.sleep(30)   # let the master screener initialize first
+        await asyncio.sleep(_PERIOD_S)
         while True:
             try:
                 from data.options_instrument_type_service import (
@@ -672,9 +675,14 @@ async def lifespan(app):
             except Exception as _ityp_e:
                 print(f"[ITYPE_LOOP] classification pass error (non-fatal): {_ityp_e}")
             await asyncio.sleep(_PERIOD_S)
-    # Provider-heavy full-universe loops are intentionally not registered merely
-    # because the web process restarted. Persisted LKG/cache state serves reads;
-    # explicit/manual and wall-clock scheduled refresh paths remain available.
+    asyncio.create_task(_itype_classify_loop())
+    asyncio.create_task(_master_screener_loop(skip_initial=True))
+    asyncio.create_task(_sectors_fast_backfill_loop(skip_initial=True))
+    asyncio.create_task(_theme_options_supplement_loop(skip_initial=True))
+    # Tradier precompute loop removed — Options Flow now uses TradierFlowEngine directly
+    asyncio.create_task(_polygon_options_ingestion_loop(skip_initial=True))
+    asyncio.create_task(_macro_precompute_loop(skip_initial=True))
+    asyncio.create_task(_strategy_history_precompute_loop(skip_initial=True))
     # _sector_rotation_precompute_loop DISABLED (2025-05):
     # /api/themes/relative-strength?classification=sector now covers all 11 SPDR sector RS data
     # via theme_rs_service (warmup_theme_rs loop). Running both loops duplicated Tradier + yfinance
@@ -688,10 +696,22 @@ async def lifespan(app):
             return _fn
         try:
             _fn = await asyncio.to_thread(_import_canon_maint)
-            _fn()
+            _fn(skip_initial=True)
         except Exception as _e:
             print(f"[STARTUP] canonical history maintenance scheduler failed to start: {_e}")
     asyncio.create_task(_canon_maint_deferred())
+    asyncio.create_task(_hl_boot_and_run(_hl_state))
+    async def _bittensor_deferred():
+        def _import_bittensor():
+            from services.bittensor.router import _dashboard_refresh_loop as _bittensor_refresh_loop
+            return _bittensor_refresh_loop
+        try:
+            _loop_fn = await asyncio.to_thread(_import_bittensor)
+            asyncio.create_task(_loop_fn(skip_initial=True))
+        except Exception as _e:
+            print(f"[STARTUP] Bittensor refresh task error: {_e}")
+    asyncio.create_task(_bittensor_deferred())
+    asyncio.create_task(_x_consensus_loop(skip_initial_catchup=True))
     # Alert Signal Bus: periodic retention cleanup (every 12 h)
     async def _alert_bus_retention_loop():
         import asyncio as _aio
@@ -874,6 +894,7 @@ async def lifespan(app):
             await _aio.sleep(60)
 
     asyncio.create_task(_watchlist_fundamentals_weekly_loop())
+    asyncio.create_task(_ei_materials_loop(skip_initial=True))
 
     # Watchlist rank snapshot cadence — advances RV + vol/MC rank baselines every
     # ~5 minutes using warm quote-cache data.  GET path is read-only (never writes
@@ -883,7 +904,7 @@ async def lifespan(app):
         import math   as _math
         import time   as _time
 
-        await _aio.sleep(120)   # let quote cache warm before first snapshot
+        await _aio.sleep(300)   # normal 5-minute cadence before first snapshot
 
         while True:
             try:
@@ -992,9 +1013,22 @@ async def lifespan(app):
         except Exception as _e:
             print(f"[STARTUP] Thematic context warmup task error: {_e}")
     asyncio.create_task(_thematic_warmup_deferred())
-    # Theme RS, thematic-universe, and earnings provider refreshes are not
-    # restart catch-up work. Their persisted snapshots remain available.
-
+    # Dynamic thematic universe: build and refresh every 15 min.
+    asyncio.create_task(_dynamic_thematic_universe_loop(skip_initial=True))
+    # Themes by Relative Strength warmup: offloaded to worker thread so the
+    # synchronous import of theme_rs_service (heavy transitive deps) cannot
+    # starve the event loop.  The returned async callable is scheduled on the
+    # main loop after the import completes.
+    async def _theme_rs_warmup_deferred():
+        def _import_theme_rs():
+            from services.theme_rs_service import warmup_theme_rs as _theme_rs_warmup
+            return _theme_rs_warmup
+        try:
+            _warmup_fn = await asyncio.to_thread(_import_theme_rs)
+            asyncio.create_task(_warmup_fn(skip_initial=True))
+        except Exception as _e:
+            print(f"[STARTUP] Theme RS warmup error: {_e}")
+    asyncio.create_task(_theme_rs_warmup_deferred())
     # ── Post-yield deferred bootstrap ────────────────────────────────────────
     # All synchronous disk reads and optional module imports that do NOT need
     # to complete before the first HTTP request is served.  Scheduled here but
@@ -1020,7 +1054,10 @@ async def lifespan(app):
             app.include_router(_insider_router, prefix="/api")
             app.include_router(_cong_router, prefix="/api")
             app.include_router(_whale_router, prefix="/api")
-            print("[BOOTSTRAP] insider/congressional/whale routers registered; restart catch-up disabled")
+            asyncio.create_task(_insider_bg_loop(skip_initial=True))
+            asyncio.create_task(_cong_bg_loop(skip_initial=True))
+            asyncio.create_task(_whale_bg_loop(skip_initial=True))
+            print("[BOOTSTRAP] insider/congressional/whale routers + background loops registered post-yield")
         except Exception as _hv_err:
             print(f"[BOOTSTRAP] Heavy service import failed (non-fatal): {_hv_err}")
 
@@ -1029,22 +1066,13 @@ async def lifespan(app):
         #     Does NOT scan the full watchlist universe on each tick.
         try:
             from services.earnings_monitor_service import earnings_monitor_tick_loop as _em_tick
-
-            async def _register_earnings_tick_at_normal_cadence():
-                # earnings_monitor_tick_loop has its own 30s initial delay.
-                # Waiting 30s before registration makes its first automatic
-                # pass occur at the normal 60s cadence instead of during the
-                # post-yield startup window.
-                await asyncio.sleep(30)
-                await _em_tick()
-
-            asyncio.create_task(_register_earnings_tick_at_normal_cadence())
-            print(
-                "[EARNINGS_MONITOR] tick loop registration deferred 30s "
-                "(first automatic pass at normal 60s cadence)"
-            )
+            asyncio.create_task(_em_tick())
+            print("[EARNINGS_MONITOR] tick loop registered (60s interval, 30s initial delay)")
         except Exception as _em_tick_err:
             print(f"[EARNINGS_MONITOR] tick loop init error (non-fatal): {_em_tick_err}")
+
+        # No one-shot earnings catch-up on process restart. The canonical
+        # 60-second tick loop above remains registered.
 
         # 0c. Live Earnings Monitor — optional persistent loop (Reserved VM mode only).
         #     Use LIVE_EARNINGS_MONITOR_ENABLED=true for always-on VMs.
@@ -1069,6 +1097,16 @@ async def lifespan(app):
             )
             await asyncio.to_thread(_d2x_load_lkg)
 
+            async def _defiance_2x_daily_loop():
+                await asyncio.sleep(20 * 3600)
+                while True:
+                    try:
+                        await _d2x_refresh_catalog()
+                    except Exception as _de:
+                        print(f"[DEFIANCE_2X] Daily refresh error: {_de}")
+                    await asyncio.sleep(20 * 3600)
+
+            asyncio.create_task(_defiance_2x_daily_loop())
             _BOOTSTRAP_STATE["steps"]["d2x"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
         except Exception as _e:
             print(f"[BOOTSTRAP] Defiance 2X catalog init error: {_e}")
@@ -1113,16 +1151,21 @@ async def lifespan(app):
                 "ok": False, "error": str(_e),
             }
 
-        # 3. Watchlist Stage 2 — load disk LKG then start gentle warmup.
+        # 3. Watchlist Stage 2 — hydrate disk LKG for zero-I/O startup serving.
+        # The canonical daily 03:30 ET Screener Hub scheduler and manual admin
+        # recovery endpoint own refreshes; process restart must not recompute
+        # the full watchlist universe.
         _t = _bst.monotonic()
         try:
-            from services.watchlist_stage2_service import (
-                load_lkg                    as _wl_stage2_load,
-            )
+            from services.watchlist_stage2_service import load_lkg as _wl_stage2_load
             await asyncio.to_thread(_wl_stage2_load)
+            print(
+                "[BOOTSTRAP] Watchlist Stage2 LKG loaded; restart-time "
+                "full-universe warmup skipped"
+            )
             _BOOTSTRAP_STATE["steps"]["stage2_lkg"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
         except Exception as _e:
-            print(f"[BOOTSTRAP] Watchlist Stage2 warmup error: {_e}")
+            print(f"[BOOTSTRAP] Watchlist Stage2 LKG load error: {_e}")
             _BOOTSTRAP_STATE["steps"]["stage2_lkg"] = {"ok": False, "error": str(_e)}
 
         # 5. Options screener snapshot — restore in-memory state from disk.
@@ -1140,8 +1183,10 @@ async def lifespan(app):
         try:
             from services.earnings_clean_service import (
                 _load_all_earn_snaps_from_disk   as _load_earn_snaps,
+                _earnings_curated_precompute_loop as _earn_precompute_loop,
             )
             await asyncio.to_thread(_load_earn_snaps)
+            asyncio.create_task(_earn_precompute_loop(skip_initial=True))
             _BOOTSTRAP_STATE["steps"]["earn_snaps"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
         except Exception as _e:
             print(f"[BOOTSTRAP] Earnings curated precompute init error: {_e}")
@@ -1157,6 +1202,26 @@ async def lifespan(app):
         except Exception as _e:
             print(f"[BOOTSTRAP] Neon snapshot recovery error (non-fatal): {_e}")
             _BOOTSTRAP_STATE["steps"]["neon_recovery"] = {"ok": False, "error": str(_e)}
+
+        # 8. Retained Confluence snapshot — preserve retained state on restart.
+        #    Requests and explicit refresh paths own rebuilds; web boot only
+        #    inspects whether retained in-memory state is already available.
+        _t = _bst.monotonic()
+        try:
+            from services.confluence_v2_service import (
+                _RETAINED,
+                _RETAINED_LOCK,
+            )
+            with _RETAINED_LOCK:
+                _have_snap = _RETAINED["snapshot"] is not None
+            print(
+                "[BOOTSTRAP] Confluence: restart rebuild skipped "
+                f"(retained_snapshot_present={_have_snap})"
+            )
+            _BOOTSTRAP_STATE["steps"]["confluence_warm"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
+        except Exception as _e:
+            print(f"[BOOTSTRAP] Confluence retained warm error (non-fatal): {_e}")
+            _BOOTSTRAP_STATE["steps"]["confluence_warm"] = {"ok": False, "error": str(_e)}
 
         # 9. Watchlist news LKG prewarm — hydrate _news_lkg from Neon archive.
         #    Moved after all sequential preloads so the async task (~77s Neon
@@ -1181,8 +1246,7 @@ async def lifespan(app):
     asyncio.create_task(_post_yield_bootstrap())
     # Weekly calendar snapshots (Dividends, IPOs, Splits, Economic, Treasury).
     # Reads only from disk on request; refreshes Sunday in ET per per-tab hour.
-    # Also runs a startup staleness check (45s delay) so restarts mid-week
-    # immediately refresh stale snapshots without waiting for Sunday.
+    # Restart-time stale catch-up is suppressed; normal scheduled checks remain.
     async def _calendar_snap_deferred():
         def _import_calendar():
             from services.calendar_snapshot_service import (
@@ -1192,7 +1256,12 @@ async def lifespan(app):
             return _calendar_snap_loop, _fmp_key_for_snap
         try:
             _calendar_snap_loop, _fmp_key_for_snap = await asyncio.to_thread(_import_calendar)
-            asyncio.create_task(_calendar_snap_loop(lambda: _fmp_key_for_snap))
+            asyncio.create_task(
+                _calendar_snap_loop(
+                    lambda: _fmp_key_for_snap,
+                    skip_startup_stale_check=True,
+                )
+            )
         except Exception as _e:
             print(f"[STARTUP] calendar snapshot scheduler init error: {_e}")
     asyncio.create_task(_calendar_snap_deferred())
@@ -1215,6 +1284,16 @@ async def lifespan(app):
         except Exception as _e:
             print(f"[STARTUP] Screener Hub scheduler init error: {_e}")
     asyncio.create_task(_screener_hub_deferred())
+    # Tracked Odds Registry: fetch → match → persist → delta → cache, every 30 min.
+    # Runs at 90 s so it beats the intelligence loop (120 s) on first cycle.
+    asyncio.create_task(_odds_scanner_loop())
+    # Predict page investor intelligence: pre-warm event-family payload every 30 min.
+    # Covers tracked macro odds, equity signals, watchlist-first ticker resolution.
+    asyncio.create_task(_investor_intelligence_loop())
+
+    # No Terminal prewarm or duplicate Trading Dashboard nudge on restart.
+    # Persisted LKG serves requests; canonical recurring loops remain active.
+
     # Watchlist RSS sweeper — continuous ~2-min full-universe RSS archive sweep.
     # Import offloaded to worker thread so the synchronous import of
     # watchlist_rss_sweeper (news_major_service, httpx pool init) cannot starve
@@ -1696,6 +1775,59 @@ _BOOTSTRAP_STATE: dict = {
 import threading as _threading
 _init_event = _threading.Event()
 
+_BRIEFING_FINVIZ_MAX_INFLIGHT = 2
+_briefing_finviz_sem = asyncio.Semaphore(_BRIEFING_FINVIZ_MAX_INFLIGHT)
+_BRIEFING_RUNTIME_DIAG = {
+    "active": False,
+    "finviz_active": 0,
+    "finviz_max_inflight": 0,
+    "max_event_loop_lag_ms": 0.0,
+}
+
+
+async def _briefing_event_loop_heartbeat(stop: asyncio.Event) -> None:
+    loop = asyncio.get_running_loop()
+    expected = loop.time() + 0.1
+    while not stop.is_set():
+        await asyncio.sleep(0.1)
+        now = loop.time()
+        _BRIEFING_RUNTIME_DIAG["max_event_loop_lag_ms"] = max(
+            _BRIEFING_RUNTIME_DIAG["max_event_loop_lag_ms"],
+            max(0.0, (now - expected) * 1000.0),
+        )
+        expected = now + 0.1
+
+
+async def _run_briefing_finviz_calls(finviz, diagnostics: dict | None = None) -> list:
+    diagnostics = diagnostics if diagnostics is not None else {}
+    diagnostics.update(active=0, max_inflight=0, calls=0, parse_active=False)
+    methods = [
+        finviz.get_stage2_breakouts, finviz.get_volume_breakouts,
+        finviz.get_macd_crossovers, finviz.get_unusual_volume,
+        finviz.get_new_highs, finviz.get_high_short_float,
+        finviz.get_insider_buying, finviz.get_revenue_growth_leaders,
+        finviz.get_rsi_recovery, finviz.get_accumulation_stocks,
+    ]
+
+    async def run(method):
+        async with _briefing_finviz_sem:
+            diagnostics["active"] += 1
+            _BRIEFING_RUNTIME_DIAG["finviz_active"] = diagnostics["active"]
+            diagnostics["calls"] += 1
+            diagnostics["max_inflight"] = max(
+                diagnostics["max_inflight"], diagnostics["active"]
+            )
+            _BRIEFING_RUNTIME_DIAG["finviz_max_inflight"] = diagnostics["max_inflight"]
+            diagnostics["parse_active"] = True
+            try:
+                return await method()
+            finally:
+                diagnostics["parse_active"] = False
+                diagnostics["active"] -= 1
+                _BRIEFING_RUNTIME_DIAG["finviz_active"] = diagnostics["active"]
+
+    return await asyncio.gather(*(run(method) for method in methods), return_exceptions=True)
+
 def _do_init():
     global data_service, agent, _init_done, _init_error
     try:
@@ -1715,7 +1847,7 @@ def _do_init():
         # Set event so _wait_for_init returns immediately with 503
         # instead of blocking every request for 60 seconds
         _init_event.set()
-async def _briefing_precompute_loop():
+async def _briefing_precompute_loop(skip_initial: bool = False):
     """
     Background precomputation for Daily Briefing.
     Runs every 30 minutes using free/unlimited APIs + one Perplexity web search
@@ -1732,8 +1864,26 @@ async def _briefing_precompute_loop():
 
     from data.cache import cache, BRIEFING_PRECOMPUTE_TTL
 
+    if skip_initial:
+        print(
+            "[BRIEFING_PRECOMPUTE] Initial pass skipped by web-process policy; "
+            "waiting for normal 30-minute cadence"
+        )
+        await asyncio.sleep(1800)
+
     while True:
         try:
+            cycle_started = asyncio.get_running_loop().time()
+            finviz_diag = {}
+            finviz_started = cycle_started
+            _BRIEFING_RUNTIME_DIAG.update(
+                active=True, finviz_active=0, finviz_max_inflight=0,
+                max_event_loop_lag_ms=0.0,
+            )
+            heartbeat_stop = asyncio.Event()
+            heartbeat_task = asyncio.create_task(
+                _briefing_event_loop_heartbeat(heartbeat_stop)
+            )
             print("[BRIEFING_PRECOMPUTE] Starting background scan...")
 
             # Phase 1: All free API screener + macro calls (same as get_morning_briefing Phase 1)
@@ -1742,16 +1892,7 @@ async def _briefing_precompute_loop():
             briefing_tasks = [
                 data_service.fear_greed.get_fear_greed_index(),
                 asyncio.to_thread(data_service.fred.get_quick_macro),
-                data_service.finviz.get_stage2_breakouts(),
-                data_service.finviz.get_volume_breakouts(),
-                data_service.finviz.get_macd_crossovers(),
-                data_service.finviz.get_unusual_volume(),
-                data_service.finviz.get_new_highs(),
-                data_service.finviz.get_high_short_float(),
-                data_service.finviz.get_insider_buying(),
-                data_service.finviz.get_revenue_growth_leaders(),
-                data_service.finviz.get_rsi_recovery(),
-                data_service.finviz.get_accumulation_stocks(),
+                _run_briefing_finviz_calls(data_service.finviz, finviz_diag),
                 data_service.stocktwits.get_trending(),
                 asyncio.to_thread(data_service.finnhub.get_upcoming_earnings),
             ]
@@ -1779,10 +1920,14 @@ async def _briefing_precompute_loop():
                     default = []
                 return val if not isinstance(val, Exception) else default
 
-            (fear_greed, fred_macro, stage2_breakouts, volume_breakouts,
-             macd_crossovers, unusual_volume, new_highs, high_short,
-             insider_buying, revenue_leaders, rsi_recovery, accumulation,
+            (fear_greed, fred_macro, finviz_results,
              trending, upcoming_earnings, market_news_raw) = results
+            finviz_elapsed_s = asyncio.get_running_loop().time() - finviz_started
+            if isinstance(finviz_results, Exception):
+                finviz_results = [finviz_results] * 10
+            (stage2_breakouts, volume_breakouts, macd_crossovers,
+             unusual_volume, new_highs, high_short, insider_buying,
+             revenue_leaders, rsi_recovery, accumulation) = finviz_results
 
             market_news_val = safe(market_news_raw)
             # Normalize: web_search returns dict with 'articles', FMP returns list
@@ -1976,9 +2121,25 @@ async def _briefing_precompute_loop():
             }
 
             cache.set("briefing_precomputed_v1", precomputed, BRIEFING_PRECOMPUTE_TTL)
+            total_elapsed_s = asyncio.get_running_loop().time() - cycle_started
+            heartbeat_stop.set()
+            await heartbeat_task
+            _BRIEFING_RUNTIME_DIAG["active"] = False
+            print(
+                "[BRIEFING_PRECOMPUTE] "
+                f"finviz_calls={finviz_diag.get('calls', 0)} "
+                f"finviz_max_inflight={finviz_diag.get('max_inflight', 0)} "
+                f"finviz_elapsed_s={finviz_elapsed_s:.2f} "
+                f"total_elapsed_s={total_elapsed_s:.2f} "
+                f"max_event_loop_lag_ms={_BRIEFING_RUNTIME_DIAG['max_event_loop_lag_ms']:.1f} "
+                "cache_write=ok"
+            )
             print(f"[BRIEFING_PRECOMPUTE] Cached {len(all_tickers)} tickers, {len(priority_tickers)} priority. Next run in 30m.")
 
         except Exception as e:
+            _BRIEFING_RUNTIME_DIAG["active"] = False
+            if "heartbeat_stop" in locals():
+                heartbeat_stop.set()
             print(f"[BRIEFING_PRECOMPUTE] Error: {e}")
             import traceback
             traceback.print_exc()
@@ -1995,7 +2156,7 @@ _smart_scan_running = False
 # ============================================================
 # EDGAR Background Cache Loop
 # ============================================================
-async def _edgar_cache_loop():
+async def _edgar_cache_loop(skip_initial: bool = False):
     """
     Background EDGAR data caching with two schedules:
       - Full refresh: nightly at midnight CST (financials + filings + catalysts + insider)
@@ -2013,13 +2174,19 @@ async def _edgar_cache_loop():
 
     from data.edgar_cache import refresh_universe, is_midnight_cst, is_market_hours
 
-    # Initial full refresh on startup (populate cache if empty)
-    await asyncio.sleep(30)  # Let other init tasks finish first
-    try:
-        print("[EDGAR_CACHE] Running initial full refresh on startup...")
-        await refresh_universe(data_service.sec_edgar, mode="full")
-    except Exception as e:
-        print(f"[EDGAR_CACHE] Initial refresh error: {e}")
+    # Optional initial full refresh retained for backward-compatible callers.
+    if skip_initial:
+        print(
+            "[EDGAR_CACHE] Initial full refresh skipped by web-process policy; "
+            "nightly and 2-hour schedules remain active"
+        )
+    else:
+        await asyncio.sleep(30)  # Let other init tasks finish first
+        try:
+            print("[EDGAR_CACHE] Running initial full refresh on startup...")
+            await refresh_universe(data_service.sec_edgar, mode="full")
+        except Exception as e:
+            print(f"[EDGAR_CACHE] Initial refresh error: {e}")
 
     last_full_refresh = time.time()
     last_filings_refresh = time.time()
@@ -2050,20 +2217,21 @@ async def _edgar_cache_loop():
             await asyncio.sleep(600)
 
 
-async def _ei_materials_loop():
+async def _ei_materials_loop(skip_initial: bool = False):
     """
     Background loop: refresh SEC materials disk cache daily for all
     EI-eligible watchlist symbols.
 
     Schedule:
-      - Startup pass: 5 min after boot (cold-cache fill)
+      - Legacy startup pass: 5 min after boot
+      - Web-process first pass: after the normal 24 h cadence
       - Repeat:       every 24 h
 
     Each symbol is fetched sequentially with 0.6 s inter-symbol pacing
     to stay well under SEC's 10 req/s rate limit (see ei_materials_service).
     Errors per-symbol are logged and skipped — they don't abort the loop.
     """
-    await asyncio.sleep(300)   # 5 min initial delay — let other loops stabilise
+    await asyncio.sleep(86400 if skip_initial else 300)
 
     while True:
         try:
@@ -2190,6 +2358,13 @@ async def admin_startup_status():
         _pg_pool_info = _pg_instr()
     except Exception:
         _pg_pool_info = None
+    try:
+        from services.calendar_snapshot_service import (
+            get_calendar_read_diagnostics as _calendar_read_diag,
+        )
+        _calendar_read_info = _calendar_read_diag()
+    except Exception:
+        _calendar_read_info = None
     return {
         "bootstrap_done":  _BOOTSTRAP_STATE.get("done", False),
         "elapsed_ms":      _BOOTSTRAP_STATE.get("elapsed_ms"),
@@ -2200,6 +2375,12 @@ async def admin_startup_status():
                            if _BOOTSTRAP_STATE.get("started_at") else None,
         "options_session": _options_session,
         "db_pool":         _pg_pool_info,
+        "calendar_reads":   _calendar_read_info,
+        "briefing_precompute": dict(_BRIEFING_RUNTIME_DIAG),
+        "finviz_parse": (
+            __import__("data.finviz_scraper", fromlist=["get_finviz_parse_diagnostics"])
+            .get_finviz_parse_diagnostics()
+        ),
     }
 
 
@@ -13078,7 +13259,7 @@ async def _home_options_fast_loop():
         await asyncio.sleep(_HOME_OPTIONS_FAST_LOOP_INTERVAL)
 
 
-async def _dynamic_thematic_universe_loop():
+async def _dynamic_thematic_universe_loop(skip_initial: bool = False):
     """
     Background refresh loop for the dynamic thematic universe.
 
@@ -13089,7 +13270,14 @@ async def _dynamic_thematic_universe_loop():
 
     Never raises — all errors are caught and logged.
     """
-    await asyncio.sleep(30)   # Let thematic context + X-consensus warm up first
+    if skip_initial:
+        print(
+            "[DTU_LOOP] Initial refresh skipped by web-process policy; "
+            "persisted snapshot serves until the normal 15-minute interval"
+        )
+        await asyncio.sleep(15 * 60)
+    else:
+        await asyncio.sleep(30)   # Let thematic context + X-consensus warm up first
     while True:
         try:
             from services.dynamic_thematic_universe import get_dynamic_thematic_universe as _build_dtu
@@ -13108,7 +13296,7 @@ async def _dynamic_thematic_universe_loop():
         await asyncio.sleep(15 * 60)   # 15 minutes
 
 
-async def _master_screener_loop():
+async def _master_screener_loop(skip_initial: bool = False):
     """
     Unified master unusual-options screener background loop (Phase 5 + speed).
 
@@ -13141,7 +13329,9 @@ async def _master_screener_loop():
         from data.unified_options_engine import UnifiedOptionsEngine
         return UnifiedOptionsEngine
 
-    UnifiedOptionsEngine = await asyncio.to_thread(_import_master_screener_dependencies)
+    UnifiedOptionsEngine = await asyncio.to_thread(
+        _import_master_screener_dependencies
+    )
 
     if data_service is None or not data_service.tradier:
         print("[MASTER_SCREENER] Tradier provider not available, skipping loop")
@@ -13168,12 +13358,25 @@ async def _master_screener_loop():
     # TTL enforced inside _inspect_shortlist (12 minutes).
     _master_expiry_cache: dict = {}
 
-    _MASTER_CYCLE_SLEEP = 60  # seconds between cycles; preserve shared runtime/provider headroom
+    _MASTER_CYCLE_SLEEP = 60  # preserve shared runtime/provider headroom
 
     from data.tradier_market_session import get_session as _get_ms_session
     import data.loop_diagnostics as _ld_ms
 
     _MASTER_OFFHOURS_SLEEP = 1200  # 20 min off-hours/weekends; chains don't change overnight
+
+    if skip_initial:
+        _initial_session = _get_ms_session()
+        _initial_sleep = (
+            _MASTER_OFFHOURS_SLEEP
+            if _initial_session in ("off_hours", "weekend")
+            else _MASTER_CYCLE_SLEEP
+        )
+        print(
+            "[MASTER_SCREENER] Initial scan skipped by web-process policy; "
+            f"LKG serves until the normal {_initial_sleep}s interval"
+        )
+        await asyncio.sleep(_initial_sleep)
 
     while True:
         _ms_session = _get_ms_session()
@@ -13262,7 +13465,10 @@ async def _master_screener_loop():
                         _cycle_seeds, tab="master",
                     )
                 cache.set(_OPTIONS_MASTER_PREFILTER_KEY, prefilter_data, _OPTIONS_PREFILTER_CACHE_TTL)
-                await asyncio.to_thread(_save_master_prefilter_to_disk, prefilter_data)
+                await asyncio.to_thread(
+                    _save_master_prefilter_to_disk,
+                    prefilter_data,
+                )
                 n_pf = len(prefilter_data.get("candidates", []))
                 print(f"[MASTER_SCREENER] Prefilter built: {n_pf} candidates in {_time.time()-t_pf:.1f}s.")
 
@@ -13495,7 +13701,7 @@ async def _master_screener_loop():
 
 
 
-async def _sectors_fast_backfill_loop():
+async def _sectors_fast_backfill_loop(skip_initial: bool = False):
     """
     Dedicated Sectors coverage backfill — uses a direct chain summarizer
     instead of run_live_scan(), so ALL tickers get real call/put premium
@@ -13566,8 +13772,22 @@ async def _sectors_fast_backfill_loop():
     _sbf_sleep_s           = _SBF_BACKGROUND_SLEEP  # safe default for except block
     _sbf_last_inval_at     = 0.0  # tracks last tree-cache invalidation (throttle)
 
-    # Brief startup delay — let master screener warm up first
-    await asyncio.sleep(30)
+    # Preserve the legacy warmup for direct callers. Web workers wait one
+    # existing active/background/off-hours cadence before the first scan.
+    if skip_initial:
+        if not _sbf_is_regular_session():
+            _sbf_initial_sleep = _SBF_OFFHOURS_SLEEP
+        elif _sbf_is_page_active():
+            _sbf_initial_sleep = _SBF_PRIORITY_SLEEP
+        else:
+            _sbf_initial_sleep = _SBF_BACKGROUND_SLEEP
+        print(
+            "[SECTORS_BF] Initial pass skipped by web-process policy; "
+            f"waiting {_sbf_initial_sleep}s"
+        )
+        await asyncio.sleep(_sbf_initial_sleep)
+    else:
+        await asyncio.sleep(30)
     print("[SECTORS_BF] Sectors fast backfill loop started (chain summarizer mode)")
 
     while True:
@@ -13914,7 +14134,7 @@ async def _sectors_fast_backfill_loop():
         await asyncio.sleep(_sbf_sleep_s)
 
 
-async def _theme_options_supplement_loop():
+async def _theme_options_supplement_loop(skip_initial: bool = False):
     """
     Slow supplemental options scan for curated theme proxy symbols that are
     not already covered by the master screener results.
@@ -13974,8 +14194,21 @@ async def _theme_options_supplement_loop():
         try: return int(v) if v is not None else 0
         except: return 0
 
-    # Initial delay: give master screener time to warm up first
-    await asyncio.sleep(60)
+    # Preserve the legacy warmup for direct callers. Web workers wait one
+    # existing active/off-hours cadence before the first scan.
+    if skip_initial:
+        _supp_initial_sleep = (
+            _ACTIVE_CYCLE_SLEEP
+            if _supp_is_regular_session()
+            else _OFFHOURS_SUPP_SLEEP
+        )
+        print(
+            "[THEME_SUPP] Initial pass skipped by web-process policy; "
+            f"waiting {_supp_initial_sleep}s"
+        )
+        await asyncio.sleep(_supp_initial_sleep)
+    else:
+        await asyncio.sleep(60)
     print("[THEME_SUPP] Theme options supplement loop started")
 
     while True:
@@ -15480,7 +15713,7 @@ async def get_options_expirations(
 # POLYGON HISTORIC OPTIONS INGESTION — Background data pipeline
 # ═══════════════════════════════════════════════════════════════════
 
-async def _polygon_options_ingestion_loop():
+async def _polygon_options_ingestion_loop(skip_initial: bool = False):
     """
     Background loop that fetches historic options data + technical indicators
     from Polygon (Massive free tier, 5 calls/min) for the full watchlist.
@@ -15495,7 +15728,14 @@ async def _polygon_options_ingestion_loop():
         return
 
     try:
-        from data.options_ingestion import run_ingestion_loop
+        from data.options_ingestion import REFETCH_INTERVAL_HOURS, run_ingestion_loop
+        if skip_initial:
+            _initial_wait = REFETCH_INTERVAL_HOURS * 3600
+            print(
+                "[POLYGON_INGEST] Initial pass skipped by web-process policy; "
+                f"waiting {_initial_wait}s"
+            )
+            await asyncio.sleep(_initial_wait)
         print("[POLYGON_INGEST] Starting historic options data ingestion loop")
         await run_ingestion_loop(data_service.polygon_options, init_event=_init_event)
     except Exception as e:
@@ -16119,14 +16359,22 @@ def _build_trading_fetch_fresh(mp):
 # ── Background refresh loop ──────────────────────────────────────────
 
 _MACRO_PRECOMPUTE_INTERVAL = 720  # 12 minutes (cache TTL is 15 min)
+MAX_MACRO_TAB_PREWARM_CONCURRENCY = 2
 
 
-async def _macro_precompute_loop():
+async def _macro_precompute_loop(skip_initial: bool = False):
     """Background loop to keep macro data warm in cache."""
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _init_event.wait, 120)
 
     import time as _time
+
+    if skip_initial:
+        print(
+            "[MACRO_PRECOMPUTE] Initial pass skipped by web-process policy; "
+            f"waiting {_MACRO_PRECOMPUTE_INTERVAL}s"
+        )
+        await asyncio.sleep(_MACRO_PRECOMPUTE_INTERVAL)
 
     while True:
         mp = _get_macro_provider()
@@ -16135,6 +16383,8 @@ async def _macro_precompute_loop():
             await asyncio.sleep(60)
             continue
 
+        heartbeat_task = None
+        heartbeat_done = None
         try:
             # Proactive reserve: defer when insufficient capacity for dashboard + risk fetch
             from data.tradier_provider import TRADIER_LIMITER as _tl_mp
@@ -16143,30 +16393,64 @@ async def _macro_precompute_loop():
                 await asyncio.sleep(60)
                 continue
 
-            t0 = _time.time()
+            t0 = _time.perf_counter()
+            phase_times: dict[str, float] = {}
+            max_loop_lag_ms = 0.0
+            heartbeat_done = asyncio.Event()
+
+            async def _macro_lag_heartbeat():
+                nonlocal max_loop_lag_ms
+                interval = 0.1
+                expected = asyncio.get_running_loop().time() + interval
+                while not heartbeat_done.is_set():
+                    await asyncio.sleep(interval)
+                    now = asyncio.get_running_loop().time()
+                    max_loop_lag_ms = max(
+                        max_loop_lag_ms, max(0.0, (now - expected) * 1000.0)
+                    )
+                    expected = now + interval
+
+            heartbeat_task = asyncio.create_task(_macro_lag_heartbeat())
+
+            async def _timed_phase(name: str, awaitable):
+                started = _time.perf_counter()
+                try:
+                    return await awaitable
+                finally:
+                    elapsed_ms = (_time.perf_counter() - started) * 1000.0
+                    phase_times[name] = elapsed_ms
+                    print(f"[MACRO_PHASE] phase={name} elapsed_ms={elapsed_ms:.1f}")
+
             # Hybrid async: FMP real-time + FRED economic releases
-            dashboard = await mp.get_dashboard()
+            dashboard = await _timed_phase("dashboard", mp.get_dashboard())
 
             # Pre-warm indicators
-            await asyncio.to_thread(mp.get_indicators)
+            await _timed_phase("indicators", asyncio.to_thread(mp.get_indicators))
 
             # Pre-warm calendar
-            await mp.get_calendar(days_ahead=14)
+            await _timed_phase("calendar", mp.get_calendar(days_ahead=14))
 
             # Pre-warm tab endpoints (rates, inflation, growth, labor, risk)
-            await asyncio.gather(
-                mp.get_rates(),
-                mp.get_inflation(),
-                mp.get_growth(),
-                mp.get_labor(),
-                mp.get_risk(),
-                return_exceptions=True,
+            tab_semaphore = asyncio.Semaphore(MAX_MACRO_TAB_PREWARM_CONCURRENCY)
+
+            async def _bounded_tab(method):
+                async with tab_semaphore:
+                    return await method()
+
+            await _timed_phase(
+                "tabs",
+                asyncio.gather(
+                    _bounded_tab(mp.get_rates),
+                    _bounded_tab(mp.get_inflation),
+                    _bounded_tab(mp.get_growth),
+                    _bounded_tab(mp.get_labor),
+                    _bounded_tab(mp.get_risk),
+                    return_exceptions=True,
+                ),
             )
 
-            elapsed = _time.time() - t0
-            print(f"[MACRO_PRECOMPUTE] Refreshed dashboard + indicators + calendar + tabs in {elapsed:.1f}s")
-
             # Schedule canonical Trading Dashboard refresh when capacity available
+            schedule_started = _time.perf_counter()
             try:
                 from services.trading_dashboard_service import schedule_trading_dashboard_refresh
                 fetch = _build_trading_fetch_fresh(mp)
@@ -16175,18 +16459,44 @@ async def _macro_precompute_loop():
                     print(f"[MACRO_PRECOMPUTE] Trading Dashboard refresh: {td_result.get('status')}")
             except Exception as td_err:
                 print(f"[MACRO_PRECOMPUTE] Trading Dashboard refresh error (non-fatal): {td_err}")
+            finally:
+                schedule_ms = (_time.perf_counter() - schedule_started) * 1000.0
+                phase_times["trading_dashboard_schedule"] = schedule_ms
+                print(
+                    "[MACRO_PHASE] phase=trading_dashboard_schedule "
+                    f"elapsed_ms={schedule_ms:.1f}"
+                )
+
+            heartbeat_done.set()
+            await heartbeat_task
+            elapsed_ms = (_time.perf_counter() - t0) * 1000.0
+            worst_phase = max(phase_times, key=phase_times.get)
+            print(
+                "[MACRO_PRECOMPUTE] Refreshed dashboard + indicators + calendar + "
+                f"tabs in {elapsed_ms / 1000.0:.1f}s "
+                f"max_event_loop_lag_ms={max_loop_lag_ms:.1f} "
+                f"worst_phase={worst_phase}"
+            )
 
         except Exception as e:
             import traceback
             traceback.print_exc()
             print(f"[MACRO_PRECOMPUTE] Error: {e}")
+        finally:
+            if (
+                heartbeat_done is not None
+                and heartbeat_task is not None
+                and not heartbeat_task.done()
+            ):
+                heartbeat_done.set()
+                await heartbeat_task
 
         await asyncio.sleep(_MACRO_PRECOMPUTE_INTERVAL)
 
 
 # ── Strategy History precompute loop ─────────────────────────────────
 
-async def _strategy_history_precompute_loop():
+async def _strategy_history_precompute_loop(skip_initial: bool = False):
     """
     Background loop to pre-warm strategy historical series caches
     (FRED VIXCLS, FRED DGS10, yfinance ^GSPC — all 5-year windows).
@@ -16201,6 +16511,13 @@ async def _strategy_history_precompute_loop():
     await loop.run_in_executor(None, _init_event.wait, 180)
 
     import time as _time
+
+    if skip_initial:
+        print(
+            "[STRATEGY_HIST] Initial precompute skipped by web-process policy; "
+            "persisted history serves until the normal 3-hour interval"
+        )
+        await asyncio.sleep(10800)
 
     while True:
         mp = _get_macro_provider()

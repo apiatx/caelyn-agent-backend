@@ -14,6 +14,8 @@ from data.options_history_store import (
     get_latest_technicals,
 )
 
+OPTIONS_HISTORY_MAX_DB_CONCURRENCY = 2
+
 
 def _env_int(name: str, default: int) -> int:
     try:
@@ -328,10 +330,21 @@ class OptionsFlowEngine:
 
         all_contracts.sort(key=lambda x: x.get("contract_score", 0), reverse=True)
         history_rows = 0
+        snapshot_store_started = asyncio.get_running_loop().time()
         try:
-            history_rows = store_options_flow_snapshots(snapshot_rows)
+            history_rows = await asyncio.to_thread(
+                store_options_flow_snapshots,
+                snapshot_rows,
+            )
         except Exception as exc:
             degraded_sources.append(f"snapshot_store:{type(exc).__name__}")
+        snapshot_store_elapsed = (
+            asyncio.get_running_loop().time() - snapshot_store_started
+        )
+        print(
+            f"[OPTIONS_FLOW] [{tab}] snapshot_store={snapshot_store_elapsed:.1f}s "
+            f"rows={len(snapshot_rows)} written={history_rows}"
+        )
 
         total_call_vol = sum(_safe_int(r.get("call_volume")) for r in results)
         total_put_vol = sum(_safe_int(r.get("put_volume")) for r in results)
@@ -926,23 +939,33 @@ class OptionsFlowEngine:
         t_chains_elapsed = _ts.time() - t_stage2_chains
 
         # ── Stage 2b: deferred Polygon enrichment (outside sem) ───────────
-        # Run all DB calls fully concurrently now that the rate-limited Tradier
-        # semaphore has been released.  A thread-pool gate (Semaphore(16)) prevents
-        # exhausting the asyncio default thread pool (typically 32 workers).
+        # Keep Polygon DB work outside the rate-limited Tradier semaphore, but
+        # bound it to the shared PostgreSQL pool's reserved headroom.
         t_db = _ts.time()
         if _deferred_polygon:
-            _db_sem = asyncio.Semaphore(16)
+            _db_sem = asyncio.Semaphore(OPTIONS_HISTORY_MAX_DB_CONCURRENCY)
+            _db_active = 0
+            _db_max_inflight = 0
+
             async def _enrich_one(r):
+                nonlocal _db_active, _db_max_inflight
                 if r is None:
                     return
                 async with _db_sem:
-                    await self._enrich_polygon_async(r)
+                    _db_active += 1
+                    _db_max_inflight = max(_db_max_inflight, _db_active)
+                    try:
+                        await self._enrich_polygon_async(r)
+                    finally:
+                        _db_active -= 1
 
             await asyncio.gather(*[_enrich_one(r) for r in stage2_results])
             t_db_elapsed = _ts.time() - t_db
             print(
                 f"[OPTIONS_FLOW] [{tab}] Stage2 chains: {t_chains_elapsed:.1f}s | "
-                f"Polygon DB (parallel, {sum(1 for r in stage2_results if r)} tickers): {t_db_elapsed:.1f}s"
+                f"Polygon DB ({sum(1 for r in stage2_results if r)} tickers): "
+                f"{t_db_elapsed:.1f}s | "
+                f"options_history_max_db_inflight={_db_max_inflight}"
             )
 
         # ── Classify Stage-2 results into scored / neutral / pending-chain ───

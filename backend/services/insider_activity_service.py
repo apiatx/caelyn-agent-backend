@@ -1731,7 +1731,7 @@ async def get_ai_analysis_cached() -> dict:
 
 # ── Background Loop ───────────────────────────────────────────────────────────
 
-async def _ai_daily_loop():
+async def _ai_daily_loop(skip_initial: bool = False):
     """
     Runs Perplexity analysis once per day.
     Only fires when PERPLEXITY_BACKGROUND_ENABLED=true (default: false).
@@ -1752,8 +1752,9 @@ async def _ai_daily_loop():
     except Exception as e:
         logger.warning("[INSIDER_AI] Startup cache load failed: %s", e)
 
-    # Short initial delay before first active cycle
-    await asyncio.sleep(300)
+    # Web restarts can defer the first provider call to the normal daily cadence.
+    # DB cache hydration above always runs regardless of this control.
+    await asyncio.sleep(_AI_INTERVAL if skip_initial else 300)
 
     from data.perplexity_guards import pplx_background_allowed, pplx_blocked
     while True:
@@ -1768,31 +1769,39 @@ async def _ai_daily_loop():
         await asyncio.sleep(_AI_INTERVAL)
 
 
-async def insider_activity_background_loop():
+async def insider_activity_background_loop(skip_initial: bool = False):
     """
     Two concurrent tasks:
       1. SEC EDGAR fetch every 2 hours (today/yesterday filings only, dedup by accession)
       2. Perplexity AI analysis once per day (stored in DB cache)
     30-day retention: rows expire via expires_at column, cleaned on each cycle.
+    ``skip_initial=True`` keeps DB/cache hydration but suppresses startup-only
+    historical and price backfills and defers AI provider work for one day.
     """
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(_executor, _create_table)
     await loop.run_in_executor(_executor, _create_ai_cache_table)
     await loop.run_in_executor(_executor, _cleanup_expired)
-    await maybe_initial_load()
+    if not skip_initial:
+        await maybe_initial_load()
+    else:
+        logger.info("[INSIDER] Restart-safe startup — historical provider backfill suppressed")
 
     # Start daily AI analysis as a concurrent background task
-    asyncio.ensure_future(_ai_daily_loop())
+    asyncio.ensure_future(_ai_daily_loop(skip_initial=skip_initial))
 
     # Backfill any null price returns for existing transactions (runs once on startup)
-    async def _startup_price_backfill():
-        await asyncio.sleep(60)  # short delay to let connections settle
-        try:
-            result = await loop.run_in_executor(_executor, _sync_backfill_price_returns)
-            logger.info("[INSIDER] Startup price backfill: %s", result)
-        except Exception as e:
-            logger.warning("[INSIDER] Startup price backfill error: %s", e)
-    asyncio.ensure_future(_startup_price_backfill())
+    if not skip_initial:
+        async def _startup_price_backfill():
+            await asyncio.sleep(60)  # short delay to let connections settle
+            try:
+                result = await loop.run_in_executor(_executor, _sync_backfill_price_returns)
+                logger.info("[INSIDER] Startup price backfill: %s", result)
+            except Exception as e:
+                logger.warning("[INSIDER] Startup price backfill error: %s", e)
+        asyncio.ensure_future(_startup_price_backfill())
+    else:
+        logger.info("[INSIDER] Restart-safe startup — one-shot price backfill suppressed")
 
     while True:
         await asyncio.sleep(_FETCH_INTERVAL)
