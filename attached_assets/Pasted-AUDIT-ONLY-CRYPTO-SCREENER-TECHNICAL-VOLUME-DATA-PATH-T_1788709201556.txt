@@ -1,0 +1,494 @@
+AUDIT ONLY — CRYPTO SCREENER TECHNICAL + VOLUME DATA PATH
+
+THIS IS THE BACKEND REPLIT PROJECT.
+
+The current Replit workspace is the primary source of truth.
+GitHub is reference/backup only and may be behind the current Replit state.
+
+DO NOT IMPLEMENT YET.
+DO NOT EDIT.
+DO NOT COMMIT.
+
+We are preparing to extend the EXISTING Crypto Screener with two additive
+column sections:
+
+1. Trend / Breakout
+2. Volume / Liquidity
+
+The frontend is separately performing an audit of the live UI consumer.
+This backend audit must determine how the required data should flow through the
+EXISTING backend architecture.
+
+==================================================
+PRODUCT GOAL
+==================================================
+
+Preserve ALL current Crypto Screener data and behavior.
+
+We want additional backend-supported fields that let the frontend identify:
+
+- coins freshly breaking above the 50-day SMA
+- coins freshly breaking above the 150-day SMA
+- coins freshly breaking above the 200-day SMA
+- coins consolidating / holding above those moving averages
+- coins above all SMA50 / SMA150 / SMA200
+- bullish moving-average stacks
+- those setups accompanied by rising volume
+- coins with the largest 24h volume acceleration
+- coins with the strongest 7d volume acceleration
+- coins with the highest 24h volume / market-cap ratios
+
+PROVIDERS ALLOWED FOR THIS PAGE:
+
+- CoinMarketCap
+- CoinGecko
+- altFINS
+
+DO NOT USE HYPERLIQUID.
+
+Hyperliquid has a separate dedicated page and must remain independent.
+
+Do not introduce another crypto provider.
+
+==================================================
+ARCHITECTURE PRINCIPLE
+==================================================
+
+Provider access, provider normalization, history, caching, derived analytics,
+rate-limit management, and canonical screener data belong in the backend.
+
+The frontend should ultimately consume prepared fields from the existing
+backend screener contract.
+
+We do NOT want React/browser code:
+
+- calling CoinGecko
+- calling CoinMarketCap
+- calling altFINS
+- downloading per-coin history
+- calculating 200-day indicators for the universe
+- performing provider identity reconciliation
+- creating its own independent crypto data pipeline
+
+==================================================
+TRACE THE CURRENT LIVE BACKEND PATH
+==================================================
+
+Find the exact current backend path feeding the Crypto Screener shown in the
+frontend.
+
+Trace from endpoint backwards through:
+
+1. router / endpoint
+2. response serializer / model
+3. service layer
+4. canonical crypto universe
+5. provider normalization / merge
+6. CoinMarketCap integration
+7. CoinGecko integration
+8. altFINS integration
+9. caches
+10. database or persisted snapshots, if any
+11. scheduled/background refresh jobs
+12. historical OHLCV storage/cache
+13. symbol / CoinGecko ID / CMC ID mapping
+14. all known consumers of the endpoint
+
+Do not assume the endpoint name.
+
+Find the actual current endpoint used by the live frontend.
+
+Also determine whether any crypto provider path still lives in the frontend
+repo as legacy architecture. Report it if relevant, but DO NOT alter frontend
+from this backend task.
+
+==================================================
+CURRENT FIELD OWNERSHIP
+==================================================
+
+Build a source-of-truth matrix for the current screener fields.
+
+At minimum determine the current owner/source of:
+
+- symbol
+- name
+- rank
+- price
+- 1h %
+- 24h %
+- 7d %
+- 30d %
+- market cap
+- FDV
+- 24h volume
+- circulating / total supply
+- ATH drawdown
+- cycle-low move
+- AI project classification
+- sentiment
+- X score
+
+For every field report:
+
+- provider/source
+- cached vs live
+- refresh cadence
+- fallback behavior
+- normalized identifier used
+
+==================================================
+AUDIT REQUIRED HISTORICAL DATA
+==================================================
+
+Determine whether the CURRENT backend already has access to or stores enough
+history for:
+
+PRICE:
+- >= 205 completed DAILY closes per coin
+
+VOLUME:
+- >= 15 completed DAILY volume observations per coin
+
+Prefer >= 220 daily observations if an existing path already retains them.
+
+We need enough history to calculate exact:
+
+- SMA50
+- SMA150
+- SMA200
+
+and volume acceleration metrics.
+
+IMPORTANT:
+
+Do NOT make one historical request per coin from the screener request path.
+
+Do NOT add request-time fanout for the top 500 crypto universe.
+
+The eventual screener endpoint must read existing cached/persisted/periodically
+refreshed data.
+
+==================================================
+COINGECKO AUDIT
+==================================================
+
+Trace the CURRENT backend CoinGecko integration.
+
+Determine:
+
+- endpoints currently used
+- whether API key is server-side
+- existing rate limiter
+- existing caching
+- existing historical-data fetch path
+- history retention
+- current refresh cadence
+- whether market-chart/OHLC/history data is already fetched
+- whether daily historical VOLUME is retained along with price
+- whether CoinGecko IDs are already mapped to screener assets
+- whether the current architecture can provide >=205 completed daily closes
+  without page-request fanout
+
+Specifically determine whether the EXISTING CoinGecko path can safely support:
+
+SMA50
+SMA150
+SMA200
+
+and historical volume calculations.
+
+Do not create a new CoinGecko pipeline during this audit.
+
+==================================================
+ALTFINS AUDIT
+==================================================
+
+Trace the CURRENT backend altFINS integration.
+
+Inspect actual code and, where safely possible, actual provider responses.
+
+Determine whether the current account/integration can provide these fields:
+
+- SMA50
+- SMA200
+- SMA50_TREND
+- SMA200_TREND
+- VOLUME
+- VOLUME_RELATIVE
+- OBV_TREND
+- ATR
+
+Also inspect whether actual access supports crossover analytics analogous to:
+
+- X_LAST_PRICE_CROSS_SMA50
+- X_LAST_PRICE_CROSS_SMA200
+
+Do not assume documentation means the current API call/account exposes them.
+
+Verify.
+
+IMPORTANT:
+
+Do NOT substitute another SMA for SMA150.
+
+If altFINS does not provide SMA150, report that clearly.
+
+Exact SMA150 should be calculated from canonical daily closes if an existing
+history path supports it.
+
+==================================================
+COINMARKETCAP AUDIT
+==================================================
+
+Trace the CURRENT backend CoinMarketCap integration.
+
+Determine:
+
+- endpoint used for the screener universe
+- top-100 vs top-500 behavior
+- ranking source
+- current 24h volume source
+- market-cap source
+- FDV source
+- current quote refresh cadence
+- caching
+- request count per refresh
+- whether current responses expose any useful volume-change fields
+- existing CMC ID mapping
+
+CMC should not be forced into providing historical data it does not currently
+provide through our plan/path.
+
+==================================================
+TARGET DERIVED FIELD SET
+==================================================
+
+AUDIT feasibility only.
+
+Do not implement yet.
+
+Determine whether the existing backend architecture can produce these fields:
+
+sma_50
+sma_150
+sma_200
+
+pct_vs_sma_50
+pct_vs_sma_150
+pct_vs_sma_200
+
+above_sma_50
+above_sma_150
+above_sma_200
+above_all_3
+
+bullish_ma_stack
+
+fresh_breakout_50
+fresh_breakout_150
+fresh_breakout_200
+
+consolidating_above_50
+consolidating_above_150
+consolidating_above_200
+
+sma_50_rising
+sma_150_rising
+sma_200_rising
+
+volume_24h
+volume_delta_24h
+volume_delta_7d
+vol_x_7d
+volume_to_market_cap_pct
+
+Potential definitions to evaluate against existing architecture:
+
+pct_vs_sma_N =
+    (current_price / sma_N - 1) * 100
+
+above_all_3 =
+    price > sma50 &&
+    price > sma150 &&
+    price > sma200
+
+bullish_ma_stack =
+    sma50 > sma150 &&
+    sma150 > sma200
+
+fresh_breakout_N candidate =
+    current completed DAILY close > sma_N
+    AND at least one of the previous 3 completed DAILY closes
+    was <= the corresponding SMA_N
+
+volume_to_market_cap_pct =
+    current 24h volume / current market cap * 100
+
+vol_x_7d candidate =
+    current comparable 24h volume /
+    average prior 7 completed daily volume observations
+
+volume_delta_7d candidate =
+    average latest 7 completed daily volume observations /
+    average preceding 7 completed daily volume observations - 1
+
+For volume_delta_24h:
+determine the most statistically valid calculation supported by our EXISTING
+data.
+
+Do not fake it by comparing current volume against an unrelated daily bucket.
+
+==================================================
+CONSOLIDATION / HOLD LOGIC
+==================================================
+
+Before inventing a consolidation algorithm, search the existing backend for
+reusable technical primitives such as:
+
+- ATR
+- range compression
+- squeeze
+- volatility contraction
+- recent trading range
+- MA hold/retest
+- crossover persistence
+- close-above-MA counts
+
+Report what already exists.
+
+We eventually want meaningful states such as:
+
+200D BREAKOUT ↑ VOL
+150D RECLAIM
+50D BREAKOUT
+ABOVE ALL · CONSOLIDATING
+50/150/200 HOLD ↑ VOL
+BELOW 200D
+
+But do NOT implement labels or new scoring in this audit.
+
+==================================================
+PERFORMANCE / RATE-LIMIT AUDIT
+==================================================
+
+This is critical.
+
+For the current crypto universe, calculate the provider-call implications of
+obtaining all required history.
+
+Report separately:
+
+- one-time initial history hydration cost
+- steady-state daily refresh cost
+- current-market refresh cost
+- altFINS refresh cost
+- CoinGecko refresh cost
+- CMC refresh cost
+
+Respect the provider limits already configured in the project.
+
+The final design must NOT perform approximately 500 historical provider calls
+every time the user loads or refreshes the page.
+
+If there is already an existing historical cache/persistence path, determine
+whether it can be extended rather than replaced.
+
+==================================================
+HARD GUARDRAILS
+==================================================
+
+DO NOT:
+
+- edit code
+- commit
+- create a new endpoint
+- create a parallel crypto screener endpoint
+- create a new database table
+- create a new cache
+- create a new scheduler
+- create a new worker
+- create a second crypto universe
+- introduce another provider
+- use Hyperliquid
+- put provider calls into frontend
+- put per-coin provider calls in the screener request path
+- replace the existing provider merge
+- change current provider precedence
+- change current refresh schedules
+- change current rate limits
+- alter current screener response behavior
+- refactor unrelated crypto architecture
+
+If the required data cannot be added through an EXISTING cache, persistence
+path, refresh job, or endpoint contract:
+
+STOP.
+
+Report the architecture blocker.
+
+Do not invent a replacement architecture.
+
+==================================================
+FINAL AUDIT REPORT
+==================================================
+
+Return:
+
+1. Exact current backend endpoint feeding the live Crypto Screener.
+
+2. Exact production files in that path.
+
+3. Current provider/source ownership matrix for all existing screener fields.
+
+4. Exact current:
+   - CMC path
+   - CoinGecko path
+   - altFINS path
+
+5. Current cache/database/persistence path.
+
+6. Current refresh/background-job path and cadence.
+
+7. Current asset identity mapping:
+   - symbol
+   - CMC ID
+   - CoinGecko ID
+   - altFINS identity
+
+8. Required fields that already exist.
+
+9. Required fields that can be derived from existing stored/cached data.
+
+10. Required fields that are genuinely missing.
+
+11. Whether exact SMA150 can be calculated through an EXISTING historical
+    path.
+
+12. Whether 24h volume acceleration can be calculated correctly through an
+    EXISTING path.
+
+13. Whether 7d volume acceleration and VolX can be calculated correctly
+    through an EXISTING path.
+
+14. Existing consolidation/compression primitives that can be reused.
+
+15. Provider-call budget:
+    - initial hydration
+    - steady state
+    - page-request calls
+
+16. Minimum production files that would need modification later.
+
+17. Whether the EXISTING screener endpoint can be safely extended rather than
+    creating another endpoint.
+
+18. Any frontend-side legacy provider path you believe conflicts with the
+    current backend-owned architecture.
+
+19. Architecture-change blocker, if any.
+
+20. Recommended BACKEND-FIRST implementation sequence.
+
+AUDIT ONLY.
+NO EDITS.
+NO COMMIT.
