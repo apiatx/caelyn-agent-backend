@@ -1,0 +1,446 @@
+BACKEND SOURCE-SYNC CONTRACT + WORKSPACE GUARD SYNC COMMAND
+
+This task is specifically authorized to strengthen Git/Replit synchronization
+for the CaelynAI BACKEND repository.
+
+The LIVE Replit filesystem is the primary working copy. Inspect the actual
+current files before editing. GitHub is a reference/backup, not permission to
+overwrite newer valid Replit source.
+
+AUTHORIZED FILES:
+
+1. AGENTS.md
+2. scripts/workspace_guard.py
+3. An EXISTING targeted workspace-guard test file, if one exists and needs
+   updating for this behavior.
+
+Do not touch backend application/business logic.
+Do not touch FastAPI routes/services/providers.
+Do not change schedulers.
+Do not change PostgreSQL behavior.
+Do not change provider concurrency.
+Do not start/restart the web process.
+Do not publish/deploy.
+Do not add a second Git helper or classifier.
+
+The existing scripts/workspace_guard.py remains the SINGLE authority for
+Git-state decisions.
+
+GOAL
+
+I should not need to babysit local Replit main versus GitHub origin/main.
+
+The durable invariant is:
+
+SOURCE SYNC CONTRACT
+
+At the end of every successfully completed SOURCE task:
+
+- branch = main
+- HEAD == origin/main
+- ahead = 0
+- behind = 0
+- no dirty SOURCE files
+- no staged SOURCE files
+- no unpushed SOURCE commits
+
+Replit-generated/runtime/cache/report/checkpoint commits may occur transiently,
+but generated-only LOCAL COMMITS are NOT an acceptable successful handoff state.
+
+If local-only commits contain ONLY guard-classified generated/operational files,
+the canonical guard may safely reconcile local main to origin/main.
+
+If ANY local-only commit or dirty/staged path contains SOURCE, automatic
+destructive reconciliation is forbidden. STOP and report.
+
+This changes the existing C-generated policy intentionally.
+
+======================================================================
+1. INSPECT CURRENT LIVE IMPLEMENTATION FIRST
+======================================================================
+
+Read:
+
+- AGENTS.md
+- scripts/workspace_guard.py
+- .githooks/pre-push
+- scripts/run_build.sh
+- any existing workspace_guard tests
+- current git state
+
+Preserve all unrelated operating contracts, including:
+
+- startup/restart is not a refresh event
+- backend performance/headroom contract
+- provider/rate-limit protections
+- PostgreSQL pool limits
+- workspace single-writer lock
+- normal push-only source workflow
+- prepush/prepublish validation
+- conservative SOURCE classification
+
+This Git task must not change backend runtime behavior.
+
+======================================================================
+2. ADD CANONICAL `sync` SUBCOMMAND
+======================================================================
+
+Add:
+
+python3.11 scripts/workspace_guard.py sync
+
+Do not create another script.
+
+Update the guard's command documentation/parser accordingly.
+
+`sync` must use the existing:
+
+- is_source_file()
+- classify_paths()
+- classify_ahead_commits()
+- classify_local_remote()
+- Git helpers
+
+Do not create parallel Git-case logic.
+
+It must:
+
+- verify `/home/runner/workspace`
+- verify branch == main
+- verify no merge/rebase/cherry-pick/conflict in progress
+- fetch origin/main
+- inspect ahead/behind
+- inspect all dirty and staged paths
+- fail conservatively if classification is uncertain
+
+SAFE CASES:
+
+CASE A — HEAD == origin/main
+
+No mutation.
+
+Return success with:
+
+SOURCE_SYNCED=YES
+ahead=0
+behind=0
+
+CASE B — local behind only
+
+If there is no dirty/staged SOURCE work that could be overwritten:
+
+perform only a true fast-forward synchronization.
+
+No merge commit.
+
+Verify afterward:
+
+HEAD == origin/main
+ahead=0
+behind=0
+
+If safety cannot be proven, STOP.
+
+CASE C-GENERATED — local ahead only and EVERY ahead commit contains
+ZERO SOURCE
+
+C-GENERATED is now a TRANSIENT state.
+
+The canonical guard may reconcile LOCAL main back to origin/main.
+
+This is deliberately different from the old rule that generated commits could
+remain ahead indefinitely.
+
+Requirements:
+
+- local operation only
+- never mutate origin/main
+- never push during sync
+- never force-push
+- inspect every ahead commit first
+- empty Replit publish/checkpoint commits are generated-only
+- reports/runtime data/cache/LKG/snapshot/agent-state commits are generated-only
+  only when the EXISTING classifier proves all changed paths non-source
+
+Before reconciliation prove:
+
+- branch == main
+- no divergence
+- no ahead SOURCE commit
+- no dirty SOURCE
+- no staged SOURCE
+- no Git operation/conflict in progress
+
+Afterward verify:
+
+HEAD == origin/main
+ahead=0
+behind=0
+
+The local reset/reconciliation implementation must live INSIDE the canonical
+guard.
+
+Coding agents remain prohibited from improvising raw `git reset`, rebase,
+or history cleanup outside this guard path.
+
+CASE C-SOURCE
+
+If ANY ahead commit contains SOURCE:
+
+DO NOT reset.
+DO NOT discard.
+DO NOT auto-push.
+
+STOP and report:
+
+- local HEAD
+- origin/main
+- exact source-containing commits
+- exact SOURCE paths
+
+The current actor's validated task commit must still be handled through the
+normal commit/push lifecycle, never via sync.
+
+CASE D — divergence
+
+STOP.
+
+Never automatically:
+
+- merge divergent history
+- rebase
+- reset divergent history
+- cherry-pick
+- force-push
+
+======================================================================
+3. BACKEND CLASSIFIER SAFETY
+======================================================================
+
+Preserve the backend's conservative classifier.
+
+These remain SOURCE:
+
+- all *.py, including backend/data/*.py
+- configuration
+- scripts/**
+- .githooks/**
+- .replit
+- AGENTS.md
+- requirements/pyproject/etc.
+
+Generated backend/data JSON/gz/tmp rules remain narrow.
+
+Do not classify an entire backend/data directory as generated.
+
+IMPORTANT — `attached_assets/**`:
+
+The frontend repo already treats uploaded task instruction attachments as
+operational/generated, but the backend classifier currently does not.
+
+Before changing backend classification:
+
+- inspect whether attached_assets/** exists
+- inspect whether anything under it is referenced by backend runtime/build/source
+- inspect Git history/use patterns
+
+ONLY if repository evidence proves attached_assets/** is exclusively Replit
+uploaded task/prompt operational material and never production input, add it to
+the generated/operational allowlist.
+
+If there is any ambiguity, leave it SOURCE and report that automatic sync will
+conservatively stop when such files are committed.
+
+Do not weaken safety merely to achieve a clean status.
+
+======================================================================
+4. UPDATE AGENTS.md
+======================================================================
+
+Make surgical edits only.
+
+Do NOT replace/reformat the whole document.
+
+Add/integrate:
+
+## Source synchronization and handoff contract
+
+It must state:
+
+- Replit is the live workspace; origin/main is the durable source-history
+  counterpart.
+- successful SOURCE tasks must finish synchronized
+- generated-only local commits may occur transiently
+- generated-only local commits are NOT an acceptable final handoff state
+- canonical `workspace_guard.py sync` owns safe reconciliation
+- raw agent `git reset` remains forbidden
+- the guard alone may perform the narrow proven-safe generated-only local
+  reconciliation
+- any SOURCE detection causes sync to refuse
+- force-push remains absolutely forbidden
+- source commits are pushed normally through `git push origin main`
+
+Update the existing:
+
+## Git handling — local/remote relationship
+
+Specifically change C-generated from:
+
+"work may continue; do not reset/rebase/revert those commits"
+
+to the new contract:
+
+- C-generated may exist transiently
+- before new SOURCE editing and before successful handoff, canonical sync must
+  reconcile it
+- only guard sync may perform that reconciliation
+
+Keep C-source and D conservative.
+
+Update:
+
+## Replit publish commits
+
+Preserve the explanation that Replit may create generated commits, but change
+the handoff rule:
+
+- run postpublish for read-only classification
+- if generated-only, run canonical sync
+- if SOURCE, STOP
+- successful handoff should return local main to origin/main
+
+Update:
+
+## Git workflow
+## Canonical task lifecycle
+
+so successful source work ends with:
+
+HEAD == local main == origin/main == origin/HEAD
+
+and ahead=0 / behind=0.
+
+Do not weaken any prepush/prepublish rule.
+
+======================================================================
+5. LIFECYCLE INTEGRATION
+======================================================================
+
+Before a new SOURCE task:
+
+- use the existing workspace claim/lock
+- run canonical sync
+- run normal preflight
+- if sync detects SOURCE/divergence, STOP
+
+Do not silently discard another actor's source work.
+
+After a successful source commit:
+
+- normal validation
+- exact staging
+- one focused commit
+- normal `git push origin main`
+- verify equality
+- canonical sync/readback may then clear only later Replit-generated commit drift
+
+After Replit publish:
+
+- `postpublish` remains read-only
+- canonical `sync` handles proven generated-only drift
+- SOURCE detection stops automatic cleanup
+
+Do not make sync a replacement for normal pushes.
+
+======================================================================
+6. TESTS
+======================================================================
+
+Use the existing test architecture if available.
+
+At minimum prove:
+
+1. A/equal -> no mutation
+2. B/behind-only -> safe ff-only
+3. one generated-only ahead commit -> reconciled
+4. multiple generated-only ahead commits -> reconciled
+5. empty Published-your-App commit -> reconciled
+6. backend/data JSON/gz-only ahead -> generated
+7. report/state-only ahead -> generated
+8. backend/data/*.py ahead -> SOURCE -> refuse
+9. AGENTS.md ahead -> SOURCE -> refuse
+10. normal backend *.py ahead -> SOURCE -> refuse
+11. dirty SOURCE -> refuse
+12. staged SOURCE -> refuse
+13. divergence -> refuse
+14. wrong branch -> refuse
+15. sync performs no remote write and no force-push
+16. if attached_assets is newly classified generated, include a specific test
+    proving that path only after the repository-use audit above
+
+Tests must use an isolated/temp Git repository or the established guard test
+mechanism.
+
+Never test destructive behavior against the real remote.
+
+Run:
+
+- focused guard tests
+- git diff --check
+- canonical backend source validation
+- normal prepush path as required
+
+Do not start the backend server unless the existing validation contract
+specifically requires it.
+
+Do not perform a long Replit process soak.
+
+======================================================================
+7. FINAL HANDOFF
+======================================================================
+
+This is authorized SOURCE work.
+
+After validation:
+
+- stage ONLY authorized files
+- never git add .
+- one focused commit
+- normal push only
+
+Suggested commit:
+
+chore: enforce backend source sync contract
+
+No force push.
+
+No deploy.
+
+After push verify:
+
+HEAD == origin/main
+ahead=0
+behind=0
+
+If Replit creates a generated-only local commit after the push, exercise the
+new canonical sync command.
+
+If it creates a source-containing commit, STOP instead of deleting it.
+
+FINAL REPORT:
+
+- exact files changed
+- exact AGENTS rules changed
+- exact workspace_guard sync behavior
+- exact C-generated policy change
+- classifier changes, if any
+- whether attached_assets classification changed and evidence why
+- test results
+- final HEAD
+- final origin/main
+- ahead/behind
+- dirty SOURCE state
+- confirmation no backend runtime/business logic changed
+- confirmation no force-push/deployment occurred
+
+Do not do unrelated cleanup.

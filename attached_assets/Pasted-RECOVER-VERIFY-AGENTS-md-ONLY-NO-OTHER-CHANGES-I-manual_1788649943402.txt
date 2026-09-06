@@ -1,0 +1,92 @@
+RECOVER / VERIFY AGENTS.md ONLY — NO OTHER CHANGES
+
+I manually attempted to update AGENTS.md, but the Replit editor became extremely
+laggy during the edit.
+
+Do not assume the file is empty or correct.
+
+Do not touch application source.
+Do not restart the app.
+Do not deploy.
+Do not modify runtime processes.
+Do not reset/rebase Git.
+Do not commit or push.
+
+1. Inspect the current AGENTS.md exactly as it exists now.
+
+Determine whether it is:
+
+A. intact and already contains the intended
+   "Frontend performance and data-loading contract"
+
+B. intact but missing or partially missing that new section
+
+C. corrupted, truncated, or empty
+
+2. Compare it against the AGENTS.md version in current HEAD.
+
+Preserve all valid existing AGENTS.md content.
+
+If the working copy is corrupted/truncated/empty, restore ONLY AGENTS.md from
+current HEAD as the clean base.
+
+If the working copy is intact, do NOT overwrite it unnecessarily.
+
+3. Ensure the following section exists exactly once:
+
+## Frontend performance and data-loading contract
+
+It must appear immediately BEFORE:
+
+## Frontend safety
+
+The section should preserve these rules:
+
+- Reuse existing React Query/cache/context/props/normalized data before adding API requests.
+- Do not create duplicate fetch paths for data already owned by an existing query/cache/context/detail path.
+- Preserve existing query keys, cache ownership, invalidation behavior, stale-time behavior, refetch triggers, normalization, and merge order unless explicitly in scope.
+- Do not add aggressive polling, short refetch intervals, refetch-on-focus, refetch-on-mount, or other repeated network behavior without proving it is necessary.
+- Avoid request waterfalls.
+- Keep nonessential/modal/tooltip/below-the-fold enrichment off the critical render path.
+- Avoid repeated full-universe sorting/filtering/grouping/normalization/cloning on every render, scroll, hover, or keystroke.
+- Preserve existing bulk-vs-detail data boundaries.
+- Do not create render/fetch feedback loops through effects, invalidations, URL state, or derived state.
+- Measure whether slowness is network latency, payload size, duplicate requests, render work, JS execution, state churn, or backend latency before changing architecture.
+- Do not add large detail payloads to bulk frontend state.
+- Do not move large backend aggregation/computation into the browser.
+- Do not create a new global cache/store or parallel query/source of truth without ARCHITECTURE CHANGE APPROVED.
+
+Add the validation requirements:
+
+- no duplicate network requests
+- no new polling/refetch loop
+- no new render loop
+- page/tab navigation does not wait on unrelated secondary data
+- existing query/cache ownership preserved
+- large tables/lists remain responsive
+- no material payload-size regression
+- no Watchlist/shared-page regression
+
+4. Make this a surgical AGENTS.md-only edit.
+
+Do NOT replace the entire file through the editor if a targeted file edit can be used.
+
+5. Verify:
+
+- AGENTS.md is non-empty
+- all original valid content is preserved
+- the new section exists exactly once
+- it is immediately before "## Frontend safety"
+- no executable frontend source file changed
+
+Then show:
+
+git diff -- AGENTS.md
+git status --short
+
+Then STOP.
+
+Do not commit.
+Do not push.
+Do not start/restart the app.
+Do not deploy.
