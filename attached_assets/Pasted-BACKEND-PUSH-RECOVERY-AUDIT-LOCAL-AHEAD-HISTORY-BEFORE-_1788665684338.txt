@@ -1,0 +1,116 @@
+BACKEND PUSH RECOVERY — AUDIT LOCAL AHEAD HISTORY BEFORE RETRY
+
+Do not reimplement the task.
+Do not modify backend application logic.
+Do not deploy.
+Do not force-push.
+Do not push yet.
+
+The source-sync implementation is already committed locally as:
+
+9614c2ba36e9ac88935367738961e574002b10b8
+chore: enforce backend source sync contract
+
+The previous push failed only because GitHub authentication was invalid.
+
+Authoritative remote is still:
+
+origin/main =
+c5b8a4dd597096693625559529f0623dc1d0ad2f
+
+Before any retry, inspect the exact current local Git graph.
+
+1. Fetch origin/main.
+
+2. Report:
+
+- HEAD
+- origin/main
+- ahead
+- behind
+
+3. Enumerate EVERY commit in:
+
+origin/main..HEAD
+
+For each commit show:
+
+- full SHA
+- subject
+- parent SHA
+- exact changed paths
+- SOURCE vs generated classification using the canonical guard
+
+Do not mutate anything yet.
+
+4. Specifically determine why local main is reported as ahead=2 even though the
+intended source task commit is only:
+
+9614c2ba36e9ac88935367738961e574002b10b8
+
+I need to know exactly what the other ahead commit is.
+
+5. Verify the intended task commit changes only:
+
+- AGENTS.md
+- scripts/workspace_guard.py
+- backend/tests/test_workspace_guard.py
+
+If it contains anything else, STOP.
+
+6. If the other ahead commit contains ANY SOURCE path:
+
+STOP and report it.
+Do not push.
+
+7. If the other ahead commit is generated/runtime/checkpoint-only:
+
+Do NOT blindly push both commits.
+
+Preserve the intended source-task contents safely, then use the narrowest
+authorized local-only recovery necessary to produce exactly ONE clean source
+commit directly on top of origin/main.
+
+This is explicitly authorized ONLY if:
+- the extra commit is proven generated-only
+- the intended source-task contents are preserved exactly
+- no other source work exists
+
+Do not force-push.
+Do not rewrite remote history.
+
+If this requires a local reset/recreate flow because the generated commit is
+under the source commit, STOP first and explain the exact proposed sequence
+before performing it.
+
+8. Once the local history is proven clean and contains exactly one intended
+source commit above origin/main, run the normal prepush validation again.
+
+9. Then retry ONLY:
+
+git push origin main
+
+Normal fast-forward push only.
+
+10. Verify after push:
+
+HEAD == origin/main
+ahead=0
+behind=0
+
+11. Run the new canonical sync command only after the successful push if Replit
+creates any later generated-only local drift.
+
+12. Final report must include:
+
+- exact ahead commits before cleanup
+- what the extra commit was
+- whether any local history cleanup was required
+- exact final pushed commit SHA
+- final origin/main SHA
+- ahead/behind
+- validation results
+- confirmation no force-push occurred
+- confirmation no deployment occurred
+
+Do not do unrelated cleanup.
