@@ -84,6 +84,7 @@ _GENERATED_NAME_SUFFIXES = (".json.gz", ".json.tmp", ".gz")
 
 # Directories where ALL contents are generated/runtime (nothing inside is source)
 _GENERATED_DIRS_ALL = {
+    "attached_assets",
     ".opencode-reports",
     ".codex-reports",
     ".opencode-persistent",

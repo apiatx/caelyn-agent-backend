@@ -119,6 +119,7 @@ class TestSourceClassifier:
 
     # Explicit generated/runtime files
     @pytest.mark.parametrize("path", [
+        "attached_assets/Pasted-anything.txt",
         "backend/data/watchlist_stage2_lkg.json",
         "backend/data/options_supplement_lkg_v1.json",
         "backend/data/canonical_history/_index.json",
