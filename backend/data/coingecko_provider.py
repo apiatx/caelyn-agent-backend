@@ -110,7 +110,7 @@ class CoinGeckoProvider:
         }
         return f"coingecko:coins/markets:{str(sorted(params.items()))[:80]}"
 
-    async def _get(self, endpoint: str, params: dict = None) -> dict | list:
+    async def _get(self, endpoint: str, params: dict = None, ttl: int = CRYPTO_CACHE_TTL) -> dict | list:
         if params is None:
             params = {}
         params["x_cg_demo_api_key"] = self.api_key
@@ -134,7 +134,7 @@ class CoinGeckoProvider:
                 print(f"CoinGecko error {resp.status_code}: {endpoint}")
                 return []
             data = resp.json()
-            cache.set(cache_key, data, CRYPTO_CACHE_TTL)
+            cache.set(cache_key, data, ttl)
             return data
         except Exception as e:
             print(f"CoinGecko request failed ({endpoint}): {e}")
@@ -148,6 +148,14 @@ class CoinGeckoProvider:
             "sparkline": "false",
             "price_change_percentage": "1h,24h,7d,30d",
         })
+    async def get_coin_list(self) -> list:
+        return await self._get("coins/list", {"include_platform": "false"}, ttl=86400)
+    async def get_market_chart(self, coin_id: str, days: int = 365) -> dict:
+        return await self._get(f"coins/{coin_id}/market_chart", {
+            "vs_currency": "usd",
+            "days": days,
+            "interval": "daily",
+        }, ttl=3600)
     async def get_trending(self) -> dict:
         return await self._get("search/trending")
     async def get_coin_detail(self, coin_id: str) -> dict:

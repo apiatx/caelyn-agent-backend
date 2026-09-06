@@ -700,6 +700,20 @@ async def lifespan(app):
         except Exception as _e:
             print(f"[STARTUP] canonical history maintenance scheduler failed to start: {_e}")
     asyncio.create_task(_canon_maint_deferred())
+    async def _crypto_history_deferred():
+        try:
+            await asyncio.to_thread(_init_event.wait, 120)
+            if data_service and data_service.cmc and data_service.coingecko:
+                from services.crypto_screener_service import (
+                    CryptoScreenerService,
+                    daily_crypto_history_loop,
+                )
+                asyncio.create_task(daily_crypto_history_loop(
+                    CryptoScreenerService(data_service.cmc, data_service.coingecko)
+                ))
+        except Exception as _e:
+            print(f"[STARTUP] crypto history scheduler failed to start: {_e}")
+    asyncio.create_task(_crypto_history_deferred())
     asyncio.create_task(_hl_boot_and_run(_hl_state))
     async def _bittensor_deferred():
         def _import_bittensor():
@@ -5268,6 +5282,21 @@ async def social_x_dashboard_refresh(
             status_code=500,
             content={"error": str(e), "endpoint": "/api/social/x-dashboard/refresh"},
         )
+
+
+@app.get("/api/crypto/screener")
+@limiter.limit("30/minute")
+async def canonical_crypto_screener(
+    request: Request,
+    _sub: None = Depends(require_subscription),
+):
+    await _wait_for_init()
+    if data_service is None or data_service.cmc is None:
+        raise HTTPException(status_code=503, detail="Crypto market provider unavailable")
+    from services.crypto_screener_service import CryptoScreenerService
+    return await CryptoScreenerService(
+        data_service.cmc, data_service.coingecko
+    ).get_screener()
 
 
 @app.post("/api/query")
