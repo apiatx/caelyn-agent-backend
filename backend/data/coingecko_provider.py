@@ -149,7 +149,7 @@ class CoinGeckoProvider:
             "price_change_percentage": "1h,24h,7d,30d",
         })
     async def get_coin_list(self) -> list:
-        return await self._get("coins/list", {"include_platform": "false"}, ttl=86400)
+        return await self._get("coins/list", {"include_platform": "true"}, ttl=86400)
     async def get_market_chart(self, coin_id: str, days: int = 365) -> dict:
         return await self._get(f"coins/{coin_id}/market_chart", {
             "vs_currency": "usd",

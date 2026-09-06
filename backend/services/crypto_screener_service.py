@@ -15,6 +15,7 @@ HISTORY_RATE_SECONDS = 3.05
 
 _DDL_APPLIED = False
 _refresh_lock = asyncio.Lock()
+_current_refresh_task: asyncio.Task | None = None
 
 
 def _finite(value: Any) -> float | None:
@@ -34,23 +35,53 @@ def _normalized_identity(value: str | None) -> str:
 
 
 def resolve_coingecko_identity(cmc_asset: dict, coin_list: list[dict]) -> tuple[str | None, str | None]:
-    """Resolve only an unambiguous normalized symbol+name match."""
+    """Resolve identity from deterministic provider-native evidence only."""
     symbol = _normalized_identity(cmc_asset.get("symbol"))
     name = _normalized_identity(cmc_asset.get("name"))
-    matches = [
+    slug = _normalized_identity(cmc_asset.get("slug"))
+    all_ids = sorted({str(coin["id"]) for coin in coin_list if coin.get("id")})
+
+    slug_matches = [coin_id for coin_id in all_ids if _normalized_identity(coin_id) == slug]
+    if slug and len(slug_matches) == 1:
+        return slug_matches[0], None
+
+    cmc_address = _normalized_contract(
+        (cmc_asset.get("platform") or {}).get("token_address")
+    )
+    if cmc_address:
+        contract_matches = sorted({
+            str(coin["id"])
+            for coin in coin_list
+            if coin.get("id") and cmc_address in {
+                _normalized_contract(address)
+                for address in (coin.get("platforms") or {}).values()
+            }
+        })
+        if len(contract_matches) == 1:
+            return contract_matches[0], None
+
+    symbol_matches = [
         coin for coin in coin_list
         if _normalized_identity(coin.get("symbol")) == symbol
-        and _normalized_identity(coin.get("name")) == name
         and coin.get("id")
     ]
-    ids = sorted({str(coin["id"]) for coin in matches})
-    if len(ids) == 1:
-        return ids[0], None
-    slug = _normalized_identity(cmc_asset.get("slug"))
-    slug_matches = [coin_id for coin_id in ids if _normalized_identity(coin_id) == slug]
-    if len(slug_matches) == 1:
-        return slug_matches[0], None
-    return None, "ambiguous" if len(ids) > 1 else "unresolved"
+    exact_name_ids = sorted({
+        str(coin["id"]) for coin in symbol_matches
+        if _normalized_identity(coin.get("name")) == name
+    })
+    if len(exact_name_ids) == 1:
+        return exact_name_ids[0], None
+
+    symbol_ids = sorted({str(coin["id"]) for coin in symbol_matches})
+    if len(symbol_ids) == 1:
+        return symbol_ids[0], None
+    if symbol_ids:
+        return None, f"ambiguous_symbol:{len(symbol_ids)}_candidates"
+    return None, "no_symbol_candidate"
+
+
+def _normalized_contract(value: Any) -> str:
+    return str(value or "").strip().casefold()
 
 
 def normalize_completed_history(raw: dict, now: datetime | None = None) -> list[dict]:
@@ -217,6 +248,26 @@ def _load_records() -> list[dict]:
         _put_conn(conn)
 
 
+def _load_current_records() -> list[dict]:
+    """Load only request-serving columns; daily histories stay off the page path."""
+    if not _ensure_table():
+        return []
+    conn = _get_conn("crypto_screener:load_current")
+    if conn is None:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT cmc_id, coingecko_id, symbol, name, slug, identity_status,
+                       current_snapshot, history_updated_at, current_updated_at
+                FROM public.crypto_screener_cache ORDER BY cmc_id
+            """)
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in cur.fetchall()]
+    finally:
+        _put_conn(conn)
+
+
 def _upsert_record(record: dict) -> None:
     from psycopg2.extras import Json
     if not _ensure_table():
@@ -285,13 +336,14 @@ def _upsert_records(records: list[dict]) -> None:
         _put_conn(conn)
 
 
-def _current_row(asset: dict, record: dict | None, as_of: str, current_cg_volume: Any = None) -> dict:
+def _current_row(asset: dict, record: dict | None, as_of: str, current_cg_market: dict | None = None) -> dict:
     quote = (asset.get("quote") or {}).get("USD") or {}
     price = _finite(quote.get("price"))
     market_cap = _finite(quote.get("market_cap"))
     volume = _finite(quote.get("volume_24h"))
     history = (record or {}).get("daily_history") or []
-    technical = compute_technical_metrics(history, price, current_cg_volume)
+    cg_market = current_cg_market or {}
+    technical = compute_technical_metrics(history, price, cg_market.get("total_volume"))
     row = {
         "rank": asset.get("cmc_rank"),
         "cmc_id": asset.get("id"),
@@ -309,7 +361,7 @@ def _current_row(asset: dict, record: dict | None, as_of: str, current_cg_volume
         "volume_24h": volume,
         "circulating_supply": _finite(asset.get("circulating_supply")),
         "total_supply": _finite(asset.get("total_supply")),
-        "ath_drawdown_pct": None,
+        "ath_drawdown_pct": _finite(cg_market.get("ath_change_percentage")),
         "cycle_low_move_pct": None,
         "ai_project": None,
         "sentiment": None,
@@ -332,47 +384,73 @@ class CryptoScreenerService:
         self.coingecko = coingecko_provider
 
     async def get_screener(self) -> dict:
-        records = await asyncio.to_thread(_load_records)
-        persisted = {record["cmc_id"]: record for record in records}
+        records = await asyncio.to_thread(_load_current_records)
         newest = max((r.get("current_updated_at") for r in records if r.get("current_updated_at")), default=None)
         now = datetime.now(timezone.utc)
         if newest and newest >= now - timedelta(seconds=CURRENT_TTL_SECONDS):
-            rows = [r.get("current_snapshot") for r in records if r.get("current_snapshot")]
-            rows.sort(key=lambda row: row.get("rank") or 10**9)
-            return {"as_of": newest.isoformat(), "history_as_of": _history_as_of(records), "rows": rows[:100], "source": "lkg"}
+            return _snapshot_response(records, "lkg", refreshing=False)
 
+        persisted_rows = [r for r in records if r.get("current_snapshot")]
+        if persisted_rows:
+            refreshing = _schedule_current_refresh(self)
+            return _snapshot_response(records, "stale_lkg", refreshing=refreshing)
+
+        return await self._refresh_current()
+
+    async def _refresh_current(self) -> dict:
+        """Refresh current rows once, re-checking freshness under ownership."""
         async with _refresh_lock:
+            records = await asyncio.to_thread(_load_records)
+            newest = max(
+                (r.get("current_updated_at") for r in records if r.get("current_updated_at")),
+                default=None,
+            )
+            now = datetime.now(timezone.utc)
+            if newest and newest >= now - timedelta(seconds=CURRENT_TTL_SECONDS):
+                return _snapshot_response(records, "lkg", refreshing=False)
+
             listings, cg_markets = await asyncio.gather(
                 self.cmc.get_listings_latest(100) if self.cmc else asyncio.sleep(0, result=[]),
                 self.coingecko.get_top_coins(100) if self.coingecko else asyncio.sleep(0, result=[]),
             )
             if not listings:
-                rows = [r.get("current_snapshot") for r in records if r.get("current_snapshot")]
-                rows.sort(key=lambda row: row.get("rank") or 10**9)
-                return {"as_of": newest.isoformat() if newest else None, "history_as_of": _history_as_of(records), "rows": rows[:100], "source": "stale_lkg"}
-            as_of = now.isoformat()
-            rows = []
-            writes = []
-            cg_volume_by_id = {
-                row.get("id"): row.get("total_volume")
+                return _snapshot_response(records, "stale_lkg", refreshing=False)
+
+            persisted = {record["cmc_id"]: record for record in records}
+            cg_market_by_id = {
+                row.get("id"): row
                 for row in cg_markets if isinstance(row, dict) and row.get("id")
             }
+            refreshed_at = datetime.now(timezone.utc)
+            as_of = refreshed_at.isoformat()
+            rows = []
+            writes = []
             for asset in listings[:100]:
                 cmc_id = asset.get("id")
                 record = persisted.get(cmc_id)
                 row = _current_row(
-                    asset, record, as_of,
-                    cg_volume_by_id.get((record or {}).get("coingecko_id")),
+                    asset,
+                    record,
+                    as_of,
+                    cg_market_by_id.get((record or {}).get("coingecko_id")),
                 )
                 rows.append(row)
                 writes.append({
                     "cmc_id": cmc_id,
-                    "symbol": asset.get("symbol") or "", "name": asset.get("name") or "",
-                    "slug": asset.get("slug"), "current_snapshot": row,
-                    "current_updated_at": now,
+                    "symbol": asset.get("symbol") or "",
+                    "name": asset.get("name") or "",
+                    "slug": asset.get("slug"),
+                    "current_snapshot": row,
+                    "current_updated_at": refreshed_at,
                 })
             await asyncio.to_thread(_upsert_records, writes)
-            return {"as_of": as_of, "history_as_of": _history_as_of(records), "rows": rows, "source": "live"}
+            return {
+                "as_of": as_of,
+                "history_as_of": _history_as_of(records),
+                "rows": rows,
+                "source": "live",
+                "refreshing": False,
+            }
 
     async def hydrate_history(self, full: bool = False) -> dict:
         if not self.cmc or not self.coingecko:
@@ -428,6 +506,40 @@ class CryptoScreenerService:
 def _history_as_of(records: list[dict]) -> str | None:
     newest = max((r.get("history_updated_at") for r in records if r.get("history_updated_at")), default=None)
     return newest.isoformat() if newest else None
+
+
+def _snapshot_response(records: list[dict], source: str, refreshing: bool) -> dict:
+    rows = [r.get("current_snapshot") for r in records if r.get("current_snapshot")]
+    rows.sort(key=lambda row: row.get("rank") or 10**9)
+    newest = max(
+        (r.get("current_updated_at") for r in records if r.get("current_updated_at")),
+        default=None,
+    )
+    return {
+        "as_of": newest.isoformat() if newest else None,
+        "history_as_of": _history_as_of(records),
+        "rows": rows[:100],
+        "source": source,
+        "refreshing": refreshing,
+    }
+
+
+def _schedule_current_refresh(service: CryptoScreenerService) -> bool:
+    global _current_refresh_task
+    if _current_refresh_task is not None and not _current_refresh_task.done():
+        return True
+    _current_refresh_task = asyncio.create_task(service._refresh_current())
+
+    def _report_failure(task: asyncio.Task) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            print(f"[CRYPTO_SCREENER] background current refresh failed: {exc}")
+
+    _current_refresh_task.add_done_callback(_report_failure)
+    return True
 
 
 async def daily_crypto_history_loop(service: CryptoScreenerService) -> None:
