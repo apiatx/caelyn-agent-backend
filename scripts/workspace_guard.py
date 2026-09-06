@@ -9,6 +9,7 @@ Usage:
 Subcommands:
     claim           Acquire the workspace single-writer lock
     status          Show lock state and current git summary
+    sync            Safely synchronize local main with origin/main
     preflight       Verify git state before editing (read-only)
     prepush         Validate before git push (called by pre-push hook)
     prepublish      Gate before Replit publish
@@ -187,7 +188,7 @@ def _git(*args: str, cwd: Optional[Path] = None, check: bool = True) -> str:
             f"git {' '.join(args)} failed (rc={result.returncode}):\n"
             f"{result.stderr.strip()}"
         )
-    return result.stdout.strip()
+    return result.stdout.rstrip()
 
 
 def git_toplevel() -> str:
@@ -208,6 +209,16 @@ def git_origin_sha() -> str:
 
 def git_fetch() -> None:
     _git("fetch", "origin", "main", "--quiet")
+
+
+def git_fast_forward() -> None:
+    """Fast-forward local main to origin/main without creating a merge commit."""
+    _git("merge", "--ff-only", "origin/main")
+
+
+def git_reset_generated_only() -> None:
+    """Reconcile proven generated-only local commits to origin/main."""
+    _git("reset", "--hard", "origin/main")
 
 
 def git_dirty_files() -> list[str]:
@@ -693,6 +704,112 @@ def cmd_status(_args: argparse.Namespace) -> int:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Subcommand: sync
+# ─────────────────────────────────────────────────────────────────────────────
+
+def cmd_sync(_args: argparse.Namespace) -> int:
+    """
+    Safely synchronize local main with origin/main.
+
+    This is the only guard path allowed to reconcile proven generated-only
+    local commits. It never pushes or mutates the remote.
+    """
+    errors: list[str] = []
+
+    try:
+        toplevel = git_toplevel()
+        if toplevel != str(WORKSPACE_ROOT):
+            errors.append(f"Repo root is '{toplevel}', expected '{WORKSPACE_ROOT}'.")
+    except RuntimeError as exc:
+        errors.append(f"Cannot determine repo root: {exc}")
+
+    branch = git_branch()
+    if branch != CANONICAL_BRANCH:
+        errors.append(f"Branch is '{branch}', expected '{CANONICAL_BRANCH}'.")
+
+    if git_has_operation_in_progress():
+        errors.append("A merge/rebase/cherry-pick is in progress.")
+    if git_has_conflicts():
+        errors.append("Unresolved merge conflicts detected.")
+    if not git_remote_exists():
+        errors.append("Remote 'origin' does not exist.")
+
+    dirty = git_dirty_files()
+    staged = git_staged_files()
+    dirty_classified = classify_paths(dirty)
+    staged_classified = classify_paths(staged)
+    source_paths = sorted(set(
+        dirty_classified["source"] + staged_classified["source"]
+    ))
+    if source_paths:
+        errors.append(
+            "Dirty or staged SOURCE files detected; automatic reconciliation is forbidden:\n  "
+            + "\n  ".join(source_paths)
+        )
+
+    if errors:
+        _fail(errors)
+        return 1
+
+    try:
+        git_fetch()
+        rel = classify_local_remote()
+    except RuntimeError as exc:
+        _fail([f"Cannot fetch or classify local/remote relationship: {exc}"])
+        return 1
+
+    case = rel["case"]
+    if case == "A":
+        pass
+    elif case == "B":
+        try:
+            git_fast_forward()
+        except RuntimeError as exc:
+            _fail([f"Fast-forward synchronization failed safely: {exc}"])
+            return 1
+    elif case == "C-generated":
+        try:
+            git_reset_generated_only()
+        except RuntimeError as exc:
+            _fail([f"Generated-only local reconciliation failed: {exc}"])
+            return 1
+    elif case == "C-source":
+        print("SYNC REFUSED: local-only SOURCE commits detected.", file=sys.stderr)
+        print(f"  local HEAD:  {rel['head_sha']}", file=sys.stderr)
+        print(f"  origin/main: {rel['origin_sha']}", file=sys.stderr)
+        for commit in rel["source_ahead_commits"]:
+            print(f"  commit {commit['sha']} {commit['subject']}", file=sys.stderr)
+            for path in commit["source_files"]:
+                print(f"    {path}", file=sys.stderr)
+        return 1
+    else:
+        _fail([
+            "True divergence detected; automatic merge, rebase, reset, "
+            "cherry-pick, and force-push are forbidden.",
+            f"local HEAD: {rel['head_sha']}",
+            f"origin/main: {rel['origin_sha']}",
+        ])
+        return 1
+
+    try:
+        final_rel = classify_local_remote()
+    except RuntimeError as exc:
+        _fail([f"Cannot verify synchronized state: {exc}"])
+        return 1
+    if final_rel["case"] != "A":
+        _fail([
+            "Synchronization did not produce HEAD == origin/main.",
+            final_rel["description"],
+        ])
+        return 1
+
+    print("SOURCE_SYNCED=YES")
+    print("ahead=0")
+    print("behind=0")
+    return 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Subcommand: preflight
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1116,6 +1233,9 @@ def main() -> int:
     # status
     sub.add_parser("status", help="Show lock state and git summary")
 
+    # sync
+    sub.add_parser("sync", help="Safely synchronize local main with origin/main")
+
     # preflight
     p_pre = sub.add_parser("preflight", help="Verify git state before editing")
     p_pre.add_argument("--actor", default=None, help="Current actor (for lock validation)")
@@ -1138,6 +1258,7 @@ def main() -> int:
         "claim":         cmd_claim,
         "release":       cmd_release,
         "status":        cmd_status,
+        "sync":          cmd_sync,
         "preflight":     cmd_preflight,
         "prepush":       cmd_prepush,
         "prepublish":    cmd_prepublish,

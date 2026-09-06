@@ -163,6 +163,13 @@ class TestSourceClassifier:
         assert "backend/data/cache.json"      in result["generated"]
         assert ".opencode-reports/latest.md"  in result["generated"]
 
+    def test_dirty_status_preserves_first_unstaged_path(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        agents = repo / "AGENTS.md"
+        agents.write_text("dirty\n")
+        monkeypatch.setattr(wg, "WORKSPACE_ROOT", repo)
+        assert wg.git_dirty_files()[0] == "AGENTS.md"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Lock manager tests
@@ -419,6 +426,132 @@ class TestGitRelationshipClassifier:
         # In diverged state, neither is ancestor of the other
         is_ff = wg.git_is_ancestor(origin_sha, head_sha)
         assert is_ff is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sync command tests (isolated temp repos)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSync:
+    def _args(self):
+        import argparse
+        return argparse.Namespace()
+
+    def _use_repo(self, monkeypatch, repo: Path):
+        monkeypatch.setattr(wg, "WORKSPACE_ROOT", repo)
+
+    def _advance_remote(self, tmp_path: Path, remote: Path, filename="remote.py"):
+        clone = tmp_path / f"clone-{filename.replace('/', '-')}"
+        subprocess.run(["git", "clone", str(remote), str(clone)],
+                       check=True, capture_output=True)
+        _git_in(clone, "config", "user.email", "t@t.com")
+        _git_in(clone, "config", "user.name", "T")
+        sha = _add_commit(clone, filename, "remote\n", "Remote advance")
+        _git_in(clone, "push", "origin", "main")
+        return sha
+
+    def test_equal_is_noop(self, tmp_path, monkeypatch):
+        local, _ = _make_repo_with_remote(tmp_path)
+        self._use_repo(monkeypatch, local)
+        before = _git_in(local, "rev-parse", "HEAD")
+        assert wg.cmd_sync(self._args()) == 0
+        assert _git_in(local, "rev-parse", "HEAD") == before
+
+    def test_behind_fast_forwards_only(self, tmp_path, monkeypatch):
+        local, remote = _make_repo_with_remote(tmp_path)
+        remote_sha = self._advance_remote(tmp_path, remote)
+        self._use_repo(monkeypatch, local)
+        assert wg.cmd_sync(self._args()) == 0
+        assert _git_in(local, "rev-parse", "HEAD") == remote_sha
+
+    @pytest.mark.parametrize("count", [1, 2])
+    def test_generated_ahead_is_reconciled(self, tmp_path, monkeypatch, count):
+        local, _ = _make_repo_with_remote(tmp_path)
+        for number in range(count):
+            _add_commit(
+                local, f"backend/data/cache-{number}.json",
+                f'{{"n":{number}}}\n', "Update backend data cache",
+            )
+        origin_sha = _git_in(local, "rev-parse", "origin/main")
+        self._use_repo(monkeypatch, local)
+        assert wg.cmd_sync(self._args()) == 0
+        assert _git_in(local, "rev-parse", "HEAD") == origin_sha
+
+    def test_empty_publish_commit_is_reconciled(self, tmp_path, monkeypatch):
+        local, _ = _make_repo_with_remote(tmp_path)
+        _git_in(local, "commit", "--allow-empty", "-m", "Published your App")
+        origin_sha = _git_in(local, "rev-parse", "origin/main")
+        self._use_repo(monkeypatch, local)
+        assert wg.cmd_sync(self._args()) == 0
+        assert _git_in(local, "rev-parse", "HEAD") == origin_sha
+
+    @pytest.mark.parametrize("path", [
+        "backend/data/cache.json",
+        "backend/data/history.json.gz",
+        ".agent-state/session.json",
+        ".codex-reports/latest.md",
+    ])
+    def test_generated_path_ahead_is_reconciled(self, tmp_path, monkeypatch, path):
+        local, _ = _make_repo_with_remote(tmp_path)
+        _add_commit(local, path, "generated\n", "Generated state")
+        self._use_repo(monkeypatch, local)
+        assert wg.cmd_sync(self._args()) == 0
+
+    @pytest.mark.parametrize("path", [
+        "backend/data/model.py",
+        "AGENTS.md",
+        "backend/services/service.py",
+    ])
+    def test_source_ahead_is_refused(self, tmp_path, monkeypatch, path):
+        local, _ = _make_repo_with_remote(tmp_path)
+        source_sha = _add_commit(local, path, "source\n", "Source change")
+        self._use_repo(monkeypatch, local)
+        assert wg.cmd_sync(self._args()) == 1
+        assert _git_in(local, "rev-parse", "HEAD") == source_sha
+
+    @pytest.mark.parametrize("staged", [False, True])
+    def test_dirty_or_staged_source_is_refused(self, tmp_path, monkeypatch, staged):
+        local, _ = _make_repo_with_remote(tmp_path)
+        source = local / "backend" / "main.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("dirty\n")
+        if staged:
+            _git_in(local, "add", "backend/main.py")
+        before = _git_in(local, "rev-parse", "HEAD")
+        self._use_repo(monkeypatch, local)
+        assert wg.cmd_sync(self._args()) == 1
+        assert _git_in(local, "rev-parse", "HEAD") == before
+
+    def test_divergence_is_refused(self, tmp_path, monkeypatch):
+        local, remote = _make_repo_with_remote(tmp_path)
+        local_sha = _add_commit(local, "backend/data/local.json", "{}\n", "Local")
+        self._advance_remote(tmp_path, remote)
+        self._use_repo(monkeypatch, local)
+        assert wg.cmd_sync(self._args()) == 1
+        assert _git_in(local, "rev-parse", "HEAD") == local_sha
+
+    def test_wrong_branch_is_refused(self, tmp_path, monkeypatch):
+        local, _ = _make_repo_with_remote(tmp_path)
+        _git_in(local, "checkout", "-b", "feature")
+        self._use_repo(monkeypatch, local)
+        assert wg.cmd_sync(self._args()) == 1
+
+    def test_sync_never_invokes_remote_write_or_force_push(self, tmp_path, monkeypatch):
+        local, _ = _make_repo_with_remote(tmp_path)
+        _add_commit(local, "backend/data/cache.json", "{}\n", "Generated")
+        self._use_repo(monkeypatch, local)
+        calls = []
+        original_git = wg._git
+
+        def recording_git(*args, **kwargs):
+            calls.append(args)
+            return original_git(*args, **kwargs)
+
+        monkeypatch.setattr(wg, "_git", recording_git)
+        assert wg.cmd_sync(self._args()) == 0
+        flattened = [" ".join(call) for call in calls]
+        assert not any(command.startswith("push ") for command in flattened)
+        assert not any("--force" in command for command in flattened)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

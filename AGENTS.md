@@ -160,8 +160,8 @@ and versioned pre-push hook at:
 
     .githooks/pre-push
 
-The guard exposes subcommands: `claim`, `status`, `preflight`, `prepush`,
-`prepublish`, `release`, `postpublish`, `install-hooks`.
+The guard exposes subcommands: `claim`, `status`, `sync`, `preflight`,
+`prepush`, `prepublish`, `release`, `postpublish`, `install-hooks`.
 
 The git hook is installed with:
 
@@ -181,33 +181,41 @@ For every implementation task, follow this lifecycle in order:
                     python3.11 scripts/workspace_guard.py claim \
                         --actor <actor> --task "<description>"
 
-    2. preflight  — verify git state before editing
+    2. sync       — safely reconcile generated-only drift and fast-forward lag
+                    python3.11 scripts/workspace_guard.py sync
+
+    3. preflight  — verify git state before editing
                     python3.11 scripts/workspace_guard.py preflight \
                         --actor <actor>
 
-    3. edit       — make changes to authorized files only
+    4. edit       — make changes to authorized files only
 
-    4. validate   — run tests, verify behavior
+    5. validate   — run tests, verify behavior
 
-    5. stage      — stage exact approved task files only (never `git add .`)
+    6. stage      — stage exact approved task files only (never `git add .`)
 
-    6. commit     — one focused commit on local main
+    7. commit     — one focused commit on local main
 
-    7. prepush    — guard is invoked automatically by the pre-push hook;
+    8. prepush    — guard is invoked automatically by the pre-push hook;
                     or run manually before pushing:
                     python3.11 scripts/workspace_guard.py prepush
 
-    8. push       — git push origin main
+    9. push       — git push origin main
 
-    9. verify     — confirm HEAD, local main, origin/main, origin/HEAD all match
+    10. verify    — confirm HEAD, local main, origin/main, origin/HEAD all match
 
-    10. release   — release workspace lock
+    11. sync      — clear only later proven generated-only Replit drift
+                    python3.11 scripts/workspace_guard.py sync
+
+    12. release   — release workspace lock
                     python3.11 scripts/workspace_guard.py release --actor <actor>
 
-    11. report    — write final report (file or conversation per agent type)
+    13. report    — write final report (file or conversation per agent type)
 
 Do NOT leave a successfully completed source task as an unpushed local source
-commit.
+commit. A successful source handoff must end with
+`HEAD == local main == origin/main == origin/HEAD`, ahead `0`, behind `0`,
+and no dirty or staged SOURCE files.
 
 ## Single-writer workspace lock
 
@@ -288,8 +296,10 @@ being explicitly completed.
 If ALL local-only commits are Replit "Published your App" commits, reports,
 runtime data, generated data, caches, LKG, snapshots, or agent state
 → **C-generated**:
-Classify as NON-SOURCE AHEAD. Do not reset/rebase/revert those commits.
-Work may continue.
+This is a transient NON-SOURCE AHEAD state. Before new SOURCE editing and
+before successful handoff, run `python3.11 scripts/workspace_guard.py sync`.
+Only that canonical guard command may reconcile proven generated-only local
+commits to `origin/main`.
 
 **Case D — true divergence**
 STOP. Never automatically:
@@ -300,6 +310,28 @@ STOP. Never automatically:
 - cherry-pick
 
 Report both SHAs and differing commits. Wait for user resolution.
+
+## Source synchronization and handoff contract
+
+Replit is the live workspace; `origin/main` is its durable source-history
+counterpart. Every successfully completed SOURCE task must finish with branch
+`main`, `HEAD == origin/main`, ahead `0`, behind `0`, no dirty or staged SOURCE
+files, and no unpushed SOURCE commits.
+
+Generated-only Replit checkpoint, publish, runtime, cache, report, LKG,
+snapshot, or agent-state commits may occur transiently, but they are not an
+acceptable final handoff state. `python3.11 scripts/workspace_guard.py sync`
+is the single authority for safe reconciliation. The guard may fast-forward a
+behind-only local `main`, or locally reconcile ahead-only commits only after
+the existing conservative classifier proves every ahead commit and
+dirty/staged path contains zero SOURCE.
+
+Coding agents must not improvise raw `git reset`, rebase, merge, cherry-pick,
+history cleanup, or force-push. Only guard `sync` may perform the narrow,
+proven-safe generated-only local reconciliation. Any SOURCE detection or
+divergence causes `sync` to refuse without discarding work. Source commits
+continue through the normal validated `git push origin main` workflow.
+Force-push is always forbidden.
 
 ## Replit publish commits
 
@@ -323,13 +355,14 @@ as equivalent to:
 
     unpushed production source.
 
-Do not delete, reset, rebase, or rewrite Replit publish commits.
-
 After a publish, run:
 
     python3.11 scripts/workspace_guard.py postpublish
 
 to read and classify the post-publish state. This is a read-only operation.
+If it reports generated-only drift, run
+`python3.11 scripts/workspace_guard.py sync`; if it reports SOURCE or
+divergence, STOP. Successful handoff returns local `main` to `origin/main`.
 
 ## Source file classification
 
@@ -384,7 +417,7 @@ The active coding agent must never:
 - merge
 - rebase
 - cherry-pick
-- reset
+- reset outside the canonical guard's proven-safe generated-only `sync` path
 - clean
 - stash
 - switch or create branches
@@ -404,7 +437,9 @@ For every completed implementation task, the active coding agent must:
 4. create exactly one focused commit on local `main`
 5. push the completed commit using `git push origin main`
 6. verify that local `main` and `origin/main` point to the pushed task commit
-7. write the final report with the commit SHA and push result
+7. run canonical `sync`/readback to clear only later generated-only drift
+8. verify ahead `0`, behind `0`, and no dirty or staged SOURCE files
+9. write the final report with the commit SHA and push result
 
 Do not commit or push an incomplete, failing, partially validated, or temporary
 debugging state unless the user explicitly requests that behavior.
