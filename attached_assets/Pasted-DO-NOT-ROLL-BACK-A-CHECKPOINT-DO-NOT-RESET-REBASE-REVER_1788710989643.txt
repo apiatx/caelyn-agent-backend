@@ -1,0 +1,245 @@
+DO NOT ROLL BACK A CHECKPOINT.
+
+DO NOT RESET, REBASE, REVERT, CHERRY-PICK, STASH, CLEAN, OR DISCARD ANY
+EXISTING COMMIT OR FILE.
+
+We are continuing the already-authorized Canonical Crypto Screener backend
+implementation task.
+
+Your previous attempt stopped because workspace_guard classified local main as
+C-SOURCE.
+
+Before doing anything else, resolve that guard-state issue conservatively and
+preserve ALL existing work.
+
+IMPORTANT:
+
+The repository rules state that:
+
+    attached_assets/**
+
+is GENERATED, not SOURCE.
+
+Your previous report said several committed:
+
+    attached_assets/Pasted-*.txt
+
+files were being treated as SOURCE.
+
+That is inconsistent with the documented classifier and must be investigated
+rather than using a checkpoint rollback.
+
+==================================================
+PHASE 1 — DIAGNOSE THE GUARD STATE
+==================================================
+
+READ ONLY FIRST.
+
+Run and report:
+
+1. git rev-parse --show-toplevel
+2. git branch --show-current
+3. git status -sb
+4. git log --oneline --decorate origin/main..HEAD
+5. git diff --name-status origin/main..HEAD
+6. python3.11 scripts/workspace_guard.py status
+7. python3.11 scripts/workspace_guard.py preflight --actor replit-agent
+
+Then inspect:
+
+    scripts/workspace_guard.py
+
+Specifically inspect the actual current implementation of:
+
+    is_source_file()
+
+and the generated allowlist.
+
+Verify whether:
+
+    attached_assets/**
+
+is currently classified GENERATED.
+
+For EACH of the six local-only commits, report:
+
+- SHA
+- commit subject
+- files changed
+- which files the guard classifies SOURCE
+- which files it classifies GENERATED
+
+Do not infer this from file extension.
+Use the canonical classifier.
+
+==================================================
+PHASE 2 — RESOLVE WITHOUT HISTORY DESTRUCTION
+==================================================
+
+There are only a few acceptable outcomes.
+
+CASE A:
+The Pasted files really are under attached_assets/** and the current classifier
+incorrectly treats them as SOURCE.
+
+Then this is a workspace-guard bug/regression.
+
+Fix ONLY the classifier so attached_assets/** is GENERATED as the documented
+repository policy requires.
+
+Add/update the focused guard test proving:
+
+    attached_assets/Pasted-anything.txt => GENERATED
+
+Do not broaden the generated allowlist beyond the documented directories.
+
+Validate the guard tests.
+
+CASE B:
+The files are NOT actually under attached_assets/**.
+
+Report the exact paths.
+
+Do not delete/move/discard them without authorization.
+
+CASE C:
+The C-SOURCE classification comes only from legitimate committed workspace
+guard infrastructure such as:
+
+- scripts/workspace_guard.py
+- AGENTS.md
+- .githooks/*
+- guard tests
+
+and those commits are legitimate completed infrastructure work that simply was
+never synchronized to origin/main.
+
+Do NOT roll them back.
+
+Validate those existing source commits and complete their synchronization
+through the repository's permitted lifecycle.
+
+If the guard permits completing/pushing already-validated local source commits,
+do so.
+
+If the guard itself prevents completion of legitimate pre-existing validated
+source commits, STOP and report the exact guard condition and exact commands
+needed. Do not destroy the commits.
+
+==================================================
+IMPORTANT — THE NEWLY UPLOADED DIRECTIVE
+==================================================
+
+The newly uploaded:
+
+    Pasted-IMPLEMENTATION-TASK-CANONICAL-CRYPTO-SCREENER-BACKEND-*.txt
+
+is task-input material.
+
+If it is located beneath attached_assets/**, it must be treated as GENERATED
+under the existing documented policy.
+
+It must NOT be staged into the implementation commit.
+
+It must NOT block implementation merely because it is untracked.
+
+==================================================
+DO NOT USE A CHECKPOINT ROLLBACK
+==================================================
+
+A checkpoint rollback is NOT authorized.
+
+The six existing local commits may contain valid work.
+
+Preserve them.
+
+Do not solve a classification/synchronization problem by throwing away Git
+history.
+
+==================================================
+PHASE 3 — CONTINUE THE CRYPTO IMPLEMENTATION
+==================================================
+
+Once the workspace guard legitimately reaches a state that permits editing,
+immediately continue the previously attached implementation directive:
+
+    CANONICAL CRYPTO SCREENER BACKEND
+
+Do NOT ask me to resend it.
+
+You already have it in attached_assets.
+
+Implement it end-to-end.
+
+The approved product architecture remains:
+
+- backend-owned provider access
+- CMC = current market/ranking data
+- CoinGecko = historical price + volume
+- top 100 universe
+- no Hyperliquid for the new screener fields
+- no altFINS universe fanout
+- one canonical backend crypto screener service
+- one thin GET /api/crypto/screener endpoint
+- one minimal persistent historical-data owner
+- zero historical calls on page load
+- daily background history refresh
+- exact SMA50 / SMA150 / SMA200
+- breakout / hold states
+- 24h volume change
+- 7d volume acceleration
+- VolX
+- volume / market cap
+- backend contract reusable by the agent later
+
+ARCHITECTURE CHANGE APPROVED:
+
+The following architecture additions are explicitly approved for THIS task:
+
+1. one thin canonical crypto screener endpoint
+2. one minimal persisted crypto-history/screener cache if no suitable existing
+   persisted generic cache exists
+3. extension of the existing CoinGecko provider for history
+4. integration into the existing scheduler/background-job owner for one daily
+   refresh
+
+No additional endpoints, workers, providers, caches, tables, or parallel
+pipelines are approved.
+
+==================================================
+FINAL EXPECTATION
+==================================================
+
+Do not stop after diagnosing the guard if you can safely resolve it according
+to the repository's own rules.
+
+The goal of this session is to FINISH THE CRYPTO SCREENER BACKEND.
+
+Final report must include:
+
+A. Guard resolution
+- why it blocked
+- exact classification problem
+- whether attached_assets was correctly classified
+- what was changed, if anything
+- resulting HEAD/origin state
+
+B. Crypto implementation
+- files changed
+- endpoint
+- persistence
+- provider ownership
+- CoinGecko history hydration
+- scheduler
+- identity mapping
+- row contract
+- tests
+- initial hydration result
+- endpoint sample
+- warm latency
+- proof that page requests make zero historical calls
+- Git status / commit / push state
+
+Do not touch the frontend.
+Do not roll back.
+Finish the task.
