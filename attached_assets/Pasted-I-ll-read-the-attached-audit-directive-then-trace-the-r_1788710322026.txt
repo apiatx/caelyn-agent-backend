@@ -1,0 +1,595 @@
+I’ll read the attached audit directive, then trace the requested crypto screener data path read-only without modifying code, Git history, or runtime state.
+
+
+
+3 actions
+This is a broad read-only architecture audit spanning endpoint ownership, three providers, history, scheduling, identity, consumers, and technical primitives. I’ll split those independent traces across read-only code explorers, then verify their cited files directly and synthesize one evidence-based report.
+
+
+
+5 actions
+One explorer surfaced the Hyperliquid matrix, which is explicitly out of scope and therefore not accepted as the Crypto Screener path. I’ll now verify the actual non-Hyperliquid routes and provider symbols directly, using targeted searches and only the cited production files.
+
+
+
+3 actions
+The direct search identifies the non-Hyperliquid screener implementation in MarketDataService, with CMC/CoinGecko/altFINS providers. I’ll read the exact route, scanner merge, provider methods, and cache/scheduler wiring now, keeping the file set focused.
+
+
+
+10 actions
+The service method is clear, but the route is likely generic rather than crypto-named. I’ll trace callers of MarketDataService.get_crypto_scanner() and the generic endpoint dispatch, while separately extracting the provider report that was truncated.
+
+
+
+2 actions
+The verified path is POST /api/query → preset routing → MarketDataService.get_crypto_scanner(). Importantly, that existing method currently does include Hyperliquid despite the new product guardrail, so the future implementation must avoid using that branch for the new columns rather than pretending it is absent. I’ll verify the request/response contract, preset mapping, and any existing light-cache/background writer before finalizing the feasibility and call-budget analysis.
+
+
+
+5 actions
+I have enough to establish that the current response is a multi-section agent payload, not a normalized 500-row canonical table. I’ll inspect the remainder of the result assembly and compressor once, then synthesize the requested field-ownership matrix and clearly identify which product assumptions the current backend does not satisfy.
+
+
+
+6 actions
+Crypto Screener Technical + Volume Data Audit
+Executive conclusion
+The current non-Hyperliquid Crypto Screener path is:
+
+POST /api/query
+  → preset_intent crypto / crypto_focus / crypto_scan
+  → crypto_scanner intent
+  → category crypto
+  → DataRouter
+  → MarketDataService.get_crypto_scanner()
+  → CoinGecko + CoinMarketCap + altFINS and other sources
+
+The endpoint can be extended additively, but the current architecture cannot safely produce exact SMA50/SMA150/SMA200 and 7-day historical-volume metrics for a large crypto universe under the stated guardrails.
+
+The blocker is specific:
+
+No existing crypto OHLCV persistence path retains 205–220 completed daily observations.
+No scheduled crypto-history hydration job exists.
+Current provider caches are short-lived, process-local TTL caches.
+The screener is populated on demand.
+Adding CoinGecko historical fanout to that request path would violate the no-per-coin-request requirement.
+The existing canonical-history service is designed around equity data from Tradier/FMP, not CoinGecko/CMC/altFINS crypto identities.
+No files were edited.
+
+1. Exact endpoint
+The current backend entry point is:
+
+POST /api/query
+
+Defined in:
+
+backend/main.py:5273-5305
+The request model is:
+
+QueryRequest in backend/main.py:4291-4324
+Crypto selection arrives through preset_intent.
+Crypto aliases are mapped as follows:
+
+crypto → crypto_scanner
+crypto_focus → crypto_scanner
+crypto_scan → crypto_scanner
+Defined in:
+
+backend/agent/preset_registry.py:29-46
+Crypto intent profile: backend/agent/preset_registry.py:307-323
+The crypto category dispatch is:
+
+backend/agent/data_router.py:322-341
+The service method is:
+
+MarketDataService.get_crypto_scanner()
+backend/data/market_data_service.py:5108-5293
+There is no separate, normalized REST endpoint dedicated to a canonical crypto table. The current contract is a multi-section data payload gathered for the agent pipeline.
+
+2. Production files in the current path
+Core path:
+
+backend/main.py
+backend/agent/preset_registry.py
+backend/agent/data_router.py
+backend/agent/data_compressor.py
+backend/data/market_data_service.py
+backend/data/coingecko_provider.py
+backend/data/cmc_provider.py
+backend/data/altfins_provider.py
+backend/data/cache.py
+backend/config.py
+Additional consumers:
+
+backend/agent/claude_agent.py
+backend/agent/caelyn_routing.py
+backend/data/cross_asset_ranker.py
+No explicit Pydantic response model governs the raw crypto scanner dictionary.
+
+3. Current response structure
+get_crypto_scanner() returns separate sections rather than one normalized asset array:
+
+cg_top_coins
+cmc_listings
+cg_trending
+cmc_trending
+cmc_most_visited
+dual_trending
+high_attention
+cg_gainers_losers
+cmc_gainers_losers
+derivatives_tickers
+funding_analysis
+volume_acceleration
+new_listings
+altfins
+x_twitter_crypto
+Other contextual sections
+Relevant assembly:
+
+backend/data/market_data_service.py:5157-5263
+This means there is currently no canonical “one coin = one merged screener row” backend contract.
+
+4. Current provider/source ownership matrix
+Field	Current source	Cache/cadence	Identifier	Fallback/notes
+Symbol	CoinGecko and CMC rows; altFINS signals	Provider TTL	Provider symbol, uppercased during some joins	No collision-safe canonical identity
+Name	CoinGecko, CMC, altFINS signal result	Provider TTL	CG ID/symbol or CMC ID/symbol	Not centrally normalized
+Rank	CoinGecko market_cap_rank; CMC listing order	120-second TTL	Provider-specific	No merged canonical rank
+Price	CoinGecko top coins; CMC listing quote	120-second TTL	CG ID or CMC symbol/ID	Separate arrays
+1h %	CoinGecko and CMC market/listing rows	120-second TTL	Provider-specific	Not merged
+24h %	CoinGecko and CMC	120-second TTL	Provider-specific	Not merged
+7d %	CoinGecko and CMC	120-second TTL	Provider-specific	Not merged
+30d %	Requested from CoinGecko; available in CMC listing quote	120-second TTL	Provider-specific	Not merged
+Market cap	CoinGecko and CMC; altFINS signal summary	120/900 seconds	Provider-specific	Not canonicalized
+FDV	CoinGecko/CMC market rows	120 seconds	Provider-specific	No merged field
+24h volume	CoinGecko and CMC; altFINS DOLLAR_VOLUME in analytics API	120/600 seconds	Provider-specific	CMC copy is used in volume_acceleration
+Circulating supply	CoinGecko/CMC market rows	120 seconds	Provider-specific	Not normalized
+Total supply	CoinGecko/CMC market rows	120 seconds	Provider-specific	Not normalized
+ATH drawdown	CoinGecko top-coin payload	120 seconds	CoinGecko ID	Not promoted to a canonical row
+Cycle-low move	CoinGecko may expose ATL and ATL change	120 seconds	CoinGecko ID	No explicit canonical “cycle low” definition
+AI-project classification	Missing as a canonical field	N/A	N/A	Categories/tags are not normalized into this field
+Sentiment	Separate X data; some CoinGecko detail fields exist but detail is not used for universe rows	Caller-driven	Primarily symbol	Not row-normalized
+X score	Separate x_twitter_crypto result	Caller-driven	Symbol	No canonical per-row x_score contract
+Fallback behavior
+All three providers generally return empty dictionaries/lists on:
+
+HTTP errors
+Rate limits
+Authentication failures
+Timeouts/exceptions
+There is no persisted crypto-screener LKG fallback in this path.
+
+5. CoinGecko path
+Implementation:
+
+backend/data/coingecko_provider.py
+Authentication
+Server-side API key
+Passed as x_cg_demo_api_key
+Key originates from backend configuration
+No key is exposed to the frontend
+Current endpoints
+The screener dashboard invokes:
+
+/global
+/coins/markets with top 25
+/search/trending
+/derivatives
+/coins/categories
+A second /coins/markets call with top 50 for gainers/losers
+Relevant code:
+
+backend/data/coingecko_provider.py:113-150
+backend/data/coingecko_provider.py:151-188
+backend/data/coingecko_provider.py:189-211
+Cache
+In-memory only
+TTL: 120 seconds
+Cache key based on endpoint and parameters
+backend/data/coingecko_provider.py:6,113-138
+Cache implementation: backend/data/cache.py
+Current cold cost
+Approximately 6 CoinGecko HTTP requests for a cold dashboard build.
+
+Universe size
+Top-coins request: 25
+Gainers/losers source: 50
+Response returns only the first 20 top coins
+This is not a top-500 path.
+
+History
+No current calls to:
+
+/coins/{id}/market_chart
+CoinGecko OHLC endpoints
+CoinGecko dated history endpoints
+No daily historical price or volume series is retained.
+
+Identity
+CoinGecko rows contain CoinGecko IDs, but the screener merge primarily cross-references uppercase symbols. There is no canonical persisted CoinGecko-ID map for screener assets.
+
+Historical feasibility
+CoinGecko could theoretically provide daily price and volume history, but the current implementation does not fetch or persist it. Supporting 500 assets through naïve per-coin calls would require roughly 500 initial historical requests and potentially hundreds of steady-state requests.
+
+That must not happen from POST /api/query.
+
+6. CoinMarketCap path
+Implementation:
+
+backend/data/cmc_provider.py
+Authentication
+Server-side X-CMC_PRO_API_KEY header
+No frontend credential exposure
+Current endpoints
+A full dashboard performs seven operations:
+
+/v1/global-metrics/quotes/latest
+/v1/cryptocurrency/listings/latest
+/v1/cryptocurrency/trending/latest
+/v1/cryptocurrency/trending/gainers-losers
+/v1/cryptocurrency/trending/most-visited
+/v1/cryptocurrency/listings/new
+/v1/cryptocurrency/categories
+Relevant code:
+
+backend/data/cmc_provider.py:59-74
+backend/data/cmc_provider.py:100-173
+backend/data/cmc_provider.py:174-200
+Universe size
+Current listing request: top 50
+Current scanner response: first 15 CMC listings
+No current top-100 or top-500 behavior
+Cache and cadence
+Process-local in-memory cache
+TTL: 120 seconds
+Caller-driven refresh
+No dedicated scheduled refresh
+Current call cost
+Seven HTTP requests on a fully cold dashboard build
+Provider comments estimate approximately 8–10 CMC credits for the complete dashboard
+No central CMC daily-budget governor was found in this path
+Current volume fields
+CMC listing data currently exposes:
+
+volume_24h
+volume_change_24h
+market_cap
+market_cap_dominance
+fully_diluted_market_cap
+The service already creates a volume_acceleration dictionary using:
+
+volume_24h
+volume_change_24h
+market_cap_dominance
+Code:
+
+backend/data/market_data_service.py:5185-5195
+Identity
+CMC IDs remain in provider rows, but the cross-provider logic uses symbols. There is no canonical CMC-ID mapping layer.
+
+History
+No CMC historical endpoint is used. CMC should remain a current-market/ranking source rather than being forced into the historical role.
+
+7. altFINS path
+Implementation:
+
+backend/data/altfins_provider.py
+Current scanner behavior
+get_crypto_scanner_data() issues:
+
+Eight bullish signal-feed requests
+Four bearish signal-feed requests
+Sequentially
+With 2.5-second spacing
+Cached per signal for 900 seconds
+Total cold cost: 12 altFINS requests.
+
+Code:
+
+backend/data/altfins_provider.py:30-47
+backend/data/altfins_provider.py:149-231
+Current scanner fields
+The current screener call returns signal summaries such as:
+
+Golden cross
+Death cross
+MACD bullish
+Resistance breakout
+Support breakdown
+Trend upgrade/downgrade
+Momentum uptrend
+Multi-signal coin summary
+It does not currently return a normalized technical row for every CMC/CoinGecko asset.
+
+Analytics endpoint
+The existing per-coin analytics method requests:
+
+MARKET_CAP
+DOLLAR_VOLUME
+PRICE_CHANGE_1D
+PRICE_CHANGE_1W
+PRICE_CHANGE_1M
+PRICE_CHANGE_3M
+SMA10
+SMA20
+SMA50
+SMA200
+RSI14
+MACD
+HIGH
+LOW
+Code:
+
+backend/data/altfins_provider.py:22-28
+backend/data/altfins_provider.py:91-148
+However, this analytics method is not used by the universe screener. It is used for per-coin deep dives.
+
+Requested altFINS field verification
+Requested field	Verified in current API request list?
+SMA50	Yes
+SMA200	Yes
+SMA50_TREND	No
+SMA200_TREND	No
+VOLUME	Only DOLLAR_VOLUME, not a dated volume series
+VOLUME_RELATIVE	No
+OBV_TREND	No
+ATR	No
+SMA150	No
+X_LAST_PRICE_CROSS_SMA50 analogue	Not exposed by the current analytics request
+X_LAST_PRICE_CROSS_SMA200 analogue	Not exposed by the current analytics request
+The signal feed supplies some crossover-like events, especially SMA50/200 golden/death cross signals, but it does not establish access to the requested last-price-cross fields.
+
+No provider call was made during this audit, so undocumented account-specific fields were not assumed.
+
+8. Current caching and persistence
+Existing crypto provider cache
+backend/data/cache.py
+Process-local dictionary
+Lost on restart
+No disk or database persistence
+CoinGecko TTL: 120 seconds
+CMC TTL: 120 seconds
+altFINS analytics TTL: 600 seconds
+altFINS signals TTL: 900 seconds
+Persisted snapshots/database
+No crypto-screener database table or persisted OHLCV snapshot was found in this path.
+
+crypto_scanner_light
+backend/agent/claude_agent.py:4528-4535 reads:
+
+crypto_scanner_light
+
+No writer for this cache key was found. It is therefore not a demonstrated canonical persistence/refresh path.
+
+9. Refresh/background-job path
+There is no dedicated background scheduler for get_crypto_scanner().
+
+Refresh is caller-driven:
+
+POST /api/query crypto category
+Broadened crypto gathering in claude_agent.py
+Cross-market gathering
+Provider TTLs suppress some repeat calls within a process, but a cold process or expired cache triggers provider work during the request flow.
+
+This is incompatible with the desired eventual rule that the screener should read periodically refreshed history rather than hydrate it on demand.
+
+10. Existing consumers
+Known backend consumers:
+
+Crypto preset through DataRouter
+backend/agent/data_router.py:322-341
+Broadened crypto analysis
+backend/agent/claude_agent.py:4892-4900
+Cross-market scan embedding
+backend/data/market_data_service.py:4678-4684
+Crypto data compression for model context
+backend/agent/data_compressor.py
+Optional crypto_scanner_light context read
+backend/agent/claude_agent.py:4528-4535
+The frontend repository is not present here, so the exact browser callsite and any frontend-side legacy provider access cannot be verified from this backend workspace. The only demonstrated frontend-facing entry is generic POST /api/query.
+
+11. Required target fields
+Already available in some form
+volume_24h — CMC/CoinGecko
+volume_delta_24h equivalent — CMC volume_change_24h
+volume_to_market_cap_pct — derivable from current CMC fields
+SMA50 — available from altFINS per-coin analytics, but not current universe response
+SMA200 — available from altFINS per-coin analytics, but not current universe response
+Golden/death-cross signal events — altFINS signal feed
+Derivable from current point-in-time data
+volume_to_market_cap_pct =
+    volume_24h / market_cap * 100
+
+CMC’s own volume_change_24h is the statistically valid existing source for a 24-hour volume acceleration field. It should not be reconstructed from unrelated daily buckets.
+
+Not derivable exactly from current stored/cached data
+sma_150
+Exact SMA50/150/200 from canonical completed daily closes
+pct_vs_sma_150
+Exact above_sma_150
+above_all_3
+bullish_ma_stack
+Fresh breakout 50/150/200 based on prior completed closes
+Consolidating/holding above SMA50/150/200
+SMA50/150/200 slope from canonical history
+volume_delta_7d
+vol_x_7d
+Comparable completed-daily volume calculations
+Close-above-MA persistence counts
+12. SMA150 feasibility
+Exact SMA150 requires at least 150 completed daily closes, preferably 205–220 observations to support all calculations consistently.
+
+The current crypto path has no such history.
+
+Therefore:
+
+EXACT_SMA150_FROM_CURRENT_CRYPTO_HISTORY = NO
+
+It could only be supported after extending an existing provider path to persist CoinGecko daily history outside the request flow. The existing equity canonical-history service cannot be reused unchanged because it is tied to different providers and security identities.
+
+altFINS must not substitute SMA200 or another indicator for SMA150.
+
+13. Volume acceleration feasibility
+24-hour acceleration
+SUPPORTED_NOW = YES, via CMC volume_change_24h
+
+That is preferable to fabricating a comparison between current rolling 24-hour volume and an unrelated completed UTC-day bucket.
+
+Seven-day acceleration and VolX
+SUPPORTED_NOW = NO
+
+Correct calculations require at least 15 comparable completed daily-volume observations:
+
+vol_x_7d =
+    current comparable volume /
+    average prior 7 completed daily volumes
+volume_delta_7d =
+    average latest 7 completed daily volumes /
+    average preceding 7 completed daily volumes - 1
+
+The current path retains no daily-volume series.
+
+14. Existing technical/consolidation primitives
+Reusable backend primitives exist, but they currently operate on OHLCV bars supplied by other asset pipelines:
+
+SMA calculation
+SMA20/SMA50/SMA200
+ATR14
+Price versus SMA50
+SMA50 versus SMA200
+Recent golden-cross check
+EMA20/EMA50 cross
+Range/volatility contraction logic
+Squeeze-style signal
+Basic trend classification
+Primary implementation:
+
+backend/core/ta_signal_engine.py
+Other examples:
+
+backend/services/sector_rotation/analytics.py
+backend/core/regime_engine.py
+backend/services/watchlist_analysis.py
+Missing reusable primitives:
+
+SMA150
+Exact price-crossed-SMA-N within previous three completed sessions
+MA hold/retest persistence
+Close-above-MA counts
+Crypto-specific completed-daily volume comparability
+The existing TA functions can be reused once canonical crypto bars exist; they should not be duplicated in frontend code.
+
+15. Provider-call budget
+Current cold screener request
+Allowed providers alone:
+
+Provider	Cold requests
+CoinGecko	~6
+CMC	7
+altFINS	12
+Total	~25
+The current method also calls disallowed-for-this-feature sources, including Hyperliquid. Those must not contribute to the proposed new columns.
+
+Current-market refresh
+CoinGecko: on demand after 120-second cache expiry
+CMC: on demand after 120-second cache expiry
+altFINS: on demand after 900-second signal-cache expiry
+No scheduled refresh owns this work
+Initial historical hydration
+With a naïve CoinGecko per-coin history call:
+
+Top 50: approximately 50 calls
+Top 100: approximately 100 calls
+Top 500: approximately 500 calls
+Steady-state history refresh
+Without a batch endpoint or persisted incremental design:
+
+Potentially one call per tracked coin per refresh cycle
+Approximately 500 calls per day for a 500-coin universe
+Page-request history calls
+Required safe target:
+
+0
+
+The existing implementation does not meet that target because no history path exists; adding fanout directly would be unsafe.
+
+16. Minimum files that would need later modification
+If the architecture blocker is resolved by authorizing an existing-path extension, the likely minimum is:
+
+backend/data/coingecko_provider.py
+Existing provider-owned historical fetch/normalization
+backend/data/market_data_service.py
+Existing screener response extension and merge
+backend/core/ta_signal_engine.py
+SMA150 and reusable pure breakout/hold/volume calculations
+An existing persisted snapshot/background-refresh owner
+The fourth item is the blocker: no suitable crypto history persistence/scheduler owner currently exists.
+
+backend/data/altfins_provider.py would only need modification if the product chooses to promote verified altFINS point indicators into canonical rows. It cannot replace the missing SMA150/history path.
+
+17. Can the existing endpoint be extended?
+Structurally, yes:
+
+The existing get_crypto_scanner() result can accept additive fields.
+POST /api/query need not be duplicated.
+No parallel frontend provider pipeline is appropriate.
+Operationally, not yet under the current hard guardrails:
+
+There is no existing persisted crypto-history owner to extend.
+There is no existing crypto-history scheduler.
+The endpoint is request-driven.
+The current payload is not a canonical 500-row merged universe.
+18. Hyperliquid conflict
+Although Hyperliquid must remain independent for the proposed feature, the current get_crypto_scanner() implementation explicitly calls:
+
+self.hyperliquid.get_crypto_dashboard()
+
+at backend/data/market_data_service.py:5129-5130, and includes its result at lines 5235–5236.
+
+Therefore:
+
+Hyperliquid is currently part of the broader crypto-agent payload.
+It must not be used to source the new technical/volume columns.
+Removing it from existing behavior would violate the “preserve current behavior” requirement and is not recommended as part of this feature.
+The future fields should be sourced only from CMC, CoinGecko, and verified altFINS data.
+19. Architecture blocker
+ARCHITECTURE_CHANGE_BLOCKER = YES
+
+The required exact historical calculations cannot be added while simultaneously forbidding:
+
+A new cache or persisted snapshot
+A new scheduler/refresh owner
+A new database table
+Request-time per-coin history calls
+At least one existing persistence and refresh owner must be explicitly authorized for extension, or an existing suitable crypto-history owner must be identified elsewhere.
+
+No such owner exists in the audited path.
+
+20. Recommended backend-first implementation sequence
+Once the persistence/refresh ownership question is approved:
+
+Confirm the frontend’s actual row contract and intended universe size.
+Define one canonical crypto identity per row:
+symbol
+CoinGecko ID
+CMC ID where available
+altFINS symbol
+Keep CMC as the current-market/ranking/24-hour-volume source.
+Keep CoinGecko as the historical daily price-and-volume candidate.
+Verify altFINS account responses for SMA/trend/relative-volume fields before relying on them.
+Extend an approved existing persisted snapshot path to retain at least 220 completed daily CoinGecko observations.
+Hydrate history outside the page request path with bounded concurrency and provider budgeting.
+Compute all SMA, breakout, hold, trend, and volume metrics in one backend pass.
+Add fields to the existing crypto screener response without creating a second endpoint.
+Preserve current provider precedence and existing response sections.
+Ensure page loads perform zero historical provider calls.
+Add coverage/freshness metadata so missing history produces null/unavailable fields rather than false signals.
+FILES_EDITED = NONE
+COMMITS_CREATED = NONE
+PROVIDER_CALLS_MADE = NONE
+DEPLOYMENT_OCCURRED = NO
+
+
+
+Worked for 3 minutes
