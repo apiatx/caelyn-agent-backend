@@ -1,0 +1,695 @@
+IMPLEMENTATION TASK — CANONICAL CRYPTO SCREENER BACKEND
+
+THIS IS THE BACKEND REPLIT PROJECT.
+
+Read AGENTS.md first.
+
+The current Replit workspace is the source of truth.
+GitHub is reference/backup and may be behind Replit.
+
+This is an authorized implementation task.
+
+The objective is intentionally simple:
+
+Build ONE canonical backend-owned crypto screener data path that supports the
+existing Crypto Screener UI plus two new groups:
+
+1. Trend / Breakout
+2. Volume / Liquidity
+
+All provider access and derived calculations must happen in the backend.
+
+The frontend will later become a thin renderer of this backend contract.
+
+Do not redesign unrelated crypto architecture.
+
+==================================================
+ARCHITECTURE DECISION
+==================================================
+
+DO NOT make the frontend consume the existing POST /api/query crypto payload
+as the table contract.
+
+The audit established that POST /api/query -> get_crypto_scanner() is an
+agent-oriented multi-section payload, not a normalized one-row-per-coin table.
+
+Preserve that existing behavior.
+
+Instead:
+
+1. Add one reusable backend service method that produces canonical crypto
+   screener rows.
+
+2. Expose that service through one thin backend GET endpoint for the UI.
+
+Preferred route:
+
+    GET /api/crypto/screener
+
+Follow existing backend router conventions if an equivalent crypto route prefix
+already exists, but do not invent additional parallel endpoints.
+
+3. Structure the service so the Caelyn agent can call the SAME service later.
+
+The browser and the agent must ultimately share one source of truth.
+
+==================================================
+PROVIDER OWNERSHIP
+==================================================
+
+For this screener:
+
+COINMARKETCAP
+= primary current-market source
+
+Use it for:
+
+- rank
+- current price
+- 1h %
+- 24h %
+- 7d %
+- 30d %
+- market cap
+- FDV
+- current 24h volume
+- circulating supply
+- total supply
+- volume_change_24h where exposed
+
+COINGECKO
+= historical daily price/volume source
+
+Use it for:
+
+- completed daily close history
+- historical daily volume observations
+- SMA50
+- SMA150
+- SMA200
+- MA crossover / hold state
+- 7-day volume calculations
+- CoinGecko ATH / ATL data where the existing screener semantics require it
+
+EXISTING BACKEND SOCIAL / X SOURCES
+= existing social fields only
+
+If the existing backend has legitimate values for:
+- AI project
+- sentiment
+- X score
+
+merge them into the canonical row using the existing logic.
+
+Do NOT invent replacement definitions.
+
+If an existing field cannot yet be reproduced exactly from backend-owned
+sources, return null for that field and clearly report it.
+
+ALTFINS
+
+Do NOT use altFINS to populate the top-100 screener.
+
+Do not call its per-coin analytics endpoint across the universe.
+
+Keep all existing altFINS functionality untouched.
+
+HYPERLIQUID
+
+Do not use Hyperliquid for ANY field in this new screener contract.
+
+Do not remove Hyperliquid from existing agent behavior either.
+
+It remains independent.
+
+==================================================
+UNIVERSE
+==================================================
+
+Use CMC market-cap rank as the canonical screener universe.
+
+TARGET:
+
+Top 100 cryptocurrencies.
+
+Do not expand this task to top 500.
+
+This keeps the historical refresh comfortably inside the current CoinGecko
+plan and is sufficient for this product.
+
+Return one normalized row per ranked asset.
+
+==================================================
+CANONICAL IDENTITY
+==================================================
+
+Each row must have stable identifiers:
+
+- cmc_id
+- coingecko_id
+- symbol
+- name
+- slug where available
+
+Do not rely solely on uppercase symbol for cross-provider identity because
+symbols can collide.
+
+Build a deterministic CMC -> CoinGecko mapping.
+
+Prefer an existing mapping mechanism if one already exists.
+
+Otherwise use CoinGecko's bulk coin list / existing provider metadata to match
+on normalized symbol + normalized name and persist the resolved mapping.
+
+Ambiguous mappings must NOT silently select a random asset.
+
+For an ambiguous or unresolved asset:
+
+- retain the CMC market row
+- coingecko_id = null
+- historical/technical fields = null
+- report the unresolved identity
+
+==================================================
+PERSISTENT HISTORY
+==================================================
+
+The audit established that there is currently no persisted crypto daily-history
+owner.
+
+We are explicitly authorizing ONE minimal persistence addition.
+
+First inspect the current Neon/database helpers and existing generic JSONB
+cache conventions.
+
+If an EXISTING generic persisted cache can safely hold this data, extend it.
+
+Otherwise create exactly ONE small crypto screener persistence table.
+
+Do not create multiple tables unless the current database conventions make
+that clearly simpler.
+
+Preferred logical contents per coin:
+
+- cmc_id
+- coingecko_id
+- symbol
+- name
+- daily_history JSONB
+- derived_metrics JSONB
+- current_snapshot JSONB / last-known-good row if appropriate
+- history_updated_at
+- current_updated_at
+
+daily_history should retain up to approximately 365 completed daily points:
+
+[
+  {
+    "date": "YYYY-MM-DD",
+    "close": number,
+    "volume": number
+  }
+]
+
+The page endpoint must NOT return this entire raw history array.
+
+It only returns derived screener fields.
+
+The raw history remains backend-owned and reusable by the future agent brain.
+
+==================================================
+COINGECKO HISTORY HYDRATION
+==================================================
+
+Extend the EXISTING backend CoinGecko provider.
+
+Do not create another CoinGecko client.
+
+Add the minimum historical fetch method needed using the current server-side
+CoinGecko key.
+
+INITIAL HYDRATION:
+
+For each unresolved/missing top-100 CoinGecko asset:
+
+- request sufficient CoinGecko history to retain ~365 daily observations
+- normalize to completed DAILY observations
+- persist
+- compute metrics
+
+Rate-limit conservatively to <= 20 provider requests/minute.
+
+Do NOT block application startup for the entire hydration.
+
+After implementation, it is acceptable to run an explicit one-time hydration
+command/task and wait for it to finish before final verification.
+
+STEADY STATE:
+
+Once daily, after the UTC daily boundary, refresh recent history for the top
+100.
+
+Use a small overlapping range rather than assuming yesterday was successfully
+stored.
+
+For example fetch enough recent observations to safely upsert the last several
+days.
+
+Run around 00:30 UTC or use the project's existing equivalent background-job
+cadence.
+
+Integrate into the EXISTING scheduler/background-task owner.
+
+Do not create a separate worker service.
+
+Expected fixed historical cost:
+
+~100 CoinGecko calls/day
+~3,000/month
+
+There must be:
+
+ZERO CoinGecko historical calls from GET /api/crypto/screener.
+
+==================================================
+CURRENT-MARKET REQUEST BUDGET
+==================================================
+
+Do NOT call the complete existing crypto dashboard from the screener endpoint.
+
+That dashboard fans out into many unrelated CMC/CoinGecko/altFINS calls.
+
+The canonical screener only needs the minimal current-market datasets.
+
+On a cold/current refresh, target approximately:
+
+- one CMC listings/current-market request for the top 100
+- one CoinGecko markets/current request where required for matching/current
+  CoinGecko-specific values
+
+Reuse existing provider caches.
+
+Add a screener-level last-known-good/current snapshot TTL of approximately
+5 minutes so repeated page loads do not repeatedly hit providers.
+
+If the most recent successful snapshot is <5 minutes old:
+
+return it immediately.
+
+If current providers fail:
+
+return the last-known-good persisted row values with freshness metadata rather
+than turning the table empty.
+
+Do not change global provider behavior for unrelated features.
+
+==================================================
+TECHNICAL CALCULATIONS
+==================================================
+
+All moving averages use COMPLETED daily closes only.
+
+Never include an incomplete current UTC day in an SMA.
+
+Compute:
+
+sma_50
+sma_150
+sma_200
+
+pct_vs_sma_50
+pct_vs_sma_150
+pct_vs_sma_200
+
+where:
+
+pct_vs_sma_N =
+    (current_market_price / sma_N - 1) * 100
+
+Compute:
+
+above_sma_50
+above_sma_150
+above_sma_200
+
+above_all_3 =
+    current_price > sma50
+    AND current_price > sma150
+    AND current_price > sma200
+
+bullish_ma_stack =
+    sma50 > sma150
+    AND sma150 > sma200
+
+Also compute:
+
+sma_50_rising
+sma_150_rising
+sma_200_rising
+
+Use a deterministic slope comparison against the corresponding SMA value five
+completed daily observations earlier.
+
+==================================================
+BREAKOUT / HOLD STATE
+==================================================
+
+We want useful CURRENT trading states, not a stale once-daily label.
+
+For each N in 50, 150, 200:
+
+fresh_breakout_N =
+
+    current_market_price > latest completed-day SMA_N
+
+AND
+
+    at least one of the previous 3 COMPLETED daily closes was at or below its
+    corresponding SMA_N
+
+This allows a breakout that occurred today or very recently to remain visible.
+
+holding_above_N =
+
+    current_market_price > SMA_N
+
+AND
+
+    the previous 3 completed daily closes were all above their corresponding
+    SMA_N
+
+AND
+
+    fresh_breakout_N is false
+
+Do not invent a subjective "consolidation score" in this task.
+
+A deterministic HOLD state is enough.
+
+Generate one backend setup_label using this priority:
+
+1. "200D BREAKOUT"
+2. "150D BREAKOUT"
+3. "50D BREAKOUT"
+4. "ABOVE ALL · BULLISH STACK"
+5. "ABOVE ALL · HOLD"
+6. "ABOVE 200D"
+7. "BELOW 200D"
+
+Only emit a label when the required history is complete.
+
+Otherwise:
+
+setup_label = null
+
+==================================================
+VOLUME / LIQUIDITY CALCULATIONS
+==================================================
+
+Return:
+
+volume_24h
+volume_change_24h_pct
+volume_delta_7d_pct
+vol_x_7d
+volume_to_market_cap_pct
+
+CURRENT 24H VOLUME
+
+Use CMC current volume for the displayed:
+
+volume_24h
+
+24H VOLUME CHANGE
+
+Use CMC's existing volume_change_24h value directly:
+
+volume_change_24h_pct
+
+Do not reconstruct this from unrelated buckets.
+
+VOLUME / MARKET CAP
+
+volume_to_market_cap_pct =
+
+    CMC volume_24h / CMC market_cap * 100
+
+7-DAY VOLUME METRICS
+
+Use comparable CoinGecko volume observations from the CoinGecko historical
+series.
+
+volume_delta_7d_pct =
+
+    (
+      average(latest 7 completed daily volume observations)
+      /
+      average(previous 7 completed daily volume observations)
+      - 1
+    ) * 100
+
+vol_x_7d =
+
+    current CoinGecko comparable 24h volume
+    /
+    average(previous 7 completed CoinGecko daily volume observations)
+
+Keep the provider methodology internally consistent for VolX.
+
+Do not mix a CoinMarketCap numerator with a CoinGecko denominator for VolX.
+
+==================================================
+FLAT UI CONTRACT
+==================================================
+
+Return FLAT rows.
+
+Do not make the frontend traverse nested provider structures.
+
+Example shape:
+
+{
+  "as_of": "...",
+  "history_as_of": "...",
+  "rows": [
+    {
+      "rank": 1,
+      "cmc_id": 1,
+      "coingecko_id": "bitcoin",
+      "symbol": "BTC",
+      "name": "Bitcoin",
+
+      "price": ...,
+      "change_1h_pct": ...,
+      "change_24h_pct": ...,
+      "change_7d_pct": ...,
+      "change_30d_pct": ...,
+      "market_cap": ...,
+      "fdv": ...,
+      "volume_24h": ...,
+      "circulating_supply": ...,
+      "total_supply": ...,
+
+      "ath_drawdown_pct": ...,
+      "cycle_low_move_pct": ...,
+
+      "ai_project": ...,
+      "sentiment": ...,
+      "x_score": ...,
+
+      "sma_50": ...,
+      "sma_150": ...,
+      "sma_200": ...,
+      "pct_vs_sma_50": ...,
+      "pct_vs_sma_150": ...,
+      "pct_vs_sma_200": ...,
+
+      "above_sma_50": ...,
+      "above_sma_150": ...,
+      "above_sma_200": ...,
+      "above_all_3": ...,
+      "bullish_ma_stack": ...,
+
+      "fresh_breakout_50": ...,
+      "fresh_breakout_150": ...,
+      "fresh_breakout_200": ...,
+      "holding_above_50": ...,
+      "holding_above_150": ...,
+      "holding_above_200": ...,
+
+      "sma_50_rising": ...,
+      "sma_150_rising": ...,
+      "sma_200_rising": ...,
+
+      "setup_label": ...,
+
+      "volume_change_24h_pct": ...,
+      "volume_delta_7d_pct": ...,
+      "vol_x_7d": ...,
+      "volume_to_market_cap_pct": ...,
+
+      "current_data_as_of": ...,
+      "technical_data_as_of": ...
+    }
+  ]
+}
+
+Preserve exact existing field semantics where they already exist.
+
+Do not silently redefine Cycle Low Move, AI Project, Sentiment, or X Score.
+
+If the existing backend cannot reproduce one of those exact values yet, keep
+the contract nullable and report it.
+
+==================================================
+AGENT REUSE
+==================================================
+
+Do not shove all 100 rows into the current LLM prompt or compressor during
+this task.
+
+The goal right now is to make the canonical service backend-owned.
+
+The future agent can then call/filter/rank the SAME backend service.
+
+Do not create a second "agent crypto screener."
+
+==================================================
+FRONTEND SECRETS
+==================================================
+
+This is backend only.
+
+Do not change the frontend repo.
+
+The frontend currently appears to contain CMC/CoinGecko environment/provider
+plumbing.
+
+We are intentionally replacing provider access for THIS screener with the new
+backend endpoint later.
+
+Do not require any browser-side CMC, CoinGecko, or altFINS credential.
+
+==================================================
+PERFORMANCE
+==================================================
+
+GET /api/crypto/screener must:
+
+- perform ZERO per-coin history calls
+- perform ZERO altFINS calls
+- perform ZERO Hyperliquid calls
+- perform at most the minimal current CMC + CoinGecko refresh when the
+  screener-level current cache is stale
+- return cached/persisted data quickly on the normal path
+- never run a 100-item sequential network loop during the HTTP request
+
+No expensive pandas dataframe construction on every request if simple Python
+math/precomputed metrics can avoid it.
+
+This table must be fast.
+
+==================================================
+TESTS
+==================================================
+
+Add focused tests for:
+
+1. SMA50/150/200 calculations.
+2. Incomplete history => null, not false signals.
+3. pct_vs_sma calculations.
+4. above_all_3.
+5. bullish_ma_stack.
+6. fresh 50D breakout.
+7. fresh 150D breakout.
+8. fresh 200D breakout.
+9. holding-above behavior.
+10. SMA rising/falling behavior.
+11. volume_delta_7d_pct.
+12. vol_x_7d.
+13. volume_to_market_cap_pct.
+14. ambiguous CoinGecko identity mapping does not silently map.
+15. provider failure returns LKG rather than an empty table.
+16. endpoint performs zero historical provider calls.
+17. endpoint performs zero altFINS calls.
+18. endpoint performs zero Hyperliquid calls.
+19. warm-cache endpoint path does not call CMC/CoinGecko.
+20. current cache expiration invokes only the minimal current-market calls.
+
+Run existing relevant backend tests as well.
+
+==================================================
+DO NOT
+==================================================
+
+Do not:
+
+- rewrite POST /api/query
+- remove existing crypto scanner sections
+- change existing agent behavior
+- remove Hyperliquid from its existing agent path
+- use Hyperliquid for these fields
+- call altFINS across the top 100
+- calculate indicators in frontend
+- create provider calls in React
+- create 100 history calls in an HTTP request
+- create multiple competing crypto caches
+- create another crypto universe
+- use symbol-only joins when identity is ambiguous
+- redesign unrelated database architecture
+- touch equity history
+- touch FMP or Tradier
+- refactor unrelated market-data code
+
+==================================================
+VERIFY LIVE
+==================================================
+
+After implementation:
+
+1. Run focused tests.
+2. Run broader relevant backend tests.
+3. Execute initial top-100 CoinGecko history hydration within the provider
+   rate limit.
+4. Verify BTC, ETH and at least 8 additional assets have:
+   - >= 200 completed closes
+   - >= 14 completed volume observations
+5. Call GET /api/crypto/screener.
+6. Verify 100 ranked rows where CMC supplies them.
+7. Inspect at least:
+   - BTC
+   - ETH
+   - SOL
+   - one fresh/near-MA asset
+   - one below-200D asset
+8. Confirm SMA arithmetic independently for at least two coins.
+9. Confirm volume math independently for at least two coins.
+10. Call the endpoint repeatedly and prove history provider calls remain zero.
+11. Prove the warm-cache path does not refetch current providers.
+12. Report endpoint latency.
+
+==================================================
+FINAL REPORT
+==================================================
+
+Return:
+
+1. Files changed.
+2. Migration/persistence used.
+3. Exact endpoint.
+4. Exact canonical row contract.
+5. Current provider ownership.
+6. History hydration method.
+7. Daily refresh schedule.
+8. Initial provider-call count.
+9. Expected monthly fixed CoinGecko history calls.
+10. Identity mapping method and unresolved assets.
+11. Existing fields that remained nullable and why.
+12. Test results.
+13. Live endpoint sample for BTC and two other assets.
+14. Warm endpoint latency.
+15. Proof page requests make zero historical calls.
+16. Git diff summary.
+17. Commit SHA if this OpenCode workflow requires committing.
+
+Do not make frontend edits.
