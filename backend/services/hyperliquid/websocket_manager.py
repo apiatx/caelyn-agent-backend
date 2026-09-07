@@ -21,7 +21,7 @@ Post-boot enrichment (background, non-blocking):
 Background tasks (continuous):
  13. Periodic candle refresh (every 5 min) — refreshes 1h, 5m, 1d
  14. Periodic feature recompute (every 60s)
- 15. Periodic HIP-3 refresh (every 5 min) — refreshes prices, saves disk cache
+ 15. Periodic universe refresh (every 5 min) — reconciles perps, spot, and HIP-3
 """
 from __future__ import annotations
 
@@ -445,63 +445,192 @@ async def _post_boot_enrich(state: HyperliquidState, client: HyperliquidRestClie
 
 async def _enrich_hip3(state: HyperliquidState, client: HyperliquidRestClient):
     """Load HIP-3 DEX assets (equity/commodity/index/pre-IPO perps)."""
-    try:
-        all_metas = await client.get_all_perp_metas()
-        hip3_prefixes: list[str] = []
-        for dex_meta in all_metas[1:]:  # skip index 0 (main crypto)
-            universe = dex_meta.get("universe", [])
-            if universe:
-                first_name = universe[0].get("name", "")
-                if ":" in first_name:
-                    prefix = first_name.split(":")[0]
-                    if prefix not in hip3_prefixes:
-                        hip3_prefixes.append(prefix)
+    await _refresh_discovered_universe(state, client, include_main_spot=False)
 
-        hip3_ctxs_list = await asyncio.gather(
-            *[client.get_dex_meta_and_asset_ctxs(p) for p in hip3_prefixes],
-            return_exceptions=True,
+
+def _minimal_hip3_asset(dex_prefix: str, asset_meta: dict) -> ScreenerAsset:
+    """Represent active HIP-3 membership even when quote enrichment is absent."""
+    coin = asset_meta["name"]
+    stripped = coin.split(":", 1)[1] if ":" in coin else coin
+    return ScreenerAsset(
+        coin=coin,
+        display_name=stripped,
+        canonical_coin_id=coin,
+        display_symbol=stripped,
+        is_listed_on_hyperliquid=True,
+        market_type="perp",
+        dex=f"hl-{dex_prefix}",
+        tags=["perp", "hip3"],
+        max_leverage=asset_meta.get("maxLeverage"),
+        only_isolated=asset_meta.get("onlyIsolated", False),
+        sz_decimals=asset_meta.get("szDecimals", 0),
+        market_status="active",
+        last_updated_ts=time.time(),
+    )
+
+
+def _complete_hip3_membership(
+    dex_prefix: str,
+    meta_and_ctxs: list,
+    existing: dict[str, ScreenerAsset],
+) -> dict[str, ScreenerAsset]:
+    """
+    Build every non-delisted HIP-3 listing.
+
+    Existing enriched rows survive a temporarily missing per-market context;
+    brand-new listings receive a nullable membership row until enrichment arrives.
+    """
+    enriched = build_hip3_universe(dex_prefix, meta_and_ctxs)
+    meta_block = meta_and_ctxs[0] if meta_and_ctxs else {}
+    for asset_meta in meta_block.get("universe", []):
+        coin = asset_meta.get("name", "")
+        if not coin or asset_meta.get("isDelisted") or coin in enriched:
+            continue
+        prior = existing.get(coin)
+        enriched[coin] = prior or _minimal_hip3_asset(dex_prefix, asset_meta)
+    return enriched
+
+
+def _validated_meta_ctxs(result) -> Optional[list]:
+    """
+    Return a normalized [metadata, contexts] discovery response, or None.
+
+    Metadata-only responses are valid membership snapshots with nullable
+    enrichment. Missing/malformed metadata is not authoritative and must not
+    destructively replace the source's LKG.
+    """
+    if isinstance(result, Exception) or not isinstance(result, (list, tuple)) or not result:
+        return None
+    meta = result[0]
+    if not isinstance(meta, dict) or not isinstance(meta.get("universe"), list):
+        return None
+    contexts = result[1] if len(result) > 1 and isinstance(result[1], list) else []
+    return [meta, contexts]
+
+
+async def _refresh_discovered_universe(
+    state: HyperliquidState,
+    client: HyperliquidRestClient,
+    *,
+    include_main_spot: bool = True,
+):
+    """
+    Reconcile the current Hyperliquid listing metadata into canonical state.
+
+    Main perp, spot, and each HIP-3 namespace reconcile independently. A failed
+    source preserves that source's last-known-good membership, while a successful
+    source removes listings no longer present or marked delisted.
+    """
+    try:
+        discovery_calls = [client.get_all_perp_metas()]
+        if include_main_spot:
+            discovery_calls.extend([
+                client.get_meta_and_asset_ctxs(),
+                client.get_spot_meta_and_asset_ctxs(),
+            ])
+        discovered = await asyncio.gather(*discovery_calls, return_exceptions=True)
+        all_metas = discovered[0]
+        next_assets = dict(state.assets)
+        hip3_prefixes: list[str] = []
+        successful_prefixes: set[str] = set()
+        valid_all_metas = (
+            isinstance(all_metas, list)
+            and bool(all_metas)
+            and all(
+                isinstance(block, dict) and isinstance(block.get("universe"), list)
+                for block in all_metas
+            )
+        )
+        if not valid_all_metas:
+            print(f"[HL][universe_refresh] allPerpMetas error: {all_metas}")
+        else:
+            for dex_meta in all_metas[1:]:
+                for asset_meta in dex_meta.get("universe", []):
+                    name = asset_meta.get("name", "")
+                    if ":" in name:
+                        prefix = name.split(":", 1)[0]
+                        if prefix not in hip3_prefixes:
+                            hip3_prefixes.append(prefix)
+                        break
+
+            hip3_ctxs_list = await asyncio.gather(
+                *[client.get_dex_meta_and_asset_ctxs(p) for p in hip3_prefixes],
+                return_exceptions=True,
+            )
+            known_prefixes = {
+                coin.split(":", 1)[0]
+                for coin in next_assets
+                if ":" in coin
+            }
+            removed_prefixes = known_prefixes - set(hip3_prefixes)
+            for coin in [
+                c for c in next_assets
+                if ":" in c and c.split(":", 1)[0] in removed_prefixes
+            ]:
+                del next_assets[coin]
+
+            for prefix, result in zip(hip3_prefixes, hip3_ctxs_list):
+                valid_result = _validated_meta_ctxs(result)
+                if valid_result is None:
+                    print(f"[HL][universe_refresh] HIP-3 DEX '{prefix}' error: {result}")
+                    continue
+                successful_prefixes.add(prefix)
+                for coin in [
+                    c for c in next_assets
+                    if c.startswith(f"{prefix}:")
+                ]:
+                    del next_assets[coin]
+                next_assets.update(
+                    _complete_hip3_membership(prefix, valid_result, state.assets)
+                )
+
+        if include_main_spot:
+            main_result, spot_result = discovered[1], discovered[2]
+            valid_main = _validated_meta_ctxs(main_result)
+            if valid_main is None:
+                print(f"[HL][universe_refresh] main perp error: {main_result}")
+            else:
+                main_assets = build_perp_universe(valid_main)
+                for coin, asset in list(next_assets.items()):
+                    if asset.market_type == "perp" and ":" not in coin:
+                        del next_assets[coin]
+                next_assets.update(main_assets)
+                state.perp_allowlist = set(main_assets)
+
+            valid_spot = _validated_meta_ctxs(spot_result)
+            if valid_spot is None:
+                print(f"[HL][universe_refresh] spot error: {spot_result}")
+            else:
+                spot_assets = build_spot_universe(valid_spot)
+                for coin, asset in list(next_assets.items()):
+                    if asset.market_type == "spot":
+                        del next_assets[coin]
+                for coin, asset in spot_assets.items():
+                    if coin not in next_assets:
+                        next_assets[coin] = asset
+                state.spot_allowlist = set(spot_assets)
+
+        state.assets = next_assets
+        state.universe_allowlist = set(next_assets)
+        state.lkg_assets = dict(next_assets)
+        state.lkg_pass_ts = time.time()
+        print(
+            f"[HL][universe_refresh] canonical={len(next_assets)} "
+            f"perp={len(state.perp_allowlist)} spot={len(state.spot_allowlist)} "
+            f"hip3={sum(1 for c in next_assets if ':' in c)} "
+            f"successful_hip3={len(successful_prefixes)}/{len(hip3_prefixes)}"
         )
 
-        hip3_new = 0
-        hip3_updated = 0
-        seen_display: set[str] = set()
-        for prefix, result in zip(hip3_prefixes, hip3_ctxs_list):
-            if isinstance(result, Exception):
-                print(f"[HL][enrich] HIP-3 DEX '{prefix}' error: {result}")
-                continue
-            hip3_assets = build_hip3_universe(prefix, result)
-            for coin, asset in hip3_assets.items():
-                if coin in state.assets:
-                    # Refresh price fields on already-known HIP-3 assets (periodic refresh path)
-                    existing = state.assets[coin]
-                    if ":" in coin:   # only update HIP-3, never crypto perps
-                        state.assets[coin] = existing.model_copy(update={
-                            "mark_px": asset.mark_px if asset.mark_px is not None else existing.mark_px,
-                            "mid_px": asset.mid_px if asset.mid_px is not None else existing.mid_px,
-                            "oracle_px": asset.oracle_px if asset.oracle_px is not None else existing.oracle_px,
-                            "prev_day_px": asset.prev_day_px if asset.prev_day_px is not None else existing.prev_day_px,
-                            "pct_change_24h": asset.pct_change_24h if asset.pct_change_24h is not None else existing.pct_change_24h,
-                            "funding": asset.funding if asset.funding is not None else existing.funding,
-                            "open_interest": asset.open_interest if asset.open_interest is not None else existing.open_interest,
-                            "open_interest_usd": asset.open_interest_usd if asset.open_interest_usd is not None else existing.open_interest_usd,
-                            "day_ntl_vlm": asset.day_ntl_vlm if asset.day_ntl_vlm is not None else existing.day_ntl_vlm,
-                            "momentum_24h": asset.momentum_24h if asset.momentum_24h is not None else existing.momentum_24h,
-                            "last_updated_ts": time.time(),
-                        })
-                        hip3_updated += 1
-                else:
-                    if asset.display_name in seen_display:
-                        continue
-                    seen_display.add(asset.display_name)
-                    state.assets[coin] = asset
-                    state.universe_allowlist.add(coin)
-                    hip3_new += 1
-        print(f"[HL][enrich] HIP-3: {hip3_new} new + {hip3_updated} refreshed across {len(hip3_prefixes)} DEXes")
-
-        mids = await client.get_all_mids()
-        patch_from_all_mids(state, mids)
-        run_full_feature_pass(state)
-        print("[HL][enrich] Feature pass complete after HIP-3 load")
+        try:
+            mids = await client.get_all_mids()
+            patch_from_all_mids(state, mids)
+        except Exception as exc:
+            print(f"[HL][universe_refresh] allMids enrichment error: {exc}")
+        try:
+            run_full_feature_pass(state)
+            print("[HL][enrich] Feature pass complete after universe refresh")
+        except Exception as exc:
+            print(f"[HL][universe_refresh] feature enrichment error: {exc}")
 
         # Persist to disk so next boot has HIP-3 immediately (no API wait)
         _save_hip3_cache(state)
@@ -757,16 +886,16 @@ async def _periodic_oi_cap_refresh(state: HyperliquidState, client: HyperliquidR
 
 async def _periodic_hip3_refresh(state: HyperliquidState, client: HyperliquidRestClient):
     """
-    Every 5 minutes: refresh HIP-3 asset prices from the API and update the disk cache.
-    This keeps stocks/commodities/pre-IPO/indices live and ensures the cache is warm
-    for instant availability on the next server restart.
+    Every 5 minutes: reconcile main perp, spot, and HIP-3 membership and prices.
+    This keeps the complete canonical universe current and ensures the HIP-3
+    cache is warm for instant availability on the next server restart.
     Waits 8 minutes initially to avoid overlapping with _post_boot_enrich.
     """
     await asyncio.sleep(480)   # 8 min head-start for post_boot_enrich to finish first
     while not _shutdown:
         if state.is_ready:
             try:
-                await _enrich_hip3(state, client)
+                await _refresh_discovered_universe(state, client)
             except Exception as exc:
                 print(f"[HL][hip3_periodic] Error: {exc}")
         await asyncio.sleep(300)   # 5 minutes

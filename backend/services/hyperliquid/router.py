@@ -311,7 +311,7 @@ def _build_meta(rows: list[dict], state: HyperliquidState) -> dict:
 @router.get("/snapshot")
 async def get_snapshot(
     market_type: str = "all",
-    limit: int = 200,
+    limit: int = 1000,
     sort_by: str = "overallScore",
     sort_dir: str = "desc",
     min_volume_usd: Optional[float] = None,
@@ -336,17 +336,9 @@ async def get_snapshot(
     if state.universe_allowlist:
         assets = [a for a in assets if state.in_universe(a.coin)]
 
-    # Volume gate: explicit parameter overrides; default minimum keeps junk tokens off the board.
-    # Spot markets have a lower default since many legit spots are smaller than major perps.
-    _default_spot_min   = 50_000     # $50K/day — eliminates user-created junk spot tokens
-    _default_perp_min   = 0          # no default perp floor (perp universe is already clean)
+    # Volume is an optional presentation filter, never a canonical membership gate.
     if min_volume_usd is not None:
         assets = [a for a in assets if (a.day_ntl_vlm or 0) >= min_volume_usd]
-    else:
-        assets = [
-            a for a in assets
-            if a.market_type != "spot" or (a.day_ntl_vlm or 0) >= _default_spot_min
-        ]
     if max_spread_bps is not None:
         assets = [a for a in assets if (a.spread_bps or 0) <= max_spread_bps]
 
@@ -374,6 +366,7 @@ async def get_snapshot(
     except AttributeError:
         assets.sort(key=lambda a: a.overall_score or 0, reverse=True)
 
+    # Presentation limit only. The canonical membership remains state.universe_allowlist.
     assets = assets[:limit]
 
     rows = [_asset_to_row(a, rank=i + 1) for i, a in enumerate(assets)]

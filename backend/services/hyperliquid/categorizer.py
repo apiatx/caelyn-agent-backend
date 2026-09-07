@@ -21,10 +21,10 @@ Classification precedence (enforced inside categorize_asset):
      vntl → pre_ipo (with commodity/theme/index refinement)
      abcd → indices
      km → equity/stock/commodity/theme check; default stocks_etfs
-     hyna/para → crypto
+     hyna → crypto; para → symbol/tag classification, then crypto fallback
   7. Generic "equity" tag → stocks_etfs (only after all non-stock overrides).
   8. Symbol/name fallback against curated keyword lists.
-  9. Default: crypto (native HL perps; spot markets filtered at endpoint level).
+  9. Default: crypto (native HL perps and spot markets).
 """
 from __future__ import annotations
 
@@ -172,6 +172,9 @@ _EQUITY_KEYWORDS: frozenset[str] = frozenset({
     # Other HIP-3 equities
     "SNDK", "EBAY", "HOOD", "CAR", "LITE", "BIRD", "USAR",
     "SKHX", "SMSN", "HYUNDAI",
+    # hl-para public equities
+    "CRDO", "VST", "TER", "SOFI", "SMCI", "AAOI", "IREN", "NBIS",
+    "RDDT", "UNITREE",
 })
 
 # Symbols that are crypto-domain macro markers, not index/commodity assets.
@@ -284,7 +287,11 @@ def categorize_asset(asset: ScreenerAsset) -> tuple[str, str]:
             # their "index" tag at step 5 before reaching this handler.
             return "stocks_etfs", "annotation"
 
-        if prefix in ("hyna", "para"):
+        if prefix == "hyna":
+            return "crypto", "annotation"
+        if prefix == "para":
+            if "equity" in tags_lower or sym in _EQUITY_KEYWORDS:
+                return "stocks_etfs", "annotation"
             return "crypto", "annotation"
 
     # ── 7. Generic "equity" tag ───────────────────────────────────────────────
@@ -307,7 +314,7 @@ def categorize_asset(asset: ScreenerAsset) -> tuple[str, str]:
 
     # ── 9. Default: crypto ────────────────────────────────────────────────────
     # Native HL perps (BTC, ETH, SOL, HYPE, XAI, …) land here.
-    # Spot market filtering is enforced at the endpoint/router level.
+    # Spot markets remain in the canonical matrix and land here as crypto.
     return "crypto", "fallback"
 
 
@@ -452,22 +459,8 @@ def build_market_matrix(
 
     warnings: list[str] = []
     fallback_count = 0
-    spot_excluded = 0
     for idx, a in enumerate(ranked):
         row = asset_to_matrix_row(a, rank=idx + 1)
-
-        # Crypto tab = perpetuals only.
-        # Exclude native Hyperliquid spot listings (market_type=="spot" or
-        # canonical_coin_id like "@123") from the crypto tab.
-        if row["asset_type"] == "crypto":
-            is_spot = (
-                (a.market_type or "").lower() == "spot"
-                or "spot" in {t.lower() for t in (a.tags or [])}
-                or str(a.canonical_coin_id or "").startswith("@")
-            )
-            if is_spot:
-                spot_excluded += 1
-                continue
 
         if row["category_source"] == "fallback" and row["asset_type"] != "crypto":
             fallback_count += 1
@@ -495,31 +488,6 @@ def build_market_matrix(
         warnings.append(
             f"{fallback_count} non-crypto markets categorized via symbol fallback "
             "(no Hyperliquid category tag or DEX hint)"
-        )
-
-    # ── Per-tab deduplication by normalized coin symbol ────────────────────────
-    # Hyperliquid lists the same underlying asset across multiple DEX prefixes
-    # (xyz:TSLA, cash:TSLA, flx:TSLA, km:TSLA → all display as "TSLA").
-    # Within each tab, keep only the highest-volume row per display symbol.
-    # Deduplication operates per-tab so cross-tab classification is unaffected.
-    total_dupes = 0
-    for tab_key, tab_data in tabs.items():
-        best: dict[str, dict] = {}
-        for row in tab_data["assets"]:
-            key = (row.get("coin") or "").upper()
-            vol = row.get("volume_24h_usd") or 0.0
-            if key not in best or vol > (best[key].get("volume_24h_usd") or 0.0):
-                best[key] = row
-        deduped = list(best.values())
-        dupes = len(tab_data["assets"]) - len(deduped)
-        total_dupes += dupes
-        tab_data["assets"] = deduped
-        tab_data["count"] = len(deduped)
-
-    if total_dupes > 0:
-        warnings.append(
-            f"{total_dupes} duplicate asset rows removed (same symbol, multiple DEX listings; "
-            "highest-volume row retained per tab)"
         )
 
     return {
