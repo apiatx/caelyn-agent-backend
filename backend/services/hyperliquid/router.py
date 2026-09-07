@@ -325,7 +325,7 @@ async def get_snapshot(
 
     # Use LKG snapshot when available — avoids serving partial mid-pass states.
     # Falls back to live assets during first boot before the initial pass completes.
-    assets = state.scored_assets()
+    assets = [a for a in state.scored_assets() if a.market_type == "perp"]
 
     # Filter
     if market_type in ("perp", "spot"):
@@ -383,7 +383,7 @@ async def get_snapshot(
 async def get_filters():
     """Available filter options for the screener UI."""
     state = _get_state()
-    rows = state.all_assets()
+    rows = [asset for asset in state.all_assets() if asset.market_type == "perp"]
     all_tags = set()
     for r in rows:
         all_tags.update(r.tags)
@@ -976,10 +976,10 @@ async def get_market_matrix():
     """
     Hyperliquid Market Matrix screener — categorized live universe.
 
-    Returns the live Hyperliquid perp/spot universe partitioned into five
+    Returns the live Hyperliquid perp-only universe partitioned into five
     category tabs: stocks_etfs, crypto, commodities, indices, pre_ipo.
 
-    Source of truth: HyperliquidState (perp + HIP-3 DEXes + canonical spot).
+    Source of truth: HyperliquidState (main perps + HIP-3 DEXes).
     Each asset is classified by Hyperliquid category tags first, then DEX
     annotation, then a symbol fallback. Every market lands in exactly one tab.
 
@@ -1008,7 +1008,8 @@ async def get_market_matrix():
 
         assets = [
             a for a in state.scored_assets()
-            if a.market_status == "active"
+            if a.market_type == "perp"
+            and a.market_status == "active"
             and (not state.universe_allowlist or state.in_universe(a.coin))
         ]
 
@@ -1204,7 +1205,10 @@ async def screener_ws(websocket: WebSocket):
 
 
 def _build_ws_snapshot(state: HyperliquidState) -> dict:
-    assets = [a for a in state.scored_assets() if a.market_status == "active"]
+    assets = [
+        a for a in state.scored_assets()
+        if a.market_type == "perp" and a.market_status == "active"
+    ]
     assets.sort(key=lambda a: a.overall_score or 0, reverse=True)
     rows = [_asset_to_row(a, rank=i + 1) for i, a in enumerate(assets[:300])]
     meta = _build_meta(rows, state)

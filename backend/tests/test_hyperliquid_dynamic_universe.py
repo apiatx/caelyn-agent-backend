@@ -39,24 +39,12 @@ def _perp_response(*names: str) -> list:
     ]
 
 
-def _spot_response(coin: str = "@1", display: str = "HFUN") -> list:
-    return [
-        {
-            "universe": [{"name": f"{display}/USDC", "tokens": [0, 1]}],
-            "tokens": [
-                {"name": display, "index": 0},
-                {"name": "USDC", "index": 1},
-            ],
-        },
-        [{"coin": coin}],
-    ]
-
-
 @pytest.mark.asyncio
 async def test_refresh_reconciles_new_removed_partial_and_failed_sources(monkeypatch):
     state = HyperliquidState()
     state.assets = {
         "OLD": _asset("OLD"),
+        "DELISTED": _asset("DELISTED"),
         "@9": _asset("@9", display="OLDSPOT", market_type="spot"),
         "para:OLD": _asset("para:OLD", display="OLD", dex="hl-para"),
         "xyz:KEEP": _asset("xyz:KEEP", display="KEEP", dex="hl-xyz"),
@@ -71,8 +59,16 @@ async def test_refresh_reconciles_new_removed_partial_and_failed_sources(monkeyp
         {"universe": [{"name": "para:CRDO"}]},
         {"universe": [{"name": "xyz:KEEP"}]},
     ]
-    client.get_meta_and_asset_ctxs.return_value = _perp_response("BTC", "NEW")
-    client.get_spot_meta_and_asset_ctxs.return_value = _spot_response()
+    client.get_meta_and_asset_ctxs.return_value = [
+        {
+            "universe": [
+                {"name": "BTC"},
+                {"name": "NEW"},
+                {"name": "DELISTED", "isDelisted": True},
+            ]
+        },
+        [{}, {}, {}],
+    ]
 
     async def dex_result(prefix):
         if prefix == "xyz":
@@ -90,14 +86,17 @@ async def test_refresh_reconciles_new_removed_partial_and_failed_sources(monkeyp
 
     await websocket_manager._refresh_discovered_universe(state, client)
 
-    assert set(state.assets) == {"BTC", "NEW", "@1", "para:CRDO", "xyz:KEEP"}
+    assert set(state.assets) == {"BTC", "NEW", "para:CRDO", "xyz:KEEP"}
     assert "OLD" not in state.assets
+    assert "DELISTED" not in state.assets
     assert "@9" not in state.assets
     assert "para:OLD" not in state.assets
     assert state.assets["para:CRDO"].mark_px is None
     assert state.assets["para:CRDO"].market_status == "active"
     assert state.assets["xyz:KEEP"].display_name == "KEEP"
     assert state.universe_allowlist == set(state.assets)
+    assert state.spot_allowlist == set()
+    client.get_spot_meta_and_asset_ctxs.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -111,14 +110,14 @@ async def test_discovery_failure_preserves_last_known_good(monkeypatch):
     client = AsyncMock()
     client.get_all_perp_metas.side_effect = RuntimeError("temporary outage")
     client.get_meta_and_asset_ctxs.return_value = _perp_response("ETH")
-    client.get_spot_meta_and_asset_ctxs.return_value = _spot_response()
     client.get_all_mids.return_value = {}
     monkeypatch.setattr(websocket_manager, "_save_hip3_cache", lambda current: None)
 
     await websocket_manager._refresh_discovered_universe(state, client)
 
-    assert set(state.assets) == {"ETH", "@1", "xyz:KEEP"}
+    assert set(state.assets) == {"ETH", "xyz:KEEP"}
     assert state.universe_allowlist == set(state.assets)
+    client.get_spot_meta_and_asset_ctxs.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -132,10 +131,6 @@ async def test_successful_directory_refresh_removes_absent_namespace(monkeypatch
     client = AsyncMock()
     client.get_all_perp_metas.return_value = [{"universe": [{"name": "BTC"}]}]
     client.get_meta_and_asset_ctxs.return_value = _perp_response("BTC")
-    client.get_spot_meta_and_asset_ctxs.return_value = [
-        {"universe": [], "tokens": []},
-        [],
-    ]
     client.get_all_mids.return_value = {}
     monkeypatch.setattr(websocket_manager, "run_full_feature_pass", lambda current: None)
     monkeypatch.setattr(websocket_manager, "_save_hip3_cache", lambda current: None)
@@ -152,7 +147,6 @@ async def test_optional_enrichment_failure_does_not_hide_new_membership(monkeypa
     client = AsyncMock()
     client.get_all_perp_metas.return_value = [{"universe": [{"name": "NEW"}]}]
     client.get_meta_and_asset_ctxs.return_value = _perp_response("NEW")
-    client.get_spot_meta_and_asset_ctxs.return_value = _spot_response()
     client.get_all_mids.side_effect = RuntimeError("mids unavailable")
     monkeypatch.setattr(
         websocket_manager,
@@ -163,13 +157,13 @@ async def test_optional_enrichment_failure_does_not_hide_new_membership(monkeypa
 
     await websocket_manager._refresh_discovered_universe(state, client)
 
-    assert set(state.assets) == {"NEW", "@1"}
-    assert set(state.lkg_assets) == {"NEW", "@1"}
-    assert state.universe_allowlist == {"NEW", "@1"}
+    assert set(state.assets) == {"NEW"}
+    assert set(state.lkg_assets) == {"NEW"}
+    assert state.universe_allowlist == {"NEW"}
 
 
 @pytest.mark.asyncio
-async def test_malformed_main_and_spot_responses_preserve_source_lkg(monkeypatch):
+async def test_malformed_main_preserves_perp_lkg_but_evicts_stale_spot(monkeypatch):
     state = HyperliquidState()
     state.assets = {
         "BTC": _asset("BTC"),
@@ -181,15 +175,17 @@ async def test_malformed_main_and_spot_responses_preserve_source_lkg(monkeypatch
     client = AsyncMock()
     client.get_all_perp_metas.return_value = [{"universe": [{"name": "BTC"}]}]
     client.get_meta_and_asset_ctxs.return_value = []
-    client.get_spot_meta_and_asset_ctxs.return_value = [{"not_universe": []}]
     client.get_all_mids.return_value = {}
     monkeypatch.setattr(websocket_manager, "run_full_feature_pass", lambda current: None)
     monkeypatch.setattr(websocket_manager, "_save_hip3_cache", lambda current: None)
 
     await websocket_manager._refresh_discovered_universe(state, client)
 
-    assert set(state.assets) == {"BTC", "@9"}
-    assert state.universe_allowlist == {"BTC", "@9"}
+    assert set(state.assets) == {"BTC"}
+    assert set(state.lkg_assets) == {"BTC"}
+    assert state.universe_allowlist == {"BTC"}
+    assert state.spot_allowlist == set()
+    client.get_spot_meta_and_asset_ctxs.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -201,9 +197,6 @@ async def test_metadata_only_main_response_adds_nullable_active_listing(monkeypa
     ]
     client.get_meta_and_asset_ctxs.return_value = [
         {"universe": [{"name": "NEW", "maxLeverage": 3}]}
-    ]
-    client.get_spot_meta_and_asset_ctxs.return_value = [
-        {"universe": [], "tokens": []}
     ]
     client.get_all_mids.return_value = {}
     monkeypatch.setattr(websocket_manager, "run_full_feature_pass", lambda current: None)
@@ -228,10 +221,6 @@ async def test_empty_hip3_directory_preserves_namespace_lkg(monkeypatch):
     client = AsyncMock()
     client.get_all_perp_metas.return_value = []
     client.get_meta_and_asset_ctxs.return_value = _perp_response("BTC")
-    client.get_spot_meta_and_asset_ctxs.return_value = [
-        {"universe": [], "tokens": []},
-        [],
-    ]
     client.get_all_mids.return_value = {}
     monkeypatch.setattr(websocket_manager, "run_full_feature_pass", lambda current: None)
     monkeypatch.setattr(websocket_manager, "_save_hip3_cache", lambda current: None)
@@ -244,7 +233,7 @@ async def test_empty_hip3_directory_preserves_namespace_lkg(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_snapshot_keeps_low_volume_spot_and_limit_is_presentation_only(monkeypatch):
+async def test_snapshot_contains_only_perps_and_reports_zero_spots(monkeypatch):
     state = HyperliquidState()
     state.assets = {
         "BTC": _asset("BTC", volume=1_000_000),
@@ -256,22 +245,32 @@ async def test_snapshot_keeps_low_volume_spot_and_limit_is_presentation_only(mon
 
     complete = await router.get_snapshot(limit=1000)
     limited = await router.get_snapshot(limit=1)
+    filters = await router.get_filters()
 
-    assert {row["canonicalCoinId"] for row in complete["rows"]} == {"BTC", "@1"}
+    assert {row["canonicalCoinId"] for row in complete["rows"]} == {"BTC"}
+    assert all(row["marketType"] == "perp" for row in complete["rows"])
+    assert complete["meta"]["totalAssets"] == 1
     assert len(limited["rows"]) == 1
+    assert filters["totalAssets"] == 1
+    assert filters["perpCount"] == 1
+    assert filters["spotCount"] == 0
     assert state.universe_allowlist == {"BTC", "@1"}
 
 
-def test_matrix_retains_spot_and_canonical_symbol_collisions():
+def test_matrix_contains_only_perps_and_reports_zero_spots():
     assets = [
         _asset("PURR", display="PURR"),
         _asset("PURR/USDC", display="PURR", market_type="spot"),
     ]
     matrix = build_market_matrix(assets)
-    rows = matrix["tabs"]["crypto"]["assets"]
-    assert matrix["all_assets_count"] == 2
-    assert matrix["tabs"]["crypto"]["count"] == 2
-    assert {row["canonical_coin_id"] for row in rows} == {"PURR", "PURR/USDC"}
+    rows = [
+        row
+        for tab in matrix["tabs"].values()
+        for row in tab["assets"]
+    ]
+    assert matrix["all_assets_count"] == 1
+    assert all(row["market_type"] == "perp" for row in rows)
+    assert {row["canonical_coin_id"] for row in rows} == {"PURR"}
 
 
 @pytest.mark.parametrize("symbol", ["CRDO", "AVGO", "IREN"])

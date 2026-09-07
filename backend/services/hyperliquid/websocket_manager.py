@@ -3,8 +3,7 @@ Hyperliquid Screener — WebSocket consumer + boot sequence.
 
 Boot sequence (fast path — sets is_ready in ~30-60s):
   1. REST: fetch metaAndAssetCtxs → initialize crypto perp assets
-  2. REST: fetch spotMetaAndAssetCtxs → extend with spot assets
-  2b. Disk: preload HIP-3 cache → stocks/commodities/pre-IPO available instantly
+  2. Disk: preload HIP-3 cache → stocks/commodities/pre-IPO available instantly
   3. REST: fetch allMids → patch mid prices
   4. REST: fetch 1h candles for top-40 assets → volatility/momentum
   5. REST: fetch 5m candles for top-20 assets → short-term vol/momentum
@@ -21,7 +20,7 @@ Post-boot enrichment (background, non-blocking):
 Background tasks (continuous):
  13. Periodic candle refresh (every 5 min) — refreshes 1h, 5m, 1d
  14. Periodic feature recompute (every 60s)
- 15. Periodic universe refresh (every 5 min) — reconciles perps, spot, and HIP-3
+  15. Periodic universe refresh (every 5 min) — reconciles main and HIP-3 perps
 """
 from __future__ import annotations
 
@@ -40,7 +39,6 @@ from .models import ScreenerAsset
 from .normalizer import (
     build_hip3_universe,
     build_perp_universe,
-    build_spot_universe,
     patch_from_active_asset_ctx,
     patch_from_all_mids,
     patch_from_bbo,
@@ -160,7 +158,8 @@ def _preload_hip3_cache(state: HyperliquidState) -> int:
     """
     Load HIP-3 assets from disk if the cache exists and is < 24 h old.
     Returns the number of assets loaded (0 if cache missing/stale/error).
-    Must be called after perp + spot universe is built so we don't overwrite crypto.
+    Must be called after the main perp universe is built so cached HIP-3 rows
+    cannot overwrite canonical main-perp identities.
     """
     try:
         if not _HIP3_CACHE_PATH.exists():
@@ -258,20 +257,8 @@ async def _boot_sequence(state: HyperliquidState, client: HyperliquidRestClient)
     except Exception as e:
         print(f"[HL][boot] Perp universe error: {e}")
 
-    # 2. Spot universe
-    print("[HL][boot] Fetching spot universe...")
-    try:
-        spot_ctxs = await client.get_spot_meta_and_asset_ctxs()
-        spot_assets = build_spot_universe(spot_ctxs)
-        for coin, asset in spot_assets.items():
-            if coin not in state.assets:   # don't overwrite a perp with same name
-                state.assets[coin] = asset
-        # Build spot allowlist from canonical admitted assets only
-        state.spot_allowlist = set(spot_assets.keys())
-        state.universe_allowlist.update(state.spot_allowlist)
-        print(f"[HL][boot] Loaded {len(spot_assets)} spot assets | universe total={len(state.universe_allowlist)}")
-    except Exception as e:
-        print(f"[HL][boot] Spot universe error: {e}")
+    # The screener universe is perps-only. Spot metadata is intentionally not fetched.
+    state.spot_allowlist = set()
 
     # 2b. Preload HIP-3 from disk cache — stocks/commodities/pre-IPO available before WS connects
     print("[HL][boot] Preloading HIP-3 disk cache...")
@@ -445,7 +432,7 @@ async def _post_boot_enrich(state: HyperliquidState, client: HyperliquidRestClie
 
 async def _enrich_hip3(state: HyperliquidState, client: HyperliquidRestClient):
     """Load HIP-3 DEX assets (equity/commodity/index/pre-IPO perps)."""
-    await _refresh_discovered_universe(state, client, include_main_spot=False)
+    await _refresh_discovered_universe(state, client, include_main_perps=False)
 
 
 def _minimal_hip3_asset(dex_prefix: str, asset_meta: dict) -> ScreenerAsset:
@@ -512,25 +499,28 @@ async def _refresh_discovered_universe(
     state: HyperliquidState,
     client: HyperliquidRestClient,
     *,
-    include_main_spot: bool = True,
+    include_main_perps: bool = True,
 ):
     """
     Reconcile the current Hyperliquid listing metadata into canonical state.
 
-    Main perp, spot, and each HIP-3 namespace reconcile independently. A failed
-    source preserves that source's last-known-good membership, while a successful
-    source removes listings no longer present or marked delisted.
+    Main perp and each HIP-3 namespace reconcile independently. A failed source
+    preserves that source's last-known-good membership, while a successful source
+    removes listings no longer present or marked delisted. Spot is never a member.
     """
     try:
         discovery_calls = [client.get_all_perp_metas()]
-        if include_main_spot:
-            discovery_calls.extend([
-                client.get_meta_and_asset_ctxs(),
-                client.get_spot_meta_and_asset_ctxs(),
-            ])
+        if include_main_perps:
+            discovery_calls.append(client.get_meta_and_asset_ctxs())
         discovered = await asyncio.gather(*discovery_calls, return_exceptions=True)
         all_metas = discovered[0]
-        next_assets = dict(state.assets)
+        # Permanently evict stale spot rows before any source reconciliation.
+        next_assets = {
+            coin: asset
+            for coin, asset in state.assets.items()
+            if asset.market_type == "perp"
+        }
+        state.spot_allowlist = set()
         hip3_prefixes: list[str] = []
         successful_prefixes: set[str] = set()
         valid_all_metas = (
@@ -584,8 +574,8 @@ async def _refresh_discovered_universe(
                     _complete_hip3_membership(prefix, valid_result, state.assets)
                 )
 
-        if include_main_spot:
-            main_result, spot_result = discovered[1], discovered[2]
+        if include_main_perps:
+            main_result = discovered[1]
             valid_main = _validated_meta_ctxs(main_result)
             if valid_main is None:
                 print(f"[HL][universe_refresh] main perp error: {main_result}")
@@ -596,19 +586,6 @@ async def _refresh_discovered_universe(
                         del next_assets[coin]
                 next_assets.update(main_assets)
                 state.perp_allowlist = set(main_assets)
-
-            valid_spot = _validated_meta_ctxs(spot_result)
-            if valid_spot is None:
-                print(f"[HL][universe_refresh] spot error: {spot_result}")
-            else:
-                spot_assets = build_spot_universe(valid_spot)
-                for coin, asset in list(next_assets.items()):
-                    if asset.market_type == "spot":
-                        del next_assets[coin]
-                for coin, asset in spot_assets.items():
-                    if coin not in next_assets:
-                        next_assets[coin] = asset
-                state.spot_allowlist = set(spot_assets)
 
         state.assets = next_assets
         state.universe_allowlist = set(next_assets)
@@ -886,7 +863,7 @@ async def _periodic_oi_cap_refresh(state: HyperliquidState, client: HyperliquidR
 
 async def _periodic_hip3_refresh(state: HyperliquidState, client: HyperliquidRestClient):
     """
-    Every 5 minutes: reconcile main perp, spot, and HIP-3 membership and prices.
+    Every 5 minutes: reconcile main-perp and HIP-3 membership and prices.
     This keeps the complete canonical universe current and ensures the HIP-3
     cache is warm for instant availability on the next server restart.
     Waits 8 minutes initially to avoid overlapping with _post_boot_enrich.

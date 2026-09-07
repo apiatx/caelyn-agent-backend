@@ -24,7 +24,7 @@ Classification precedence (enforced inside categorize_asset):
      hyna → crypto; para → symbol/tag classification, then crypto fallback
   7. Generic "equity" tag → stocks_etfs (only after all non-stock overrides).
   8. Symbol/name fallback against curated keyword lists.
-  9. Default: crypto (native HL perps and spot markets).
+  9. Default: crypto (native Hyperliquid perps).
 """
 from __future__ import annotations
 
@@ -314,7 +314,7 @@ def categorize_asset(asset: ScreenerAsset) -> tuple[str, str]:
 
     # ── 9. Default: crypto ────────────────────────────────────────────────────
     # Native HL perps (BTC, ETH, SOL, HYPE, XAI, …) land here.
-    # Spot markets remain in the canonical matrix and land here as crypto.
+    # Native main-DEX perps land here as crypto.
     return "crypto", "fallback"
 
 
@@ -452,7 +452,7 @@ def build_market_matrix(
     }
 
     ranked = sorted(
-        assets,
+        (asset for asset in assets if asset.market_type == "perp"),
         key=lambda a: (a.overall_score if a.overall_score is not None else -1),
         reverse=True,
     )
