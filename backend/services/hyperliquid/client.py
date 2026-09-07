@@ -14,6 +14,8 @@ import httpx
 
 _INFO_URL = "https://api.hyperliquid.xyz/info"
 _TIMEOUT = 20.0
+_BULK_CANDLE_CONCURRENCY = 8
+_BULK_CANDLE_ATTEMPTS = 3
 
 # Milliseconds per candle interval
 _INTERVAL_MS: dict[str, int] = {
@@ -170,8 +172,21 @@ class HyperliquidRestClient:
         Returns {coin: [candle, ...]} — missing coins return empty list.
         """
         import asyncio
+
+        semaphore = asyncio.Semaphore(_BULK_CANDLE_CONCURRENCY)
+
+        async def fetch(coin: str) -> list[dict]:
+            for attempt in range(_BULK_CANDLE_ATTEMPTS):
+                async with semaphore:
+                    bars = await self.get_candle_snapshot(coin, interval, n_bars)
+                if bars:
+                    return bars
+                if attempt + 1 < _BULK_CANDLE_ATTEMPTS:
+                    await asyncio.sleep(0.25 * (attempt + 1))
+            return []
+
         results = await asyncio.gather(
-            *[self.get_candle_snapshot(c, interval, n_bars) for c in coins],
+            *[fetch(coin) for coin in coins],
             return_exceptions=True,
         )
         return {

@@ -1224,14 +1224,19 @@ def _build_ws_snapshot(state: HyperliquidState) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/tsmom-signals")
-async def get_tsmom_signals(top_n: int = 60):
+async def get_tsmom_signals(top_n: int = 60, market: str = "crypto"):
     """
-    Time-Series Momentum (TSMOM) signals for top perps.
+    Time-Series Momentum (TSMOM) signals for canonical crypto or stock perps.
 
     Returns multi-lookback z-score signals, funding-adjusted and vol-targeted.
     1d candle data is loaded in the post-boot enrichment task (~30-60s after boot).
     Returns empty signals (not 503) while data is loading to avoid frontend error state.
     """
+    if market not in {"crypto", "stocks"}:
+        raise HTTPException(
+            status_code=400,
+            detail="market must be 'crypto' or 'stocks'",
+        )
     state = _get_state()
     # Return empty response during boot rather than 503 — frontend shows
     # a friendly "loading" message and auto-refreshes every 60s.
@@ -1245,10 +1250,11 @@ async def get_tsmom_signals(top_n: int = 60):
                 "flat_count": 0,
                 "generated_at": _iso_now(),
                 "status": "initializing",
+                "market": market,
             },
         }
 
-    return compute_tsmom_signals(state, top_n=top_n)
+    return compute_tsmom_signals(state, top_n=top_n, market=market)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

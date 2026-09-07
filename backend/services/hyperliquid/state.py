@@ -144,13 +144,20 @@ class HyperliquidState:
     # ── Candle helpers ────────────────────────────────────────────────────
 
     def add_candles(self, coin: str, interval: str, candles: list[dict]):
-        """Bulk-add candles, deduplicating by open timestamp."""
+        """Merge candles by open timestamp, with the latest snapshot winning."""
         dq = self.candles[coin][interval]
-        existing_ts = {c["t"] for c in dq}
-        for c in sorted(candles, key=lambda x: x.get("t", 0)):
-            if c.get("t") not in existing_ts:
-                dq.append(c)
-                existing_ts.add(c["t"])
+        by_timestamp = {
+            candle["t"]: candle
+            for candle in dq
+            if candle.get("t") is not None
+        }
+        for candle in candles:
+            timestamp = candle.get("t")
+            if timestamp is not None:
+                by_timestamp[timestamp] = candle
+        merged = sorted(by_timestamp.values(), key=lambda candle: candle["t"])
+        dq.clear()
+        dq.extend(merged)
 
     def upsert_candle(self, coin: str, interval: str, candle: dict):
         """Insert or update the most recent candle (live update)."""

@@ -46,6 +46,7 @@ from .normalizer import (
     patch_trade_flow,
 )
 from .state import HyperliquidState
+from .tsmom import get_tsmom_candidates
 
 _WS_URL = "wss://api.hyperliquid.xyz/ws"
 
@@ -417,16 +418,17 @@ async def _refresh_oi_caps(state: HyperliquidState, client: HyperliquidRestClien
 async def _post_boot_enrich(state: HyperliquidState, client: HyperliquidRestClient):
     """
     Non-blocking post-boot enrichment. Runs once after is_ready=True.
-    HIP-3 DEX loading and extended 1d candle fetching run concurrently so
-    TSMOM signals are not blocked waiting for HIP-3 DEX calls to finish.
+    Refresh HIP-3 membership first, then fetch extended 1d candles. Serializing
+    these phases prevents cold-start connection contention from dropping most
+    of the larger TSMOM history batch.
     """
     await asyncio.sleep(3)  # let WS subscribe first
-    print("[HL][enrich] Starting post-boot enrichment (HIP-3 + 1d candles in parallel)...")
-    await asyncio.gather(
-        _enrich_hip3(state, client),
-        _enrich_1d_candles(state, client),
-        return_exceptions=True,
-    )
+    print("[HL][enrich] Starting post-boot enrichment (HIP-3 then 1d candles)...")
+    try:
+        await _enrich_hip3(state, client)
+    except Exception as exc:
+        print(f"[HL][enrich] HIP-3 phase error: {exc}")
+    await _enrich_1d_candles(state, client)
     print("[HL][enrich] Post-boot enrichment complete.")
 
 
@@ -616,13 +618,16 @@ async def _refresh_discovered_universe(
 
 
 async def _enrich_1d_candles(state: HyperliquidState, client: HyperliquidRestClient):
-    """Load extended 1d candles for top-50 crypto perps (TSMOM breadth)."""
+    """Load 1d candles for canonical crypto and stock TSMOM candidates."""
     await asyncio.sleep(2)  # let boot mids settle
     try:
-        tsmom_coins = [
-            c for c in state.top_coins_by_volume(60)
-            if ":" not in c
-        ][:50]
+        crypto_coins = [
+            asset.coin for asset in get_tsmom_candidates(state, "crypto")[:50]
+        ]
+        stock_coins = [
+            asset.coin for asset in get_tsmom_candidates(state, "stocks")
+        ]
+        tsmom_coins = list(dict.fromkeys(crypto_coins + stock_coins))
         print(f"[HL][enrich] Fetching extended 1d candles for {len(tsmom_coins)} coins...")
         candles_1d = await client.get_candles_multi(tsmom_coins, "1d", n_bars=120)
         loaded = sum(1 for bars in candles_1d.values() if bars)
@@ -815,8 +820,14 @@ async def _periodic_candle_refresh(state: HyperliquidState, client: HyperliquidR
                     patch_from_l2(state, coin, levels)
                     state.set_book(coin, book)
 
-            # Refresh 1d candles for TSMOM
-            tsmom_coins = [c for c in top40 if ":" not in c][:50]
+            # Refresh 1d candles for canonical crypto and stock TSMOM candidates.
+            crypto_coins = [
+                asset.coin for asset in get_tsmom_candidates(state, "crypto")[:50]
+            ]
+            stock_coins = [
+                asset.coin for asset in get_tsmom_candidates(state, "stocks")
+            ]
+            tsmom_coins = list(dict.fromkeys(crypto_coins + stock_coins))
             candles1d = await client.get_candles_multi(tsmom_coins, "1d", n_bars=120)
             for coin, bars in candles1d.items():
                 if bars:
